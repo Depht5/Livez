@@ -151,7 +151,13 @@ class CategoryDetailActivity : AppCompatActivity() {
         swipe.addView(recycler, ViewGroup.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT,
         ))
-        swipe.setOnRefreshListener { controller.refreshData() }
+        swipe.setOnRefreshListener {
+            controller.refreshData()
+            // 冷却被拒等未真正进入加载时立即收起，避免进度圈残留
+            swipe.postDelayed({
+                if (!controller.pageLoading.value) swipe.isRefreshing = false
+            }, 150)
+        }
         root.addView(swipe, LinearLayout.LayoutParams(
             LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f,
         ))

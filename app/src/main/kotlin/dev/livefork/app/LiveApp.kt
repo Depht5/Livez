@@ -1,10 +1,14 @@
 package dev.livefork.app
 
+import android.app.Activity
 import android.app.Application
 import android.content.ContentValues
+import android.graphics.Color
 import android.os.Build
+import android.os.Bundle
 import android.os.Environment
 import android.provider.MediaStore
+import androidx.core.view.WindowInsetsControllerCompat
 import dev.livefork.app.di.ServiceContainer
 import dev.livefork.core.common.CoreLog
 import java.io.File
@@ -22,6 +26,32 @@ class LiveApp : Application() {
         }
         ServiceContainer.install(app = this)
         installCrashHandler()
+        installWindowDecorAdaptation()
+    }
+
+    /**
+     * 全局窗口装饰适配（App 页面均为浅色白底）：
+     * - 状态栏图标深色（isAppearanceLightStatusBars），浅色背景下清晰可见；
+     * - 底部导航条白色 + 图标深色（isAppearanceLightNavigationBars），与页面融为一体（沉浸）。
+     */
+    private fun installWindowDecorAdaptation() {
+        registerActivityLifecycleCallbacks(object : Application.ActivityLifecycleCallbacks {
+            override fun onActivityCreated(activity: Activity, savedInstanceState: Bundle?) {
+                val window = activity.window
+                window.statusBarColor = Color.TRANSPARENT
+                window.navigationBarColor = Color.WHITE
+                val controller = WindowInsetsControllerCompat(window, window.decorView)
+                controller.isAppearanceLightStatusBars = true
+                controller.isAppearanceLightNavigationBars = true
+            }
+
+            override fun onActivityStarted(activity: Activity) {}
+            override fun onActivityResumed(activity: Activity) {}
+            override fun onActivityPaused(activity: Activity) {}
+            override fun onActivityStopped(activity: Activity) {}
+            override fun onActivitySaveInstanceState(activity: Activity, outState: Bundle) {}
+            override fun onActivityDestroyed(activity: Activity) {}
+        })
     }
 
     /**

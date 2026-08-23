@@ -39,6 +39,11 @@ class MainActivity : AppCompatActivity() {
 
         val bottomNav = BottomNavigationView(this).apply {
             inflateMenu(R.menu.main_nav)
+            // 底栏纯白背景 + 无阴影，与列表/导航条连续（顶部与底部留白对称）
+            setBackgroundColor(android.graphics.Color.WHITE)
+            elevation = 0f
+            // 移除底栏点击涟漪反馈
+            itemRippleColor = android.content.res.ColorStateList.valueOf(android.graphics.Color.TRANSPARENT)
             setOnItemSelectedListener { item ->
                 val index = when (item.itemId) {
                     R.id.nav_home -> 0

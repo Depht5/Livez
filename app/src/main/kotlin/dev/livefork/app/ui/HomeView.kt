@@ -48,6 +48,8 @@ class HomeView(context: Context) : LinearLayout(context) {
         tabLayout.setBackgroundColor(Color.WHITE)
         tabLayout.setSelectedTabIndicatorColor(Color.parseColor("#FF3F4B"))
         tabLayout.setTabTextColors(Color.parseColor("#666666"), Color.parseColor("#FF3F4B"))
+        // 移除点击水波纹反馈
+        tabLayout.tabRippleColor = android.content.res.ColorStateList.valueOf(Color.TRANSPARENT)
         // 可横向滑动的 Tab（站点多时不再挤压）+ 指示条
         tabLayout.tabMode = TabLayout.MODE_SCROLLABLE
         tabLayout.tabGravity = TabLayout.GRAVITY_START
@@ -66,14 +68,15 @@ class HomeView(context: Context) : LinearLayout(context) {
                 gravity = Gravity.CENTER_VERTICAL
             }
             val icon = ImageView(context).apply { setImageResource(site.logoRes) }
-            icon.layoutParams = LinearLayout.LayoutParams(dp(20), dp(20))
+            // 与分类页 Tab 统一尺寸：图标 24dp、文字 16sp
+            icon.layoutParams = LinearLayout.LayoutParams(dp(24), dp(24))
             val label = TextView(context).apply {
                 text = site.name
-                textSize = 15f
+                textSize = 16f
             }
             label.layoutParams = LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT,
-            ).apply { marginStart = dp(4) }
+            ).apply { marginStart = dp(8) }
             custom.addView(icon)
             custom.addView(label)
             tab.setCustomView(custom)
@@ -139,7 +142,8 @@ class HomeView(context: Context) : LinearLayout(context) {
         private var collectJob: Job? = null
 
         init {
-            recycler.setPadding(dp(12), dp(12), dp(12), dp(12))
+            // 内容与顶栏/底栏贴齐：上下 0、左右 12（对称且无多余留白）
+            recycler.setPadding(dp(12), 0, dp(12), 0)
             // 不裁剪子项，使卡片 elevation 阴影在 item 边界外可见
             recycler.clipChildren = false
             // 卡片独立 shadow margin(四周4dp) + decoration(4dp) = 视觉间距 12dp（与 Dart 一致）
@@ -154,7 +158,13 @@ class HomeView(context: Context) : LinearLayout(context) {
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT,
             ))
             // 下拉刷新（对应 Dart RefreshIndicator）：刷完自动收起
-            root.setOnRefreshListener { listController.refreshData() }
+            root.setOnRefreshListener {
+                listController.refreshData()
+                // 冷却被拒等未真正进入加载时立即收起，避免进度圈残留在顶栏下侧
+                root.postDelayed({
+                    if (!listController.pageLoading.value) root.isRefreshing = false
+                }, 150)
+            }
             scope.launch {
                 listController.pageLoading.collect { loading ->
                     if (!loading) root.isRefreshing = false
