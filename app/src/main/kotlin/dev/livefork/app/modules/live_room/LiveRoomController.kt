@@ -618,6 +618,18 @@ class LiveRoomController(
         }
     }
 
+    /** 重新加载直播间数据（对应 Dart loadData 前的清场）。 */
+    fun refreshRoom() {
+        if (_roomDisposed) return
+        // 清空 SC/贡献榜/去重状态（对应 Dart refreshRoom）
+        _superChats.value = emptyList()
+        superChatFingerprints.clear()
+        clearContributionRankState()
+        clearDanmuReplayHistory()
+        scope.launch { liveDanmaku?.stop() }
+        loadData()
+    }
+
     /* ---------- 弹幕 ---------- */
 
     /** 初始化弹幕回调（对应 Dart initDanmau）。 */

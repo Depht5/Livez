@@ -6,6 +6,7 @@ import android.content.pm.ActivityInfo
 import android.content.res.Configuration
 import android.graphics.Color
 import android.graphics.Typeface
+import android.media.AudioManager
 import android.os.Bundle
 import android.text.Spannable
 import android.text.SpannableString
@@ -85,8 +86,31 @@ class LiveRoomActivity : AppCompatActivity() {
     /** 视频浮层弹幕（子任务：浮层弹幕；叠加在视频区，非交互层）。 */
     private lateinit var danmakuOverlay: DanmakuOverlayView
 
+    /** 播放器控制层（子任务：控制层与手势；顶栏/底栏/提示条）。 */
+    private lateinit var controlsOverlay: PlayerControlsOverlay
+
     /** 已入列的消息计数（增量收集：新消息 = 当前列表尾部新增）。 */
     private var danmakuLastCount = 0
+
+    /** 视频手势判定（单击/双击/滑动；手写替代 GestureDetector，见 onCreate 注释）。 */
+    private val gestureRouter = GestureRouter(
+        onSingleTap = { controlsOverlay.toggle() },
+        onDoubleTap = {
+            if (ServiceContainer.appSettings.playerGestureControlEnable.value) {
+                togglePlayPause()
+            }
+        },
+        onScroll = { startX, distanceY ->
+            if (ServiceContainer.appSettings.playerGestureControlEnable.value) {
+                val leftHalf = startX < (videoFrame.width / 2f)
+                if (leftHalf) {
+                    adjustBrightness(-distanceY)
+                } else {
+                    adjustVolume(-distanceY)
+                }
+            }
+        },
+    )
 
     /* ---------- 全屏切换（子任务：横屏全屏切换）---------- */
 
@@ -180,6 +204,11 @@ class LiveRoomActivity : AppCompatActivity() {
         danmakuOverlay = DanmakuOverlayView(this)
         danmakuOverlay.siteId = siteId
         videoFrame.addView(danmakuOverlay, FrameLayout.LayoutParams(
+            FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT,
+        ))
+        // 控制层：视频之上、可交互（顶栏/底栏/提示条）
+        controlsOverlay = PlayerControlsOverlay(this)
+        videoFrame.addView(controlsOverlay, FrameLayout.LayoutParams(
             FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT,
         ))
         unliveOverlay = TextView(this).apply {
@@ -359,8 +388,23 @@ class LiveRoomActivity : AppCompatActivity() {
             }
         })
 
-        // 临时全屏入口：点击视频区切换全屏（子任务③控制层完成前的最小入口）
-        videoFrame.setOnClickListener { toggleFullScreen() }
+        // 控制层回调接线
+        controlsOverlay.onBackClick = { exitFull() }
+        controlsOverlay.onRefreshClick = { controller.refreshRoom() }
+        controlsOverlay.onPlayPauseClick = { togglePlayPause() }
+        controlsOverlay.onDanmakuClick = { toggleDanmaku() }
+        controlsOverlay.onQualityClick = { Router.toast("清晰度切换：弹层后续任务实现") }
+        controlsOverlay.onLineClick = { Router.toast("线路切换：弹层后续任务实现") }
+        controlsOverlay.onFullScreenClick = { toggleFullScreen() }
+
+        // 视频区手势：单击显隐控制层、双击播放/暂停、左右滑动调亮度/音量（对齐历史批次）。
+        // 注：android.view.GestureDetector 的 onScroll/onFling（带原始 float 参数）在
+        // Kotlin 2.0.21 覆盖解析异常（overrides nothing），故手写判定。
+        videoFrame.setOnTouchListener { _, event ->
+            if (controlsOverlay.visibility == View.VISIBLE) controlsOverlay.onUserTouch()
+            gestureRouter.onTouch(event)
+            true
+        }
 
         controller.create(site, roomId)
 
@@ -388,6 +432,8 @@ class LiveRoomActivity : AppCompatActivity() {
         insetsController.systemBarsBehavior =
             WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
         applyFullScreenLayout()
+        controlsOverlay.updateFullScreen(true)
+        controlsOverlay.show()
     }
 
     /** 退出横屏全屏：恢复竖屏方向 + 系统栏 + 完整页面布局。 */
@@ -398,6 +444,8 @@ class LiveRoomActivity : AppCompatActivity() {
         val insetsController = WindowInsetsControllerCompat(window, window.decorView)
         insetsController.show(WindowInsetsCompat.Type.systemBars())
         applyFullScreenLayout()
+        controlsOverlay.updateFullScreen(false)
+        controlsOverlay.show()
     }
 
     /** 切换全屏状态。 */
@@ -442,6 +490,48 @@ class LiveRoomActivity : AppCompatActivity() {
             lp.height = videoHeight
             videoFrame.layoutParams = lp
         }
+    }
+
+    /* ---------- 播放器控制（对应 Dart player 控制 / 手势）---------- */
+
+    private fun togglePlayPause() {
+        val engine = PlayerEngine.instance
+        if (engine.state.value.playing) {
+            engine.pause()
+        } else {
+            engine.play()
+        }
+    }
+
+    /** 弹幕开关：切换浮层弹幕启用状态并同步控制层按钮（对应 Dart setDanmakuVisible）。 */
+    private fun toggleDanmaku() {
+        val enabled = !danmakuOverlay.danmakuEnabled
+        danmakuOverlay.danmakuEnabled = enabled
+        controlsOverlay.updateDanmakuEnabled(enabled)
+        Router.toast(if (enabled) "弹幕已开启" else "弹幕已关闭")
+    }
+
+    /** 调节屏幕亮度（左半屏滑动）：window.screenBrightness 0.05 步进，跟随系统时从 0.5 起。 */
+    private fun adjustBrightness(delta: Float) {
+        val attributes = window.attributes
+        var brightness = attributes.screenBrightness
+        if (brightness < 0f) brightness = 0.5f
+        brightness += delta / 400f
+        brightness = brightness.coerceIn(0.05f, 1f)
+        attributes.screenBrightness = brightness
+        window.attributes = attributes
+        controlsOverlay.showAdjustHint("亮度 ${(brightness * 100).toInt()}")
+    }
+
+    /** 调节媒体音量（右半屏滑动）：AudioManager STREAM_MUSIC 步进 1。 */
+    private fun adjustVolume(delta: Float) {
+        val audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager
+        val max = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
+        var volume = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC)
+        volume += if (delta > 0f) 1 else -1
+        volume = volume.coerceIn(0, max)
+        audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, volume, 0)
+        controlsOverlay.showAdjustHint("音量 $volume/$max")
     }
 
     /* ---------- 标签集合（对应 Dart 默认标签顺序 + 条件过滤）---------- */
@@ -509,6 +599,45 @@ class LiveRoomActivity : AppCompatActivity() {
             // 弹幕总开关设置变化 → 即时反映到浮层
             ServiceContainer.appSettings.danmuEnable.collect { enabled ->
                 danmakuOverlay.danmakuEnabled = controller.liveStatus.value && enabled
+            }
+        }
+        // 控制层：播放状态（▶/⏸）
+        scope.launch {
+            PlayerEngine.instance.state.collect { state ->
+                controlsOverlay.updatePlaying(state.playing)
+            }
+        }
+        // 控制层：直播状态（未开播隐藏播放按钮）
+        scope.launch {
+            controller.liveStatus.collect { live ->
+                controlsOverlay.updateLiveStatus(live)
+                // 未开播期间自动隐藏控制层
+                if (!live) controlsOverlay.hide()
+            }
+        }
+        // 控制层：直播时长
+        scope.launch {
+            controller.liveDuration.collect { duration ->
+                controlsOverlay.updateDuration(duration)
+            }
+        }
+        // 控制层：全屏态（顶栏/退出按钮）
+        // isFullScreen 为 View 层字段，随 enterFullScreen/exitFull 直接同步
+        // 控制层：清晰度/线路名
+        scope.launch {
+            controller.currentQualityInfo.collect { quality ->
+                controlsOverlay.updateQualityLine(
+                    quality,
+                    controller.currentLineInfo.value,
+                )
+            }
+        }
+        scope.launch {
+            controller.currentLineInfo.collect { line ->
+                controlsOverlay.updateQualityLine(
+                    controller.currentQualityInfo.value,
+                    line,
+                )
             }
         }
     }
