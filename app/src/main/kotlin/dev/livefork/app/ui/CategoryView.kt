@@ -1,19 +1,29 @@
 package dev.livefork.app.ui
 
 import android.content.Context
+import android.content.res.Resources
+import android.graphics.Canvas
 import android.graphics.Color
+import android.graphics.Paint
+import android.graphics.Typeface
 import android.view.Gravity
+import android.view.View
 import android.view.ViewGroup
+import android.view.ViewOutlineProvider
 import android.widget.FrameLayout
+import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.TextView
+import androidx.recyclerview.widget.GridLayoutManager
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
+import androidx.swiperefreshlayout.widget.SwipeRefreshLayout
 import com.google.android.material.tabs.TabLayout
 import dev.livefork.app.app.Site
 import dev.livefork.app.modules.category.AppLiveCategory
 import dev.livefork.app.modules.category.CategoryController
 import dev.livefork.app.modules.category.CategoryListController
+import dev.livefork.core.model.LiveSubCategory
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -21,8 +31,10 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 
 /**
- * 类目视图 —— 对应 Flutter `category_page.dart`。
- * 顶部站点 Tab，下方为当前站点分类列表（主分类标题 + 子分类文本）。
+ * 类目视图 —— 对应 Flutter `category_page.dart`（AppBar 内站点 TabBar + TabBarView）。
+ * 顶部站点 Tab（图标 + 名称，可横滑，选中蓝 #3498DB），下方为当前站点分类列表：
+ * 吸顶主分类标题 + 子分类卡片网格（40dp 图/fallback + 12sp 名称）+「显示全部」；
+ * 点击子分类进入 [CategoryDetailActivity]。
  */
 class CategoryView(context: Context) : LinearLayout(context) {
 
@@ -32,6 +44,9 @@ class CategoryView(context: Context) : LinearLayout(context) {
     private val tabLayout = TabLayout(context)
     private val contentFrame = FrameLayout(context)
 
+    /** 各 Tab 的名称文字（按 tab 顺序），选中高亮切换。 */
+    private val tabLabels = mutableListOf<TextView>()
+
     private val catViews = mutableMapOf<String, CatListView>()
     private var currentSiteId: String? = null
 
@@ -39,25 +54,51 @@ class CategoryView(context: Context) : LinearLayout(context) {
         orientation = VERTICAL
         setBackgroundColor(Color.WHITE)
 
-        tabLayout.setBackgroundColor(Color.WHITE)
-        tabLayout.setSelectedTabIndicatorColor(Color.parseColor("#FF3F4B"))
-        tabLayout.setTabTextColors(Color.parseColor("#666666"), Color.parseColor("#FF3F4B"))
-        tabLayout.tabGravity = TabLayout.GRAVITY_START
-        tabLayout.isTabIndicatorFullWidth = false
-
+        tabLayout.apply {
+            setBackgroundColor(Color.WHITE)
+            setSelectedTabIndicatorColor(Color.parseColor("#3498DB"))
+            setTabTextColors(Color.parseColor("#666666"), Color.parseColor("#3498DB"))
+            tabMode = TabLayout.MODE_SCROLLABLE
+            tabGravity = TabLayout.GRAVITY_START
+            isTabIndicatorFullWidth = false
+        }
         addView(tabLayout, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT))
+
+        contentFrame.clipChildren = false
         addView(contentFrame, LayoutParams(LayoutParams.MATCH_PARENT, 0, 1f))
 
         for (site in controller.sites) {
-            tabLayout.addTab(tabLayout.newTab().setText(site.name))
+            // 自定义 Tab：站点 logo 24dp + 8dp 间隔 + 站点名（对应 Dart Tab(child: Row[logo, hGap8, text])）
+            val tab = tabLayout.newTab()
+            val custom = LinearLayout(context).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+            }
+            val icon = ImageView(context).apply { setImageResource(site.logoRes) }
+            icon.layoutParams = LinearLayout.LayoutParams(dp(24), dp(24))
+            val label = TextView(context).apply {
+                text = site.name
+                textSize = 16f
+            }
+            label.layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT,
+            ).apply { marginStart = dp(8) }
+            custom.addView(icon)
+            custom.addView(label)
+            tab.setCustomView(custom)
+            tabLayout.addTab(tab)
+            tabLabels += label
         }
 
         tabLayout.addOnTabSelectedListener(object : TabLayout.OnTabSelectedListener {
             override fun onTabSelected(tab: TabLayout.Tab) {
+                updateTabLabel(tab.position, selected = true)
                 showSite(tab.position)
             }
 
-            override fun onTabUnselected(tab: TabLayout.Tab) {}
+            override fun onTabUnselected(tab: TabLayout.Tab) {
+                updateTabLabel(tab.position, selected = false)
+            }
 
             override fun onTabReselected(tab: TabLayout.Tab) {
                 showSite(tab.position)
@@ -65,6 +106,13 @@ class CategoryView(context: Context) : LinearLayout(context) {
         })
 
         tabLayout.getTabAt(0)?.select()
+    }
+
+    /** 选中标识：Tab 名称高亮（customView 不受 setTabTextColors 控制，手动切换）。 */
+    private fun updateTabLabel(position: Int, selected: Boolean) {
+        tabLabels.getOrNull(position)?.setTextColor(
+            Color.parseColor(if (selected) "#3498DB" else "#666666"),
+        )
     }
 
     private fun showSite(index: Int) {
@@ -83,84 +131,306 @@ class CategoryView(context: Context) : LinearLayout(context) {
         return CatListView(context, site, listController)
     }
 
-    /** 站点分类列表。 */
+    /** 站点分类列表：SwipeRefreshLayout + 单 Grid 列表（吸顶标题 + 子分类网格 + 显示全部）。 */
     private inner class CatListView(
         context: Context,
         val site: Site,
         val listController: CategoryListController,
-    ) : RecyclerView(context) {
+    ) : SwipeRefreshLayout(context) {
 
-        private val listAdapter = object : RecyclerView.Adapter<CatListViewHolder>() {
-            private val items = mutableListOf<AppLiveCategory>()
+        private var categories: List<AppLiveCategory> = emptyList()
 
-            fun submit(list: List<AppLiveCategory>) {
-                items.clear()
-                items.addAll(list)
-                notifyDataSetChanged()
-            }
-
-            override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): CatListViewHolder {
-                val root = LinearLayout(parent.context).apply {
-                    orientation = LinearLayout.VERTICAL
-                    setPadding(dp(16), dp(10), dp(16), dp(10))
-                    setBackgroundColor(Color.WHITE)
-                }
-                val title = TextView(parent.context).apply {
-                    textSize = 15f
-                    setTextColor(Color.parseColor("#222222"))
-                }
-                val subs = TextView(parent.context).apply {
-                    textSize = 12f
-                    setTextColor(Color.parseColor("#888888"))
-                }
-                root.addView(title, LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT,
-                ))
-                root.addView(subs, LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT,
-                ))
-                return CatListViewHolder(root, title, subs)
-            }
-
-            override fun onBindViewHolder(holder: CatListViewHolder, position: Int) {
-                val cat = items[position]
-                holder.title.text = cat.name
-                holder.subs.text = if (cat.children.isEmpty()) "暂无子分类"
-                else cat.children.joinToString(" / ") { it.name }
-                holder.root.setOnClickListener {
-                    Router.toast("分类「${cat.name}」详情页将在后续版本接入")
-                }
-            }
-
-            override fun getItemCount(): Int = items.size
-        }
+        private val recycler = RecyclerView(context)
+        private val adapter = CategoryAdapter(
+            onClickSub = { cat, sub ->
+                CategoryDetailActivity.start(context, site, sub)
+            },
+            onClickMore = { recreateRows() },
+        )
 
         init {
-            layoutManager = LinearLayoutManager(context)
-            addItemDecoration(androidx.recyclerview.widget.DividerItemDecoration(
-                context, LinearLayoutManager.VERTICAL,
+            setColorSchemeColors(Color.parseColor("#3498DB"))
+            recycler.setPadding(dp(12), dp(12), dp(12), dp(12))
+            recycler.clipChildren = false
+            recycler.clipToPadding = false
+            recycler.adapter = adapter
+            addView(recycler, ViewGroup.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT,
             ))
-            this.adapter = listAdapter
+            setOnRefreshListener { listController.refreshData() }
+            // 下拉刷新完成自动收起
+            scope.launch {
+                listController.pageLoading.collect { loading ->
+                    if (!loading) isRefreshing = false
+                }
+            }
+            // 数据变化 → 重建行（含「显示全部」展开）
+            scope.launch {
+                listController.list.collect { cats ->
+                    categories = cats
+                    recreateRows()
+                }
+            }
+            // 宽度变化 → 重算子分类网格列数
+            recycler.addOnLayoutChangeListener { _, left, _, right, _, _, _, _, _ ->
+                val width = right - left
+                if (width > 0) setupGrid(width)
+            }
         }
+
+        private fun recreateRows() {
+            adapter.submit(categories)
+        }
+
+        private fun setupGrid(width: Int) {
+            val spanCount = (width / dp(80).toFloat()).toInt().coerceIn(1, 12)
+            val lm = recycler.layoutManager
+            if (lm is GridLayoutManager) {
+                if (lm.spanCount != spanCount) {
+                    lm.spanCount = spanCount
+                    lm.spanSizeLookup = spanLookup(spanCount)
+                }
+            } else {
+                recycler.layoutManager = GridLayoutManager(context, spanCount).apply {
+                    spanSizeLookup = spanLookup(spanCount)
+                }
+            }
+            if (recycler.itemDecorationCount == 0) {
+                recycler.addItemDecoration(CategorySpacingDecoration(dp(8), adapter))
+                recycler.addItemDecoration(StickyHeaderDecoration(adapter, dp(46)))
+            }
+        }
+
+        private fun spanLookup(spanCount: Int): GridLayoutManager.SpanSizeLookup =
+            object : GridLayoutManager.SpanSizeLookup() {
+                override fun getSpanSize(position: Int): Int =
+                    if (adapter.isHeader(position)) spanCount else 1
+            }
 
         fun attach() {
             listController.loadData()
-            scope.launch {
-                listController.list.collect { listAdapter.submit(it) }
-            }
         }
     }
-
-    private class CatListViewHolder(
-        val root: LinearLayout,
-        val title: TextView,
-        val subs: TextView,
-    ) : RecyclerView.ViewHolder(root)
 
     /** 页面销毁。 */
     fun onDestroy() {
         scope.coroutineContext[Job]?.cancel()
         controller.dispose()
+    }
+}
+
+/* ---------- 分类列表行模型 ---------- */
+
+private sealed class CategoryRow {
+    class Header(val cat: AppLiveCategory) : CategoryRow()
+    class Sub(val cat: AppLiveCategory, val sub: LiveSubCategory) : CategoryRow()
+    class ShowMore(val cat: AppLiveCategory) : CategoryRow()
+}
+
+/* ---------- 分类列表适配器（吸顶标题 / 子分类卡片 / 显示全部） ---------- */
+
+/** 分类列表适配器：3 种 item type（主分类标题跨全宽、子分类卡片、显示全部卡片）。 */
+private class CategoryAdapter(
+    private val onClickSub: (AppLiveCategory, LiveSubCategory) -> Unit,
+    private val onClickMore: (AppLiveCategory) -> Unit,
+) : RecyclerView.Adapter<CategoryAdapter.VH>() {
+
+    private var rows = emptyList<CategoryRow>()
+    private val primaryColor = Color.parseColor("#3498DB")
+
+    companion object {
+        const val TYPE_HEADER = 0
+        const val TYPE_SUB = 1
+        const val TYPE_SHOW_MORE = 2
+    }
+
+    fun submit(categories: List<AppLiveCategory>) {
+        rows = categories.flatMap { cat ->
+            buildList {
+                add(CategoryRow.Header(cat))
+                val subs = if (cat.showAll.value) cat.children else cat.take15
+                subs.forEach { add(CategoryRow.Sub(cat, it)) }
+                if (!cat.showAll.value && cat.children.size > cat.take15.size) {
+                    add(CategoryRow.ShowMore(cat))
+                }
+            }
+        }
+        notifyDataSetChanged()
+    }
+
+    /** 供吸顶装饰与 spanSizeLookup 判断主分类标题行。 */
+    fun isHeader(position: Int): Boolean =
+        position in rows.indices && rows[position] is CategoryRow.Header
+
+    fun headerText(position: Int): String =
+        (rows.getOrNull(position) as? CategoryRow.Header)?.cat?.name ?: ""
+
+    override fun getItemCount(): Int = rows.size
+
+    override fun getItemViewType(position: Int): Int = when (rows[position]) {
+        is CategoryRow.Header -> TYPE_HEADER
+        is CategoryRow.ShowMore -> TYPE_SHOW_MORE
+        else -> TYPE_SUB
+    }
+
+    class VH(val root: View) : RecyclerView.ViewHolder(root) {
+        var viewType: Int = RecyclerView.NO_POSITION
+        var subImage: ImageView? = null
+        var subName: TextView? = null
+    }
+
+    override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): VH = when (viewType) {
+        TYPE_HEADER -> VH(buildHeader(parent.context))
+        TYPE_SHOW_MORE -> VH(buildSubCard(parent.context).also {
+            (it.getChildAt(0) as View).visibility = View.GONE
+            (it.getChildAt(1) as TextView).text = "显示全部"
+        }).also { bindVhRefs(it) }
+        else -> VH(buildSubCard(parent.context)).also { bindVhRefs(it) }
+    }.also { it.viewType = viewType }
+
+    /** 从卡片根视图提取子引用（图片 / 名称）。 */
+    private fun bindVhRefs(vh: VH) {
+        val root = vh.root as LinearLayout
+        vh.subImage = root.getChildAt(0) as ImageView
+        vh.subName = root.getChildAt(1) as TextView
+    }
+
+    override fun onBindViewHolder(holder: VH, position: Int) {
+        when (val row = rows[position]) {
+            is CategoryRow.Header -> {
+                (holder.root as TextView).text = row.cat.name
+            }
+            is CategoryRow.Sub -> {
+                // 无图时 NetImage 内部显示灰色占位（无蓝色边框装饰）
+                NetImage.loadRound(holder.subImage!!, row.sub.pic ?: "", 8f)
+                holder.subName?.text = row.sub.name
+                holder.root.setOnClickListener { onClickSub(row.cat, row.sub) }
+            }
+            is CategoryRow.ShowMore -> {
+                holder.subName?.text = "显示全部"
+                holder.root.setOnClickListener { onClickMore(row.cat) }
+            }
+        }
+    }
+
+    /* 卡片构建 */
+
+    private fun buildHeader(context: Context): TextView = TextView(context).apply {
+        textSize = 18f
+        typeface = Typeface.DEFAULT_BOLD
+        setTextColor(Color.parseColor("#222222"))
+        setPadding(dp(4), dp(8), dp(4), dp(8))
+    }
+
+    private fun buildSubCard(context: Context): LinearLayout {
+        val root = LinearLayout(context).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER
+            setPadding(dp(8), dp(10), dp(8), dp(10))
+            background = android.graphics.drawable.GradientDrawable().apply {
+                cornerRadius = dp(8).toFloat()
+                setColor(Color.WHITE)
+            }
+            elevation = dp(2).toFloat()
+            outlineProvider = ViewOutlineProvider.BACKGROUND
+            clipChildren = false
+        }
+        // 图标图片 40dp（无图时 NetImage 显示灰色占位；不含边框装饰）
+        val image = ImageView(context).apply { scaleType = ImageView.ScaleType.CENTER_CROP }
+        root.addView(image, LinearLayout.LayoutParams(dp(40), dp(40)))
+        val name = TextView(context).apply {
+            textSize = 12f
+            setTextColor(Color.parseColor("#666666"))
+            maxLines = 1
+            gravity = Gravity.CENTER
+        }
+        root.addView(name, LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+        ).apply { topMargin = dp(4) })
+        // 统一卡片尺寸（宽随格子均分一致，高固定），避免边界贴在一起/大小不一
+        root.layoutParams = RecyclerView.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, dp(84),
+        )
+        return root
+    }
+}
+
+/* ---------- 吸顶标题装饰 ---------- */
+
+/** 主分类标题吸顶：滚动时把最近的主分类标题吸附在 RecyclerView 顶部（背景同页面色，含顶走偏移）。 */
+private class StickyHeaderDecoration(
+    private val adapter: CategoryAdapter,
+    private val headerHeightPx: Int,
+) : RecyclerView.ItemDecoration() {
+
+    private val bgPaint = Paint().apply { color = Color.WHITE }
+    private val textPaint = Paint().apply {
+        color = Color.parseColor("#222222")
+        textSize = 18 * Resources.getSystem().displayMetrics.density
+        typeface = Typeface.DEFAULT_BOLD
+        isAntiAlias = true
+    }
+
+    override fun onDrawOver(c: Canvas, parent: RecyclerView, state: RecyclerView.State) {
+        super.onDrawOver(c, parent, state)
+        val lm = parent.layoutManager as? LinearLayoutManager ?: return
+        val count = lm.itemCount
+        if (count == 0) return
+        val firstVisible = lm.findFirstVisibleItemPosition()
+        if (firstVisible == RecyclerView.NO_POSITION) return
+        var pos = firstVisible
+        while (pos > 0 && !adapter.isHeader(pos)) pos--
+        if (!adapter.isHeader(pos)) return
+        val title = adapter.headerText(pos)
+        // 下一个标题：用于顶走偏移
+        var next = pos + 1
+        while (next < count && !adapter.isHeader(next)) next++
+        var offsetTop = 0f
+        if (next < count) {
+            val nextView = lm.findViewByPosition(next)
+            if (nextView != null) {
+                val diff = parent.top + headerHeightPx - nextView.top
+                if (diff > 0) offsetTop = minOf(diff.toFloat(), headerHeightPx.toFloat())
+            }
+        }
+        val top = parent.top + offsetTop - headerHeightPx
+        val bottom = parent.top + offsetTop
+        // 背景（与页面同色，覆盖滚动内容）
+        c.drawRect(parent.left.toFloat(), top, parent.right.toFloat(), bottom, bgPaint)
+        val fm = textPaint.fontMetrics
+        val baseline = top + (headerHeightPx - fm.ascent - fm.descent) / 2f
+        c.drawText(title, (parent.left + dp(4)).toFloat(), baseline, textPaint)
+    }
+}
+
+/* ---------- 分类网格间距 ---------- */
+
+/** 网格间距：标题行上下文 8dp、子分类列间均分 8dp、行间 bottom 8dp。 */
+private class CategorySpacingDecoration(
+    private val spacing: Int,
+    private val adapter: CategoryAdapter,
+) : RecyclerView.ItemDecoration() {
+
+    override fun getItemOffsets(
+        outRect: android.graphics.Rect,
+        view: View,
+        parent: RecyclerView,
+        state: RecyclerView.State,
+    ) {
+        val position = parent.getChildAdapterPosition(view)
+        if (position == RecyclerView.NO_POSITION) return
+        val lm = parent.layoutManager as? GridLayoutManager ?: return
+        if (adapter.isHeader(position)) {
+            outRect.top = spacing
+            outRect.bottom = spacing
+            return
+        }
+        // 统一对称间距：列间/行间各 spacing，边缘 spacing/2（不受跨全宽标题的 position 偏移影响）
+        val half = spacing / 2
+        outRect.left = half
+        outRect.right = half
+        outRect.top = half
+        outRect.bottom = half
     }
 }
 
