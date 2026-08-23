@@ -42,6 +42,29 @@ object NetImage {
         }
     }
 
+    /** 加载圆形头像（四角同半径圆角；[radiusDp] = 直径/2，如 48dp 头像传 24dp）。 */
+    fun loadRound(imageView: ImageView, url: String, radiusDp: Float) {
+        val pic = normalize(url)
+        if (pic.isEmpty()) {
+            imageView.setImageDrawable(placeholder)
+            return
+        }
+        val radiusPx = radiusDp * imageView.resources.displayMetrics.density
+        imageView.load(pic) {
+            placeholder(placeholder)
+            error(errorDrawable)
+            crossfade(true)
+            transformations(
+                RoundedCornersTransformation(
+                    topLeft = radiusPx,
+                    topRight = radiusPx,
+                    bottomLeft = radiusPx,
+                    bottomRight = radiusPx,
+                ),
+            )
+        }
+    }
+
     /** 对应 Dart NetImage：空串 → ""；"//" 前缀补 "https:"。 */
     fun normalize(url: String): String {
         if (url.isEmpty()) return ""

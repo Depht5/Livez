@@ -189,7 +189,9 @@ class PlayerEngine private constructor() {
         MPVLib.setOptionString("hwdec", config.hwdec ?: "mediacodec")
         MPVLib.setOptionString("hwdec-codecs", "h264,hevc,mpeg4,mpeg2video,vp8,vp9,av1")
         MPVLib.setOptionString("ao", "audiotrack,opensles")
-        MPVLib.setOptionString("tls-verify", "yes")
+        // 直播流场景禁用 TLS 证书校验：Jellyfin libmpv AAR 内置 mbedtls CA 库不完整，
+        // 对部分 CDN（如 B 站 bilivideo.com）证书链验证失败导致流打不开（logs: flags 8 / not trusted）。
+        MPVLib.setOptionString("tls-verify", "no")
         MPVLib.setOptionString("input-default-bindings", "no")
         // 移动端限制 demuxer 缓存
         MPVLib.setOptionString("demuxer-max-bytes", "${64 * 1024 * 1024}")

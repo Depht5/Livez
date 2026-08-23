@@ -28,6 +28,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
@@ -452,7 +453,11 @@ class BiliBiliSite : LiveSite() {
             query = mapOf("room_id" to roomId),
             header = getHeader(),
         )
-        val list = result?.jsonObject?.get("data")?.jsonObject?.get("list")?.jsonArray ?: JsonArray(emptyList())
+        // 对齐 Dart `result["data"]?["list"] ?? []`：data 为 null 或 JsonNull（无醒目留言）时返回空列表，
+        // 不抛 "JsonNull is not a JsonObject"。
+        val data = result?.jsonObject?.get("data")?.takeIf { it !is JsonNull }
+        val list = data?.jsonObject?.get("list")?.jsonArray
+            ?: JsonArray(emptyList())
         return list.mapNotNull { item ->
             val obj = item.jsonObject
             val userInfo = obj["user_info"]?.jsonObject

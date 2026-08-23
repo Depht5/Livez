@@ -20,8 +20,8 @@ android {
         // mpv 播放内核在旧系统上不可用。
         minSdk = 26
         targetSdk = 34
-        versionCode = 11208
-        versionName = "1.12.8"
+        versionCode = 1
+        versionName = "0.1.0"
     }
 
     compileOptions {
