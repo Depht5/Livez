@@ -5,6 +5,7 @@ import android.graphics.Rect
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
+import android.widget.FrameLayout
 import android.widget.TextView
 import androidx.core.view.setPadding
 import androidx.recyclerview.widget.GridLayoutManager
@@ -65,26 +66,43 @@ class LiveRoomAdapter(
         notifyDataSetChanged()
     }
 
-    class RoomViewHolder(val card: LiveRoomCard) : RecyclerView.ViewHolder(card)
+    class RoomViewHolder(val itemView: FrameLayout, val card: LiveRoomCard) : RecyclerView.ViewHolder(itemView)
 
     override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): RoomViewHolder {
+        // item 容器：卡片四周留统一 margin，阴影在 item 内绘制，避免与相邻卡片互遮导致左右不对称
+        val itemView = FrameLayout(parent.context).apply { clipChildren = false }
         val card = LiveRoomCard(parent.context)
-        // 显式可点击，确保 item 始终接收触摸并触发 OnClickListener
-        card.isClickable = true
-        card.isFocusable = false
-        card.isFocusableInTouchMode = false
+        val shadowMargin = dp(4)
+        itemView.addView(
+            card,
+            FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT,
+            ).apply {
+                marginStart = shadowMargin
+                marginEnd = shadowMargin
+                topMargin = shadowMargin
+                bottomMargin = shadowMargin
+            },
+        )
         val layout = gridLayout
-        card.layoutParams = if (layout != null) {
-            RecyclerView.LayoutParams(layout.itemWidth, layout.mainAxisExtent)
+        itemView.layoutParams = if (layout != null) {
+            // item 高度按卡片实际宽（列宽 - 两侧 margin）的 16:9 封面 + 文字区 + 上下 margin 计算，
+            // 与卡片内容精确贴合（避免 margin 后文字区溢出/裁切）
+            val cardWidth = layout.itemWidth - dp(8)
+            val itemHeight = (cardWidth / LiveRoomGridLayout.coverAspectRatio).toInt() +
+                LiveRoomCard.detailsExtentPx + dp(8)
+            RecyclerView.LayoutParams(layout.itemWidth, itemHeight)
         } else {
             RecyclerView.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
         }
-        return RoomViewHolder(card)
+        return RoomViewHolder(itemView, card)
     }
 
     override fun onBindViewHolder(holder: RoomViewHolder, position: Int) {
         val item = items[position]
-        holder.card.bind(item, gridLayout?.itemWidth ?: 0)
+        // 卡片实际宽 = 列宽 - 两侧 margin（封面 16:9 高度按此计算）
+        val cardWidth = (gridLayout?.itemWidth ?: 0) - dp(8)
+        holder.card.bind(item, cardWidth)
         holder.itemView.setOnClickListener { onClick(item) }
     }
 

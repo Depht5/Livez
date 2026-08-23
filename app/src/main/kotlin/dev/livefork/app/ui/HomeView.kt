@@ -35,6 +35,9 @@ class HomeView(context: Context) : LinearLayout(context) {
     private val tabLayout = TabLayout(context)
     private val contentFrame = FrameLayout(context)
 
+    /** 各 Tab 的名称文字视图（按 tab 顺序），用于选中高亮切换。 */
+    private val tabLabels = mutableListOf<TextView>()
+
     private val siteViews = mutableMapOf<String, SiteListView>()
     private var currentSiteId: String? = null
 
@@ -45,10 +48,14 @@ class HomeView(context: Context) : LinearLayout(context) {
         tabLayout.setBackgroundColor(Color.WHITE)
         tabLayout.setSelectedTabIndicatorColor(Color.parseColor("#FF3F4B"))
         tabLayout.setTabTextColors(Color.parseColor("#666666"), Color.parseColor("#FF3F4B"))
+        // 可横向滑动的 Tab（站点多时不再挤压）+ 指示条
+        tabLayout.tabMode = TabLayout.MODE_SCROLLABLE
         tabLayout.tabGravity = TabLayout.GRAVITY_START
         tabLayout.isTabIndicatorFullWidth = false
 
         addView(tabLayout, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT))
+        // 关闭容器裁剪，使卡片阴影可见（卡片 elevation 阴影绘制在 item 边界外）
+        contentFrame.clipChildren = false
         addView(contentFrame, LayoutParams(LayoutParams.MATCH_PARENT, 0, 1f))
 
         for (site in controller.sites) {
@@ -59,8 +66,11 @@ class HomeView(context: Context) : LinearLayout(context) {
                 gravity = Gravity.CENTER_VERTICAL
             }
             val icon = ImageView(context).apply { setImageResource(site.logoRes) }
-            icon.layoutParams = LinearLayout.LayoutParams(dp(18), dp(18))
-            val label = TextView(context).apply { text = site.name }
+            icon.layoutParams = LinearLayout.LayoutParams(dp(20), dp(20))
+            val label = TextView(context).apply {
+                text = site.name
+                textSize = 15f
+            }
             label.layoutParams = LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT,
             ).apply { marginStart = dp(4) }
@@ -68,14 +78,18 @@ class HomeView(context: Context) : LinearLayout(context) {
             custom.addView(label)
             tab.setCustomView(custom)
             tabLayout.addTab(tab)
+            tabLabels += label
         }
 
         tabLayout.addOnTabSelectedListener(object : TabLayout.OnTabSelectedListener {
             override fun onTabSelected(tab: TabLayout.Tab) {
+                updateTabLabel(tab.position, selected = true)
                 showSite(tab.position)
             }
 
-            override fun onTabUnselected(tab: TabLayout.Tab) {}
+            override fun onTabUnselected(tab: TabLayout.Tab) {
+                updateTabLabel(tab.position, selected = false)
+            }
 
             override fun onTabReselected(tab: TabLayout.Tab) {
                 // 回到顶部（简化：重新刷新）
@@ -85,6 +99,12 @@ class HomeView(context: Context) : LinearLayout(context) {
 
         // 默认显示第一个站点
         tabLayout.getTabAt(0)?.select()
+    }
+
+    /** 选中标识：Tab 名称文字高亮/常规色（customView 不受 setTabTextColors 影响，需手动切换）。 */
+    private fun updateTabLabel(position: Int, selected: Boolean) {
+        val label = tabLabels.getOrNull(position) ?: return
+        label.setTextColor(Color.parseColor(if (selected) "#FF3F4B" else "#666666"))
     }
 
     private fun showSite(index: Int) {
@@ -120,7 +140,10 @@ class HomeView(context: Context) : LinearLayout(context) {
 
         init {
             recycler.setPadding(dp(12), dp(12), dp(12), dp(12))
-            recycler.addItemDecoration(GridSpacingDecoration(dp(12)))
+            // 不裁剪子项，使卡片 elevation 阴影在 item 边界外可见
+            recycler.clipChildren = false
+            // 卡片独立 shadow margin(四周4dp) + decoration(4dp) = 视觉间距 12dp（与 Dart 一致）
+            recycler.addItemDecoration(GridSpacingDecoration(dp(4)))
             recycler.adapter = adapter
             // 宽度变化（旋转 / 分屏 / 首次布局）时重算列数与卡片尺寸
             recycler.addOnLayoutChangeListener { _, left, _, right, _, _, _, _, _ ->

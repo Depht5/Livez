@@ -7,6 +7,7 @@ import android.graphics.drawable.GradientDrawable
 import android.text.TextUtils
 import android.view.Gravity
 import android.view.ViewGroup
+import android.view.ViewOutlineProvider
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.TextView
@@ -47,6 +48,9 @@ class LiveRoomCard(context: Context) : LinearLayout(context) {
             cornerRadius = dp(8).toFloat()
             setColor(Color.WHITE)
         }
+        // 淡阴影区分卡片边界；轮廓跟随圆角背景
+        elevation = dp(2).toFloat()
+        outlineProvider = ViewOutlineProvider.BACKGROUND
 
         // 封面（16:9，高度由 bind 时的 itemWidth 决定）
         addView(coverView, LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0))
