@@ -58,6 +58,8 @@ class CategoryView(context: Context) : LinearLayout(context) {
             setBackgroundColor(Color.WHITE)
             setSelectedTabIndicatorColor(Color.parseColor("#3498DB"))
             setTabTextColors(Color.parseColor("#666666"), Color.parseColor("#3498DB"))
+            // 移除点击水波纹反馈
+            tabRippleColor = android.content.res.ColorStateList.valueOf(Color.TRANSPARENT)
             tabMode = TabLayout.MODE_SCROLLABLE
             tabGravity = TabLayout.GRAVITY_START
             isTabIndicatorFullWidth = false
@@ -131,7 +133,7 @@ class CategoryView(context: Context) : LinearLayout(context) {
         return CatListView(context, site, listController)
     }
 
-    /** 站点分类列表：SwipeRefreshLayout + 单 Grid 列表（吸顶标题 + 子分类网格 + 显示全部）。 */
+    /** 站点分类列表：下拉刷新 + 单 Grid 列表（连续吸顶标题 + 子分类网格 + 显示全部）。 */
     private inner class CatListView(
         context: Context,
         val site: Site,
@@ -145,7 +147,11 @@ class CategoryView(context: Context) : LinearLayout(context) {
             onClickSub = { cat, sub ->
                 CategoryDetailActivity.start(context, site, sub)
             },
-            onClickMore = { recreateRows() },
+            onClickMore = { cat ->
+                // 先展开（showAll=true），再重建行显示全部分类
+                cat.showAll.value = true
+                recreateRows()
+            },
         )
 
         init {
@@ -154,10 +160,22 @@ class CategoryView(context: Context) : LinearLayout(context) {
             recycler.clipChildren = false
             recycler.clipToPadding = false
             recycler.adapter = adapter
+            // 吸顶：滚动时把已越过吸顶线的分组标题用 translationY 钉在顶部（原位标题实体卡住）
+            recycler.addOnScrollListener(object : RecyclerView.OnScrollListener() {
+                override fun onScrolled(recyclerView: RecyclerView, dx: Int, dy: Int) {
+                    applySticky()
+                }
+            })
             addView(recycler, ViewGroup.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT,
             ))
-            setOnRefreshListener { listController.refreshData() }
+            setOnRefreshListener {
+                listController.refreshData()
+                // 冷却被拒等未真正进入加载时立即收起，避免进度圈残留
+                postDelayed({
+                    if (!listController.pageLoading.value) isRefreshing = false
+                }, 150)
+            }
             // 下拉刷新完成自动收起
             scope.launch {
                 listController.pageLoading.collect { loading ->
@@ -180,6 +198,43 @@ class CategoryView(context: Context) : LinearLayout(context) {
 
         private fun recreateRows() {
             adapter.submit(categories)
+            // 数据/布局变化后重算吸顶（等布局完成）
+            post { applySticky() }
+        }
+
+        /**
+         * 吸顶卡位：对所有可见分组标题，把"已越过吸顶线（top<0）且最靠近吸顶线"的那个
+         * 用 translationY 钉在 RecyclerView 顶部；其余标题保持原位。
+         * 标题实体随内容被"卡住"，内容从其下方滚过 —— 真实吸顶，无浮层/跳变。
+         */
+        private fun applySticky() {
+            val lm = recycler.layoutManager as? GridLayoutManager ?: return
+            var target: View? = null
+            var targetTop = Int.MIN_VALUE
+            for (i in 0 until lm.childCount) {
+                val child = lm.getChildAt(i) ?: continue
+                val pos = recycler.getChildAdapterPosition(child)
+                if (pos == RecyclerView.NO_POSITION || !adapter.isHeader(pos)) continue
+                val top = child.top
+                if (top < 0 && top > targetTop) {
+                    targetTop = top
+                    target = child
+                }
+            }
+            val targetView = target
+            for (i in 0 until lm.childCount) {
+                val child = lm.getChildAt(i) ?: continue
+                val pos = recycler.getChildAdapterPosition(child)
+                if (pos == RecyclerView.NO_POSITION || !adapter.isHeader(pos)) continue
+                val pinned = targetView != null && child === targetView
+                child.translationY = if (pinned) (-targetTop).toFloat() else 0f
+                // 被卡标题提升 z 序（绘制在滚动卡片之上避免被盖）；
+                // 关键：outlineProvider=null（无轮廓）——部分设备（如荣耀渲染器）对高 z/translationZ
+                // 会绘制阴影轮廓，移除轮廓后即使 z 高也不产生阴影
+                child.outlineProvider = null
+                child.elevation = 0f
+                child.z = if (pinned) 10f else 0f
+            }
         }
 
         private fun setupGrid(width: Int) {
@@ -197,7 +252,6 @@ class CategoryView(context: Context) : LinearLayout(context) {
             }
             if (recycler.itemDecorationCount == 0) {
                 recycler.addItemDecoration(CategorySpacingDecoration(dp(8), adapter))
-                recycler.addItemDecoration(StickyHeaderDecoration(adapter, dp(46)))
             }
         }
 
@@ -319,6 +373,8 @@ private class CategoryAdapter(
         textSize = 18f
         typeface = Typeface.DEFAULT_BOLD
         setTextColor(Color.parseColor("#222222"))
+        // 不透明背景：吸顶卡位时盖住下方滚过的内容
+        setBackgroundColor(Color.WHITE)
         setPadding(dp(4), dp(8), dp(4), dp(8))
     }
 
@@ -352,54 +408,6 @@ private class CategoryAdapter(
             ViewGroup.LayoutParams.MATCH_PARENT, dp(84),
         )
         return root
-    }
-}
-
-/* ---------- 吸顶标题装饰 ---------- */
-
-/** 主分类标题吸顶：滚动时把最近的主分类标题吸附在 RecyclerView 顶部（背景同页面色，含顶走偏移）。 */
-private class StickyHeaderDecoration(
-    private val adapter: CategoryAdapter,
-    private val headerHeightPx: Int,
-) : RecyclerView.ItemDecoration() {
-
-    private val bgPaint = Paint().apply { color = Color.WHITE }
-    private val textPaint = Paint().apply {
-        color = Color.parseColor("#222222")
-        textSize = 18 * Resources.getSystem().displayMetrics.density
-        typeface = Typeface.DEFAULT_BOLD
-        isAntiAlias = true
-    }
-
-    override fun onDrawOver(c: Canvas, parent: RecyclerView, state: RecyclerView.State) {
-        super.onDrawOver(c, parent, state)
-        val lm = parent.layoutManager as? LinearLayoutManager ?: return
-        val count = lm.itemCount
-        if (count == 0) return
-        val firstVisible = lm.findFirstVisibleItemPosition()
-        if (firstVisible == RecyclerView.NO_POSITION) return
-        var pos = firstVisible
-        while (pos > 0 && !adapter.isHeader(pos)) pos--
-        if (!adapter.isHeader(pos)) return
-        val title = adapter.headerText(pos)
-        // 下一个标题：用于顶走偏移
-        var next = pos + 1
-        while (next < count && !adapter.isHeader(next)) next++
-        var offsetTop = 0f
-        if (next < count) {
-            val nextView = lm.findViewByPosition(next)
-            if (nextView != null) {
-                val diff = parent.top + headerHeightPx - nextView.top
-                if (diff > 0) offsetTop = minOf(diff.toFloat(), headerHeightPx.toFloat())
-            }
-        }
-        val top = parent.top + offsetTop - headerHeightPx
-        val bottom = parent.top + offsetTop
-        // 背景（与页面同色，覆盖滚动内容）
-        c.drawRect(parent.left.toFloat(), top, parent.right.toFloat(), bottom, bgPaint)
-        val fm = textPaint.fontMetrics
-        val baseline = top + (headerHeightPx - fm.ascent - fm.descent) / 2f
-        c.drawText(title, (parent.left + dp(4)).toFloat(), baseline, textPaint)
     }
 }
 
