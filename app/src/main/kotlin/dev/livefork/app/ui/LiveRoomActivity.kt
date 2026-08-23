@@ -38,8 +38,11 @@ import dev.livefork.app.player.MpvInitConfig
 import dev.livefork.app.player.MpvVideoView
 import dev.livefork.app.player.PlayerEngine
 import dev.livefork.app.services.MpvOptionsService
+import dev.livefork.app.services.FollowService
+import dev.livefork.core.model.LiveContributionRankItem
 import dev.livefork.core.model.LiveMessage
 import dev.livefork.core.model.LiveMessageType
+import dev.livefork.core.model.LiveSuperChatMessage
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -72,6 +75,8 @@ class LiveRoomActivity : AppCompatActivity() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
 
     private lateinit var controller: LiveRoomController
+    private val followService: FollowService
+        get() = ServiceContainer.followService
     private lateinit var videoView: MpvVideoView
     private lateinit var unliveOverlay: TextView
     private lateinit var titleText: TextView
@@ -82,6 +87,15 @@ class LiveRoomActivity : AppCompatActivity() {
     private lateinit var contentFrame: FrameLayout
     private lateinit var messagesRecycler: RecyclerView
     private lateinit var messagesAdapter: MessagesAdapter
+
+    /** 直播间 Tab 内容（子任务：剩余 Tab；SC/贡献榜/关注/设置）。 */
+    private lateinit var superChatRecycler: RecyclerView
+    private lateinit var superChatAdapter: SuperChatAdapter
+    private lateinit var contributionRecycler: RecyclerView
+    private lateinit var contributionAdapter: ContributionRankAdapter
+    private lateinit var followTabRecycler: RecyclerView
+    private lateinit var followTabAdapter: FollowTabAdapter
+    private lateinit var tabPlaceholder: TextView
 
     /** 视频浮层弹幕（子任务：浮层弹幕；叠加在视频区，非交互层）。 */
     private lateinit var danmakuOverlay: DanmakuOverlayView
@@ -315,32 +329,89 @@ class LiveRoomActivity : AppCompatActivity() {
         contentFrame.addView(messagesRecycler, FrameLayout.LayoutParams(
             FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT,
         ))
-        val placeholderText = TextView(this).apply {
+        /* ---- 其余 Tab 内容（SC/贡献榜/关注/设置；初始 GONE，切 tab 显示）---- */
+        superChatAdapter = SuperChatAdapter()
+        superChatRecycler = RecyclerView(this).apply {
+            layoutManager = LinearLayoutManager(this@LiveRoomActivity)
+            adapter = superChatAdapter
+            visibility = View.GONE
+        }
+        contributionAdapter = ContributionRankAdapter()
+        contributionRecycler = RecyclerView(this).apply {
+            layoutManager = LinearLayoutManager(this@LiveRoomActivity)
+            adapter = contributionAdapter
+            visibility = View.GONE
+        }
+        // 直播间内关注列表：直播中优先（复用 FollowService.liveList/notLiveList 渲染风格）
+        followTabAdapter = FollowTabAdapter(
+            onOpenRoom = { follow ->
+                val site = Sites.allSites[follow.siteId] ?: return@FollowTabAdapter
+                controller.resetRoom(site, follow.roomId)
+            },
+        )
+        followTabRecycler = RecyclerView(this).apply {
+            layoutManager = LinearLayoutManager(this@LiveRoomActivity)
+            adapter = followTabAdapter
+            visibility = View.GONE
+        }
+        // 设置 Tab：入口列表（弹层与子任务④共用 LiveRoomSheets）
+        tabPlaceholder = TextView(this).apply {
             gravity = Gravity.CENTER
             textSize = 13f
             setTextColor(Color.parseColor("#888888"))
             visibility = View.GONE
         }
-        contentFrame.addView(placeholderText, FrameLayout.LayoutParams(
+        contentFrame.addView(superChatRecycler, FrameLayout.LayoutParams(
+            FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT,
+        ))
+        contentFrame.addView(contributionRecycler, FrameLayout.LayoutParams(
+            FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT,
+        ))
+        contentFrame.addView(followTabRecycler, FrameLayout.LayoutParams(
+            FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT,
+        ))
+        contentFrame.addView(tabPlaceholder, FrameLayout.LayoutParams(
             FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT,
         ))
 
         tabLayout.addOnTabSelectedListener(object : TabLayout.OnTabSelectedListener {
             override fun onTabSelected(tab: TabLayout.Tab) {
-                val entry = tabs.getOrNull(tab.position)
-                val isChat = entry?.first == TAB_CHAT
-                messagesRecycler.visibility = if (isChat) View.VISIBLE else View.GONE
-                placeholderText.text = if (isChat) "" else "「${entry?.second ?: ""}」功能后续实现"
-                placeholderText.visibility = if (isChat) View.GONE else View.VISIBLE
-                if (isChat && messagesAdapter.itemCount > 0) {
-                    messagesRecycler.scrollToPosition(messagesAdapter.itemCount - 1)
-                }
+                showTab(tabs.getOrNull(tab.position)?.first)
             }
 
             override fun onTabUnselected(tab: TabLayout.Tab) {}
 
             override fun onTabReselected(tab: TabLayout.Tab) {}
         })
+
+        // 切房间/下播时按需刷新各 tab（数据流已绑定，这里处理列表位置）
+        scope.launch {
+            controller.superChats.collect { list ->
+                superChatAdapter.submit(list)
+            }
+        }
+        scope.launch {
+            controller.contributionRankUsers.collect { list ->
+                contributionAdapter.submit(list)
+            }
+            // 贡献榜首次进入时拉取（设置启用才拉；控制器已有逻辑）
+            if (ServiceContainer.appSettings.contributionRankEnable.value &&
+                !controller.contributionRankFetched.value
+            ) {
+                controller.fetchContributionRank()
+            }
+        }
+        // 关注列表：直播中 + 未开播（复用 FollowService 数据；直播间内简化版）
+        scope.launch {
+            followService.liveList.collect { live ->
+                followTabAdapter.submit(live + followService.notLiveList.value)
+            }
+        }
+        scope.launch {
+            followService.notLiveList.collect { notLive ->
+                followTabAdapter.submit(followService.liveList.value + notLive)
+            }
+        }
 
         setContentView(root)
 
@@ -534,6 +605,32 @@ class LiveRoomActivity : AppCompatActivity() {
         controlsOverlay.showAdjustHint("音量 $volume/$max")
     }
 
+    /* ---------- Tab 内容切换（对应 Dart buildMessageArea TabBar）---------- */
+
+    /** 显示某 tab 的内容视图；聊天 = 弹幕列表，其余为对应内容，设置 = 入口占位。 */
+    private fun showTab(tabKey: String?) {
+        val isChat = tabKey == TAB_CHAT
+        messagesRecycler.visibility = if (isChat) View.VISIBLE else View.GONE
+        superChatRecycler.visibility = if (tabKey == "super_chat") View.VISIBLE else View.GONE
+        contributionRecycler.visibility =
+            if (tabKey == "contribution_rank") View.VISIBLE else View.GONE
+        followTabRecycler.visibility = if (tabKey == "follow") View.VISIBLE else View.GONE
+        val isSettings = tabKey == "settings"
+        tabPlaceholder.visibility = if (isSettings) View.VISIBLE else View.GONE
+        if (isSettings) {
+            // 设置 tab：弹层入口说明（弹层本身在⋮菜单/控制层已有；此处引导）
+            tabPlaceholder.text = "直播间设置请使用顶部⋮菜单"
+            tabPlaceholder.setOnClickListener {
+                LiveRoomSheets.showLiveSettingsSheet(this, controller)
+            }
+        } else {
+            tabPlaceholder.setOnClickListener(null)
+        }
+        if (isChat && messagesAdapter.itemCount > 0) {
+            messagesRecycler.scrollToPosition(messagesAdapter.itemCount - 1)
+        }
+    }
+
     /* ---------- 标签集合（对应 Dart 默认标签顺序 + 条件过滤）---------- */
 
     private fun buildTabEntries(siteId: String): List<Pair<String, String>> {
@@ -719,6 +816,189 @@ private class MessagesAdapter : RecyclerView.Adapter<MessagesAdapter.VH>() {
         builder.setSpan(ForegroundColorSpan(dark), start, builder.length, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE)
         return builder
     }
+}
+
+/** SC 醒目留言列表：价格（醒目）+ 用户名 + 留言（对应 Dart buildSuperChats）。 */
+private class SuperChatAdapter : RecyclerView.Adapter<SuperChatAdapter.VH>() {
+
+    private val items = mutableListOf<LiveSuperChatMessage>()
+
+    fun submit(list: List<LiveSuperChatMessage>) {
+        items.clear()
+        items.addAll(list)
+        notifyDataSetChanged()
+    }
+
+    class VH(val root: LinearLayout, val nameText: TextView, val msgText: TextView, val priceText: TextView)
+        : RecyclerView.ViewHolder(root)
+
+    override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): VH {
+        val root = LinearLayout(parent.context).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(14), dp(10), dp(14), dp(10))
+            setBackgroundColor(Color.WHITE)
+        }
+        val nameText = TextView(parent.context).apply {
+            textSize = 13f
+            setTextColor(Color.parseColor("#FF3F4B"))
+        }
+        val msgText = TextView(parent.context).apply {
+            textSize = 14f
+            setTextColor(Color.parseColor("#333333"))
+        }
+        val priceText = TextView(parent.context).apply {
+            textSize = 12f
+            setTextColor(Color.parseColor("#FF9800"))
+        }
+        root.addView(nameText, LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+        ))
+        root.addView(msgText, LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+        ).apply { topMargin = dp(4) })
+        root.addView(priceText, LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+        ).apply { topMargin = dp(4) })
+        return VH(root, nameText, msgText, priceText)
+    }
+
+    override fun onBindViewHolder(holder: VH, position: Int) {
+        val item = items[position]
+        holder.nameText.text = "💬 ${item.userName}（醒目留言）"
+        holder.msgText.text = item.message
+        holder.priceText.text = "¥${item.price}"
+    }
+
+    override fun getItemCount(): Int = items.size
+}
+
+/** 贡献榜列表：名次 + 昵称 + 贡献值（对应 Dart 贡献榜）。 */
+private class ContributionRankAdapter : RecyclerView.Adapter<ContributionRankAdapter.VH>() {
+
+    private val items = mutableListOf<dev.livefork.core.model.LiveContributionRankItem>()
+
+    fun submit(list: List<dev.livefork.core.model.LiveContributionRankItem>) {
+        items.clear()
+        items.addAll(list)
+        notifyDataSetChanged()
+    }
+
+    class VH(val root: LinearLayout, val rankText: TextView, val nameText: TextView, val scoreText: TextView)
+        : RecyclerView.ViewHolder(root)
+
+    override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): VH {
+        val root = LinearLayout(parent.context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(14), dp(10), dp(14), dp(10))
+            setBackgroundColor(Color.WHITE)
+        }
+        val rankText = TextView(parent.context).apply {
+            textSize = 14f
+            setTextColor(Color.parseColor("#FF9800"))
+        }
+        val nameText = TextView(parent.context).apply {
+            textSize = 14f
+            setTextColor(Color.parseColor("#333333"))
+        }
+        val scoreText = TextView(parent.context).apply {
+            textSize = 13f
+            setTextColor(Color.parseColor("#888888"))
+        }
+        root.addView(rankText, LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+        ).apply { marginEnd = dp(12) })
+        root.addView(nameText, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        root.addView(scoreText, LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+        ))
+        return VH(root, rankText, nameText, scoreText)
+    }
+
+    override fun onBindViewHolder(holder: VH, position: Int) {
+        val item = items[position]
+        holder.rankText.text = "${item.rank}"
+        holder.nameText.text = item.userName
+        holder.scoreText.text = item.scoreText
+    }
+
+    override fun getItemCount(): Int = items.size
+}
+
+/** 直播间内关注列表（简化版）：标题/用户名 + 平台 + 直播状态；点击切换直播间。 */
+private class FollowTabAdapter(
+    private val onOpenRoom: (dev.livefork.app.models.FollowUser) -> Unit,
+) : RecyclerView.Adapter<FollowTabAdapter.VH>() {
+
+    private val items = mutableListOf<dev.livefork.app.models.FollowUser>()
+
+    fun submit(list: List<dev.livefork.app.models.FollowUser>) {
+        items.clear()
+        items.addAll(list)
+        notifyDataSetChanged()
+    }
+
+    class VH(
+        val root: LinearLayout,
+        val title: TextView,
+        val sub: TextView,
+        val status: TextView,
+    ) : RecyclerView.ViewHolder(root)
+
+    override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): VH {
+        val root = LinearLayout(parent.context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(16), dp(12), dp(16), dp(12))
+            setBackgroundColor(Color.WHITE)
+        }
+        val texts = LinearLayout(parent.context).apply {
+            orientation = LinearLayout.VERTICAL
+        }
+        val title = TextView(parent.context).apply {
+            textSize = 15f
+            setTextColor(Color.parseColor("#222222"))
+            maxLines = 1
+            ellipsize = TextUtils.TruncateAt.END
+        }
+        val sub = TextView(parent.context).apply {
+            textSize = 12f
+            setTextColor(Color.parseColor("#888888"))
+        }
+        texts.addView(title, LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+        ))
+        texts.addView(sub, LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+        ))
+        root.addView(texts, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        val status = TextView(parent.context).apply {
+            textSize = 12f
+        }
+        root.addView(status, LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+        ))
+        return VH(root, title, sub, status)
+    }
+
+    override fun onBindViewHolder(holder: VH, position: Int) {
+        val item = items[position]
+        val site = Sites.allSites[item.siteId]
+        holder.title.text = item.userName
+        holder.sub.text = (site?.name ?: item.siteId) +
+            (item.roomTitle.ifEmpty { "" }.let { if (it.isEmpty()) "" else " · $it" })
+        holder.status.text = when (item.liveStatus) {
+            2 -> "直播中"
+            0 -> "状态未知"
+            else -> "未开播"
+        }
+        holder.status.setTextColor(
+            if (item.liveStatus == 2) Color.parseColor("#FF3F4B") else Color.parseColor("#999999"),
+        )
+        holder.root.setOnClickListener { onOpenRoom(item) }
+    }
+
+    override fun getItemCount(): Int = items.size
 }
 
 private fun dp(value: Int): Int =
