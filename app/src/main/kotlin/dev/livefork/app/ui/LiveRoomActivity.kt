@@ -82,6 +82,12 @@ class LiveRoomActivity : AppCompatActivity() {
     private lateinit var messagesRecycler: RecyclerView
     private lateinit var messagesAdapter: MessagesAdapter
 
+    /** 视频浮层弹幕（子任务：浮层弹幕；叠加在视频区，非交互层）。 */
+    private lateinit var danmakuOverlay: DanmakuOverlayView
+
+    /** 已入列的消息计数（增量收集：新消息 = 当前列表尾部新增）。 */
+    private var danmakuLastCount = 0
+
     /* ---------- 全屏切换（子任务：横屏全屏切换）---------- */
 
     /** 是否处于横屏全屏（对应 Dart fullScreenState）；纯 View 态，onSaveInstanceState 持久。 */
@@ -168,6 +174,12 @@ class LiveRoomActivity : AppCompatActivity() {
         }
         videoView = MpvVideoView(this)
         videoFrame.addView(videoView, FrameLayout.LayoutParams(
+            FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT,
+        ))
+        // 浮层弹幕：叠加在视频之上、未开播提示之下；非交互层不拦截点击
+        danmakuOverlay = DanmakuOverlayView(this)
+        danmakuOverlay.siteId = siteId
+        videoFrame.addView(danmakuOverlay, FrameLayout.LayoutParams(
             FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT,
         ))
         unliveOverlay = TextView(this).apply {
@@ -474,6 +486,29 @@ class LiveRoomActivity : AppCompatActivity() {
                 if (!disableAutoScroll && list.isNotEmpty()) {
                     messagesRecycler.scrollToPosition(list.size - 1)
                 }
+                // 浮层弹幕：增量收集（列表清空/切房间时重置计数并清轨）
+                if (list.size < danmakuLastCount) {
+                    danmakuLastCount = 0
+                    danmakuOverlay.clear()
+                }
+                if (list.size > danmakuLastCount) {
+                    for (msg in list.subList(danmakuLastCount, list.size)) {
+                        danmakuOverlay.enqueue(msg)
+                    }
+                    danmakuLastCount = list.size
+                }
+            }
+        }
+        scope.launch {
+            controller.liveStatus.collect { live ->
+                // 未开播/下播 → 浮层弹幕停用并清空（对齐 Dart emit 条件 !liveStatus return）
+                danmakuOverlay.danmakuEnabled = live && ServiceContainer.appSettings.danmuEnable.value
+            }
+        }
+        scope.launch {
+            // 弹幕总开关设置变化 → 即时反映到浮层
+            ServiceContainer.appSettings.danmuEnable.collect { enabled ->
+                danmakuOverlay.danmakuEnabled = controller.liveStatus.value && enabled
             }
         }
     }
