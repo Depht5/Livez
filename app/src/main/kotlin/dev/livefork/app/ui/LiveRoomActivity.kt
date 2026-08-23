@@ -2,6 +2,8 @@ package dev.livefork.app.ui
 
 import android.content.Context
 import android.content.Intent
+import android.content.pm.ActivityInfo
+import android.content.res.Configuration
 import android.graphics.Color
 import android.graphics.Typeface
 import android.os.Bundle
@@ -19,7 +21,10 @@ import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
+import androidx.activity.OnBackPressedCallback
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.google.android.material.tabs.TabLayout
@@ -52,6 +57,7 @@ class LiveRoomActivity : AppCompatActivity() {
         private const val EXTRA_SITE_ID = "site_id"
         private const val EXTRA_ROOM_ID = "room_id"
         private const val TAB_CHAT = "chat"
+        private const val KEY_FULL_SCREEN = "full_screen"
 
         fun start(context: Context, siteId: String, roomId: String) {
             val intent = Intent(context, LiveRoomActivity::class.java)
@@ -76,6 +82,22 @@ class LiveRoomActivity : AppCompatActivity() {
     private lateinit var messagesRecycler: RecyclerView
     private lateinit var messagesAdapter: MessagesAdapter
 
+    /* ---------- 全屏切换（子任务：横屏全屏切换）---------- */
+
+    /** 是否处于横屏全屏（对应 Dart fullScreenState）；纯 View 态，onSaveInstanceState 持久。 */
+    private var isFullScreen = false
+
+    /** 竖屏根布局与各区块引用（全屏时隐藏非播放器区块）。 */
+    private lateinit var root: LinearLayout
+    private lateinit var titleBar: LinearLayout
+    private lateinit var videoFrame: FrameLayout
+    private lateinit var infoBar: LinearLayout
+    private lateinit var tabLayout: TabLayout
+
+    /** 视频区竖屏高度（16:9，屏宽 × 9/16）。 */
+    private val videoHeight: Int
+        get() = (resources.displayMetrics.widthPixels / LiveRoomGridLayout.coverAspectRatio).toInt()
+
     /** 用户上滑后暂停自动滚底；贴底后恢复。 */
     private var disableAutoScroll = false
 
@@ -92,13 +114,13 @@ class LiveRoomActivity : AppCompatActivity() {
         // 竖屏页：保持系统装饰（顶部状态栏留白由系统处理）；屏幕常亮
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
 
-        val root = LinearLayout(this).apply {
+        root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setBackgroundColor(Color.WHITE)
         }
 
         /* ---- 顶部标题栏（对应 Dart AppBar + _buildMobileAppBarTitle）---- */
-        val titleBar = LinearLayout(this).apply {
+        titleBar = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             setPadding(dp(8), 0, dp(8), 0)
@@ -141,8 +163,7 @@ class LiveRoomActivity : AppCompatActivity() {
         ))
 
         /* ---- 视频区（16:9：宽 = 屏宽，高 = 宽 × 9/16；未开播黑色 + 提示）---- */
-        val videoHeight = (resources.displayMetrics.widthPixels / LiveRoomGridLayout.coverAspectRatio).toInt()
-        val videoFrame = FrameLayout(this).apply {
+        videoFrame = FrameLayout(this).apply {
             setBackgroundColor(Color.BLACK)
         }
         videoView = MpvVideoView(this)
@@ -164,7 +185,7 @@ class LiveRoomActivity : AppCompatActivity() {
         ))
 
         /* ---- 信息区（对应 Dart buildUserProfile：头像/名称/平台 + 人气）---- */
-        val infoBar = LinearLayout(this).apply {
+        infoBar = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             setPadding(dp(12), dp(8), dp(12), dp(8))
@@ -220,7 +241,7 @@ class LiveRoomActivity : AppCompatActivity() {
 
         /* ---- 标签栏（对应 Dart buildMessageArea 的 TabBar；仅"聊天"实现内容）---- */
         val tabs = buildTabEntries(siteId)
-        val tabLayout = TabLayout(this).apply {
+        tabLayout = TabLayout(this).apply {
             setSelectedTabIndicatorColor(Color.parseColor("#3498DB"))
             setTabTextColors(Color.parseColor("#888888"), Color.parseColor("#3498DB"))
             tabGravity = TabLayout.GRAVITY_FILL
@@ -315,7 +336,100 @@ class LiveRoomActivity : AppCompatActivity() {
 
         bindState()
 
+        // 全屏切换：BACK 键在全屏时先退出全屏，而非退出直播间
+        onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
+            override fun handleOnBackPressed() {
+                if (isFullScreen) {
+                    exitFull()
+                } else {
+                    finish()
+                }
+            }
+        })
+
+        // 临时全屏入口：点击视频区切换全屏（子任务③控制层完成前的最小入口）
+        videoFrame.setOnClickListener { toggleFullScreen() }
+
         controller.create(site, roomId)
+
+        // 进程重建恢复：之前处于全屏 → 重新进入全屏
+        if (savedInstanceState?.getBoolean(KEY_FULL_SCREEN) == true) {
+            videoFrame.post { enterFullScreen() }
+        }
+
+        // 自动全屏：设置开启时进入直播间自动横屏全屏
+        if (ServiceContainer.appSettings.autoFullScreen.value) {
+            videoFrame.post { enterFullScreen() }
+        }
+    }
+
+    /* ---------- 横屏全屏切换（对应 Dart enterFullScreen/exitFull/toggleFullScreen）---------- */
+
+    /** 进入横屏全屏：横屏方向 + 隐藏系统栏 + 仅播放器布局。 */
+    fun enterFullScreen() {
+        if (isFullScreen) return
+        isFullScreen = true
+        // 运行时方向覆盖 Manifest 的 portrait（SENSOR_LANDSCAPE 允许左右两个横向；configChanges 已声明，不 recreate）
+        requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+        val insetsController = WindowInsetsControllerCompat(window, window.decorView)
+        insetsController.hide(WindowInsetsCompat.Type.systemBars())
+        insetsController.systemBarsBehavior =
+            WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+        applyFullScreenLayout()
+    }
+
+    /** 退出横屏全屏：恢复竖屏方向 + 系统栏 + 完整页面布局。 */
+    fun exitFull() {
+        if (!isFullScreen) return
+        isFullScreen = false
+        requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+        val insetsController = WindowInsetsControllerCompat(window, window.decorView)
+        insetsController.show(WindowInsetsCompat.Type.systemBars())
+        applyFullScreenLayout()
+    }
+
+    /** 切换全屏状态。 */
+    fun toggleFullScreen() {
+        if (isFullScreen) exitFull() else enterFullScreen()
+    }
+
+    /** 根据全屏状态切换布局：全屏仅视频区（MATCH_PARENT），竖屏恢复完整页面。 */
+    private fun applyFullScreenLayout() {
+        val videoLp = videoFrame.layoutParams as LinearLayout.LayoutParams
+        if (isFullScreen) {
+            // 隐藏非播放器区块，视频占满全屏
+            titleBar.visibility = View.GONE
+            infoBar.visibility = View.GONE
+            tabLayout.visibility = View.GONE
+            contentFrame.visibility = View.GONE
+            videoLp.width = LinearLayout.LayoutParams.MATCH_PARENT
+            videoLp.height = LinearLayout.LayoutParams.MATCH_PARENT
+        } else {
+            // 恢复竖屏完整页面（标题/信息/Tab/聊天状态都在原 View 中，零丢失）
+            titleBar.visibility = View.VISIBLE
+            infoBar.visibility = View.VISIBLE
+            tabLayout.visibility = View.VISIBLE
+            contentFrame.visibility = View.VISIBLE
+            videoLp.width = LinearLayout.LayoutParams.MATCH_PARENT
+            videoLp.height = videoHeight
+        }
+        videoFrame.layoutParams = videoLp
+    }
+
+    override fun onSaveInstanceState(outState: Bundle) {
+        super.onSaveInstanceState(outState)
+        outState.putBoolean(KEY_FULL_SCREEN, isFullScreen)
+    }
+
+    override fun onConfigurationChanged(newConfig: Configuration) {
+        super.onConfigurationChanged(newConfig)
+        // configChanges 已声明 orientation|screenSize → 不 recreate；方向变化后重算竖屏 16:9 高度
+        if (!isFullScreen && ::videoFrame.isInitialized) {
+            val lp = videoFrame.layoutParams as LinearLayout.LayoutParams
+            lp.width = LinearLayout.LayoutParams.MATCH_PARENT
+            lp.height = videoHeight
+            videoFrame.layoutParams = lp
+        }
     }
 
     /* ---------- 标签集合（对应 Dart 默认标签顺序 + 条件过滤）---------- */
