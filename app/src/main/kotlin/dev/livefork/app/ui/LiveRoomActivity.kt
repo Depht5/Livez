@@ -384,35 +384,6 @@ class LiveRoomActivity : AppCompatActivity() {
             override fun onTabReselected(tab: TabLayout.Tab) {}
         })
 
-        // 切房间/下播时按需刷新各 tab（数据流已绑定，这里处理列表位置）
-        scope.launch {
-            controller.superChats.collect { list ->
-                superChatAdapter.submit(list)
-            }
-        }
-        scope.launch {
-            controller.contributionRankUsers.collect { list ->
-                contributionAdapter.submit(list)
-            }
-            // 贡献榜首次进入时拉取（设置启用才拉；控制器已有逻辑）
-            if (ServiceContainer.appSettings.contributionRankEnable.value &&
-                !controller.contributionRankFetched.value
-            ) {
-                controller.fetchContributionRank()
-            }
-        }
-        // 关注列表：直播中 + 未开播（复用 FollowService 数据；直播间内简化版）
-        scope.launch {
-            followService.liveList.collect { live ->
-                followTabAdapter.submit(live + followService.notLiveList.value)
-            }
-        }
-        scope.launch {
-            followService.notLiveList.collect { notLive ->
-                followTabAdapter.submit(followService.liveList.value + notLive)
-            }
-        }
-
         setContentView(root)
 
         /* ---- 控制器与播放器（沿用原逻辑）---- */
@@ -744,6 +715,34 @@ class LiveRoomActivity : AppCompatActivity() {
                     Router.toast("自动退出直播间")
                     finish()
                 }
+            }
+        }
+        // SC / 贡献榜 / 关注列表数据绑定（controller 已赋值后启动，避免 lateinit 未初始化）
+        scope.launch {
+            controller.superChats.collect { list ->
+                superChatAdapter.submit(list)
+            }
+        }
+        scope.launch {
+            controller.contributionRankUsers.collect { list ->
+                contributionAdapter.submit(list)
+            }
+            // 贡献榜首次进入时拉取（设置启用才拉；控制器已有逻辑）
+            if (ServiceContainer.appSettings.contributionRankEnable.value &&
+                !controller.contributionRankFetched.value
+            ) {
+                controller.fetchContributionRank()
+            }
+        }
+        // 关注列表：直播中 + 未开播（复用 FollowService 数据；直播间内简化版）
+        scope.launch {
+            followService.liveList.collect { live ->
+                followTabAdapter.submit(live + followService.notLiveList.value)
+            }
+        }
+        scope.launch {
+            followService.notLiveList.collect { notLive ->
+                followTabAdapter.submit(followService.liveList.value + notLive)
             }
         }
     }
