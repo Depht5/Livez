@@ -1,4 +1,4 @@
-﻿package dev.livefork.app.ui
+package dev.livefork.app.ui
 
 import android.animation.ValueAnimator
 import android.content.Context
@@ -126,6 +126,11 @@ class DanmakuOverlayView @JvmOverloads constructor(
 
     private fun addToTrack(msg: LiveMessage) {
         if (!danmakuEnabled) return
+        // 轨道懒初始化：按当前弹幕行数保证轨道槽数量（tracks 初始为空，首条弹幕到达时补齐）
+        val lineCount = appSettings.danmuLineCount.value.coerceAtLeast(1)
+        while (tracks.size < lineCount) {
+            tracks.add(null)
+        }
         val size = appSettings.danmuSize.value
         val textSizePx = size * resources.displayMetrics.density
         val font = when (appSettings.danmuFontWeight.value) {
