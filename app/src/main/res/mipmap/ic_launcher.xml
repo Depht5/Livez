@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 启动图标（矢量，覆盖 minSdk 24；后续替换为正式设计图） -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- 背景圆角方块 -->
+    <path
+        android:pathData="M0,0h108v108h-108z"
+        android:fillColor="#1F1F25" />
+    <!-- 圆形底（品牌色，镜像 bilibili 粉） -->
+    <path
+        android:pathData="M54,54m-38,0a38,38 0 1,1 76,0a38,38 0 1,1 -76,0"
+        android:fillColor="#FB7299" />
+    <!-- 播放三角 -->
+    <path
+        android:pathData="M45,38 L74,54 L45,70 Z"
+        android:fillColor="#FFFFFF" />
+    <!-- 底部标语圆 -->
+    <path
+        android:pathData="M33,72m-9,0a9,9 0 1,1 18,0a9,9 0 1,1 -18,0"
+        android:fillColor="#FB7299" />
+</vector>

@@ -1,0 +1,19 @@
+# Gradle / build
+.gradle/
+build/
+**/build/
+
+# Local / machine-specific
+local.properties
+.idea/
+*.iml
+.DS_Store
+captures/
+.externalNativeBuild/
+.cxx/
+
+# Kotlin / IDE session caches
+.kotlin/
+
+# Local downloaded libs (reproducible from Maven Central, e.g. libmpv aar)
+.libs/
