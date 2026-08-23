@@ -4,7 +4,7 @@ import android.content.Context
 import android.graphics.Color
 import android.widget.FrameLayout
 import android.widget.LinearLayout
-import androidx.recyclerview.widget.LinearLayoutManager
+import androidx.recyclerview.widget.GridLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.google.android.material.tabs.TabLayout
 import dev.livefork.app.app.Site
@@ -83,7 +83,7 @@ class HomeView(context: Context) : LinearLayout(context) {
         return SiteListView(context, site, listController)
     }
 
-    /** 站点列表（RecyclerView + 数据收集）。 */
+    /** 站点列表（RecyclerView + 数据收集），卡片网格布局（镜像 Dart home_list_view.dart）。 */
     private inner class SiteListView(
         context: Context,
         val site: Site,
@@ -96,8 +96,33 @@ class HomeView(context: Context) : LinearLayout(context) {
         private var collectJob: Job? = null
 
         init {
-            root.layoutManager = LinearLayoutManager(context)
+            root.setPadding(dp(12), dp(12), dp(12), dp(12))
+            root.addItemDecoration(GridSpacingDecoration(dp(12)))
             root.adapter = adapter
+            // 宽度变化（旋转 / 分屏 / 首次布局）时重算列数与卡片尺寸
+            root.addOnLayoutChangeListener { _, left, _, right, _, _, _, _, _ ->
+                val width = right - left
+                if (width > 0) applyGrid(width)
+            }
+        }
+
+        /** 依据可用宽度计算网格（对应 Dart LiveRoomGridLayout.resolve）。 */
+        private var lastGridWidth = -1
+
+        private fun applyGrid(width: Int) {
+            // 宽度未变则跳过：避免每次布局变化都重建条目（重建窗口会吞掉点击）
+            if (width == lastGridWidth) return
+            lastGridWidth = width
+            val layout = LiveRoomGridLayout.resolve(width, LiveRoomCard.detailsExtentPx)
+            val layoutManager = root.layoutManager
+            if (layoutManager is GridLayoutManager) {
+                if (layoutManager.spanCount != layout.crossAxisCount) {
+                    layoutManager.spanCount = layout.crossAxisCount
+                }
+            } else {
+                root.layoutManager = GridLayoutManager(context, layout.crossAxisCount)
+            }
+            adapter.gridLayout = layout
         }
 
         /** 进入可见：数据收集 + 首次加载（后续可用 refreshData 刷新）。 */
@@ -116,3 +141,6 @@ class HomeView(context: Context) : LinearLayout(context) {
         controller.dispose()
     }
 }
+
+private fun dp(value: Int): Int =
+    (value * android.content.res.Resources.getSystem().displayMetrics.density).toInt()
