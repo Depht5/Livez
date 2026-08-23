@@ -26,14 +26,45 @@ object DouyinSign {
             ?.toString(Charsets.UTF_8)
             ?: ""
 
-    private val abogusScript: String by lazy { loadScript("abogus.js") }
-    private val webMsSdkScript: String by lazy { loadScript("webms_sdk.js") }
+    /**
+     * Rhino 兼容化预处理：脚本资源与 Dart 同源（可随时重新提取），但 Rhino 1.7.15 解析不了
+     * Dart 侧 dart_quickjs 支持的若干语法，此处加载时在内存中转换语义等价形式：
+     * 1) 函数形参默认值（ES6；Rhino 报 `missing ) after formal parameters`，如
+     *    `function f(a, num = null)` / `suffix = "cus"` / `Arguments = [0, 1, 14]`）
+     *    → 移除默认值并**在函数体开头注入 `if (x === undefined) x = <默认值>;`**（保持语义）；
+     * 2) 顶层 `return X;`（Rhino 报 `invalid return`，quickjs 允许）→ 改表达式语句；
+     * 3) `let` → `var`（Rhino 1.7.15 存在 let 重声明/作用域缺陷）。
+     */
+    private fun sanitizeForRhino(raw: String): String {
+        var s = raw
+        s = s.replace(Regex("""\blet\s"""), "var ")
+        // 仅处理函数头参数列表区间，避免误伤普通赋值（如 for 初始化）
+        s = Regex("""(function\s+\w+\s*\()([^)]*?)(\))\s*(\{)""").replace(s) { m ->
+            val injections = mutableListOf<String>()
+            val params = Regex("""\b(\w+)\s*=\s*(?:"[^"]*"|'[^']*'|\[[^\]]*\]|[^,)]+)""")
+                .replace(m.groupValues[2]) { pm ->
+                    val name = pm.groupValues[1]
+                    val value = pm.groupValues[0].substringAfter('=').trim()
+                    injections += "if ($name===undefined) $name=$value;"
+                    name
+                }
+            val injected = if (injections.isEmpty()) "" else " " + injections.joinToString(" ")
+            m.groupValues[1] + params + m.groupValues[3] + m.groupValues[4] + injected
+        }
+        // 顶层 return 表达式; → 表达式;（Rhino 不允许顶层 return）
+        s = s.replace(Regex("""(?m)^return\s+(.+);\s*$"""), "$1;")
+        return s
+    }
+
+    private val abogusScript: String by lazy { sanitizeForRhino(loadScript("abogus.js")) }
+    private val webMsSdkScript: String by lazy { sanitizeForRhino(loadScript("webms_sdk.js")) }
 
     /** 执行 JS 表达式。脚本先行求值，之后对 scope 求 expression。 */
     private fun evalJs(script: String, expression: String): String {
         val cx = Context.enter()
         return try {
             cx.optimizationLevel = -1 // 解释模式，规避 Rhino 对大型脚本的编译问题
+            cx.languageVersion = Context.VERSION_ES6
             val scope: Scriptable = cx.initStandardObjects()
             cx.evaluateString(scope, "var console={error:function(){},log:function(){}};", "<init>", 1, null)
             cx.evaluateString(scope, script, "<douyin_sign>", 1, null)

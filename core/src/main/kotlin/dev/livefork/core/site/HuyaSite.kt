@@ -426,10 +426,11 @@ class HuyaSite : LiveSite() {
             query = emptyMap(),
             header = mapOf("user-agent" to kUserAgent),
         )
-        val match = Regex("""window\.HNF_GLOBAL_INIT.\=\{[\s\S]*?\}[\s\S]*?</script>""").find(resultText)
+        // 对齐 Dart：`window\.HNF_GLOBAL_INIT.=.\{`（"HNF_GLOBAL_INIT" 后可有空格/括号 + "="）。
+        val match = Regex("""window\.HNF_GLOBAL_INIT.=.\{[\s\S]*?\}[\s\S]*?</script>""").find(resultText)
         val text = match?.value ?: throw CoreError("虎牙房间信息解析失败")
         val jsonText = text
-            .replace(Regex("""window\.HNF_GLOBAL_INIT.\="""), "")
+            .replace(Regex("""window\.HNF_GLOBAL_INIT.=.?"""), "")
             .replace("</script>", "")
             .replace(Regex("""function.*?\(.*?\)\.\{[\s\S]*?\}""")) { "\"\"" }
         val jsonObj = HttpClient.json.parseToJsonElement(jsonText).jsonObject
