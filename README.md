@@ -56,12 +56,13 @@ cd kotlin_re
 - [x] core 契约：`LiveSite` / `LiveDanmaku`
 - [x] core 模型：全部 `Live*` 模型 + `FollowRefresh*` / `SyncProgress`
 - [x] core 公共设施：`CoreError` / `CoreLog` / `HttpClient` / `HttpLogSanitizer` / `ConvertHelper` / `WebSocketUtil`
-  + `DouyinSign`（Rhino）/ `DouyinCookieHelper` / `KuaishouLiveLink` / `AutoExitSession` /
+  + `DouyinSign`（Rhino，含脚本加载时 Rhino 兼容预处理）/ `DouyinCookieHelper` / `AutoExitSession` /
   `DouyinFollowRefreshLimiter` / `PlayerErrorClassifier` / `PlayerVolumePolicy` / `BinaryWriter`
-- [x] core 站点：bilibili / douyu / huya / douyin / kuaishou（全部注册于 `LiveSiteRegistry`）
-- [x] core 弹幕：BiliBili / Douyu（689 协议）/ Huya（Tars）/ Douyin（手写 protobuf）/ Kuaishou（protobuf）
-- [x] core 单元测试：7 个测试类（ConvertHelper / KuaishouLiveLink / DouyinCookieHelper /
-  AutoExitSession / PlayerVolumePolicy / DouyinFollowRefreshLimiter / DouyinSign）
+- [x] core 站点：bilibili / douyu / huya / douyin（全部注册于 `LiveSiteRegistry`；快手平台已按需求移除）
+- [x] core 弹幕：BiliBili / Douyu（689 协议）/ Huya（Tars）/ Douyin（手写 protobuf）
+- [x] core 单元测试：6 个测试类、32 个用例（ConvertHelper / DouyinCookieHelper /
+  AutoExitSession / PlayerVolumePolicy / DouyinFollowRefreshLimiter / DouyinSign（含真实执行
+  abogus.js 产出 a_bogus 的回归用例））
 - [x] 验证：`:core:compileKotlin` + `:core:test` BUILD SUCCESSFUL（JDK 17）
 - [ ] app 层：模块 / 服务 / 存储 / 界面逐步移植
 

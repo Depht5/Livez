@@ -1,11 +1,11 @@
 package dev.livefork.app.app
 
+import dev.livefork.app.R
 import dev.livefork.core.interfaces.LiveSite
 import dev.livefork.core.site.BiliBiliSite
 import dev.livefork.core.site.DouyinSite
 import dev.livefork.core.site.DouyuSite
 import dev.livefork.core.site.HuyaSite
-import dev.livefork.core.site.KuaishouSite
 
 /**
  * 站点 UI 包装 —— 对应 Dart `Site`（lib/app/sites.dart）。
@@ -16,7 +16,17 @@ data class Site(
     /** 站点 logo 资源路径（Dart 为 Flutter asset；Android 侧占位，UI 层按 id 解析）。 */
     val logo: String,
     val liveSite: LiveSite,
-)
+) {
+    /** 站点 logo drawable 资源（对应 Dart site.logo asset；UI 层图标经此映射）。 */
+    val logoRes: Int
+        get() = when (id) {
+            Constant.kBiliBili -> R.drawable.bilibili_2
+            Constant.kDouyu -> R.drawable.douyu
+            Constant.kHuya -> R.drawable.huya
+            Constant.kDouyin -> R.drawable.douyin
+            else -> R.drawable.douyin
+        }
+}
 
 /**
  * 站点注册表 —— 对应 Dart `Sites`（lib/app/sites.dart）。
@@ -49,12 +59,6 @@ object Sites {
                 logo = "douyin",
                 name = "抖音直播",
                 liveSite = DouyinSite(),
-            ),
-            Constant.kKuaishou to Site(
-                id = Constant.kKuaishou,
-                logo = "kuaishou",
-                name = "快手直播",
-                liveSite = KuaishouSite(),
             ),
         )
     }

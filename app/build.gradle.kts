@@ -81,6 +81,9 @@ dependencies {
     // 图片加载：Coil（对应 Dart extended_image / NetImage）
     implementation("io.coil-kt:coil:2.7.0")
 
+    // 下拉刷新（对应 Dart RefreshIndicator）
+    implementation("androidx.swiperefreshlayout:swiperefreshlayout:1.1.0")
+
     // 播放内核：libmpv（Jellyfin 维护的 Android 构建，mvp-android 同源 JNI API）
     // holdallsn 对应 Dart media_kit(mpv) 内核；本 AAR 自带 ffmpeg+mpv so（arm64-v8a）。
     implementation("dev.jdtech.mpv:libmpv:0.4.1")

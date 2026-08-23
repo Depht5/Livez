@@ -182,14 +182,28 @@ class LiveRoomActivity : AppCompatActivity() {
             maxLines = 1
             ellipsize = TextUtils.TruncateAt.END
         }
+        // 平台行：图标 + 平台名
+        val siteRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        val siteIcon = ImageView(this).apply { setImageResource(site.logoRes) }
+        siteIcon.layoutParams = LinearLayout.LayoutParams(dp(16), dp(16))
         siteNameText = TextView(this).apply {
             textSize = 12f
             setTextColor(Color.parseColor("#888888"))
         }
+        siteRow.addView(siteIcon, LinearLayout.LayoutParams(dp(16), dp(16)))
+        siteRow.addView(
+            siteNameText,
+            LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+            ).apply { marginStart = dp(4) },
+        )
         infoTexts.addView(userNameText, LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT,
         ))
-        infoTexts.addView(siteNameText, LinearLayout.LayoutParams(
+        infoTexts.addView(siteRow, LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT,
         ))
         infoBar.addView(infoTexts, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))

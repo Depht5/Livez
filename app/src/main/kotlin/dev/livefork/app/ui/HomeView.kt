@@ -2,10 +2,15 @@ package dev.livefork.app.ui
 
 import android.content.Context
 import android.graphics.Color
+import android.view.Gravity
+import android.view.ViewGroup
 import android.widget.FrameLayout
+import android.widget.ImageView
 import android.widget.LinearLayout
+import android.widget.TextView
 import androidx.recyclerview.widget.GridLayoutManager
 import androidx.recyclerview.widget.RecyclerView
+import androidx.swiperefreshlayout.widget.SwipeRefreshLayout
 import com.google.android.material.tabs.TabLayout
 import dev.livefork.app.app.Site
 import dev.livefork.app.app.controller.BasePageController
@@ -47,7 +52,22 @@ class HomeView(context: Context) : LinearLayout(context) {
         addView(contentFrame, LayoutParams(LayoutParams.MATCH_PARENT, 0, 1f))
 
         for (site in controller.sites) {
-            tabLayout.addTab(tabLayout.newTab().setText(site.name))
+            // 自定义 Tab 内容：平台图标 + 平台名（对应 Dart Tab 的 text + site.logo）
+            val tab = tabLayout.newTab()
+            val custom = LinearLayout(context).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+            }
+            val icon = ImageView(context).apply { setImageResource(site.logoRes) }
+            icon.layoutParams = LinearLayout.LayoutParams(dp(18), dp(18))
+            val label = TextView(context).apply { text = site.name }
+            label.layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT,
+            ).apply { marginStart = dp(4) }
+            custom.addView(icon)
+            custom.addView(label)
+            tab.setCustomView(custom)
+            tabLayout.addTab(tab)
         }
 
         tabLayout.addOnTabSelectedListener(object : TabLayout.OnTabSelectedListener {
@@ -83,26 +103,39 @@ class HomeView(context: Context) : LinearLayout(context) {
         return SiteListView(context, site, listController)
     }
 
-    /** 站点列表（RecyclerView + 数据收集），卡片网格布局（镜像 Dart home_list_view.dart）。 */
+    /** 站点列表（SwipeRefreshLayout + RecyclerView），卡片网格布局（镜像 Dart home_list_view.dart）。 */
     private inner class SiteListView(
         context: Context,
         val site: Site,
         val listController: BasePageController<LiveRoomItem>,
     ) {
-        val root: RecyclerView = RecyclerView(context)
+        val root: SwipeRefreshLayout = SwipeRefreshLayout(context).apply {
+            setColorSchemeColors(Color.parseColor("#3498DB"))
+        }
+        private val recycler: RecyclerView = RecyclerView(context)
         private val adapter = LiveRoomAdapter { item ->
             Router.openLiveRoom(site, item.roomId)
         }
         private var collectJob: Job? = null
 
         init {
-            root.setPadding(dp(12), dp(12), dp(12), dp(12))
-            root.addItemDecoration(GridSpacingDecoration(dp(12)))
-            root.adapter = adapter
+            recycler.setPadding(dp(12), dp(12), dp(12), dp(12))
+            recycler.addItemDecoration(GridSpacingDecoration(dp(12)))
+            recycler.adapter = adapter
             // 宽度变化（旋转 / 分屏 / 首次布局）时重算列数与卡片尺寸
-            root.addOnLayoutChangeListener { _, left, _, right, _, _, _, _, _ ->
+            recycler.addOnLayoutChangeListener { _, left, _, right, _, _, _, _, _ ->
                 val width = right - left
                 if (width > 0) applyGrid(width)
+            }
+            root.addView(recycler, ViewGroup.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT,
+            ))
+            // 下拉刷新（对应 Dart RefreshIndicator）：刷完自动收起
+            root.setOnRefreshListener { listController.refreshData() }
+            scope.launch {
+                listController.pageLoading.collect { loading ->
+                    if (!loading) root.isRefreshing = false
+                }
             }
         }
 
@@ -114,13 +147,13 @@ class HomeView(context: Context) : LinearLayout(context) {
             if (width == lastGridWidth) return
             lastGridWidth = width
             val layout = LiveRoomGridLayout.resolve(width, LiveRoomCard.detailsExtentPx)
-            val layoutManager = root.layoutManager
+            val layoutManager = recycler.layoutManager
             if (layoutManager is GridLayoutManager) {
                 if (layoutManager.spanCount != layout.crossAxisCount) {
                     layoutManager.spanCount = layout.crossAxisCount
                 }
             } else {
-                root.layoutManager = GridLayoutManager(context, layout.crossAxisCount)
+                recycler.layoutManager = GridLayoutManager(context, layout.crossAxisCount)
             }
             adapter.gridLayout = layout
         }

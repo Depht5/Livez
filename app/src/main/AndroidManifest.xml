@@ -29,7 +29,7 @@
             android:name=".ui.LiveRoomActivity"
             android:exported="false"
             android:configChanges="orientation|screenSize|keyboardHidden|screenLayout"
-            android:screenOrientation="sensorLandscape" />
+            android:screenOrientation="portrait" />
 
         <activity android:name=".ui.SettingsActivity" android:exported="false" />
         <activity android:name=".ui.HistoryActivity" android:exported="false" />
