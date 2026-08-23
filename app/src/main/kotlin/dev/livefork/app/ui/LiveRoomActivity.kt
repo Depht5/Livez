@@ -183,8 +183,8 @@ class LiveRoomActivity : AppCompatActivity() {
             gravity = Gravity.CENTER
             setPadding(dp(8), dp(12), dp(8), dp(12))
         }
-        // 菜单功能后续任务实现，当前占位
-        menuButton.setOnClickListener { Router.toast("菜单功能后续实现") }
+        // 菜单：打开直播间菜单弹层（清晰度/线路/弹幕设置/屏蔽/复制/分享等）
+        menuButton.setOnClickListener { LiveRoomSheets.showMenuSheet(this, controller) }
         titleBar.addView(menuButton, LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT,
         ))
@@ -393,8 +393,8 @@ class LiveRoomActivity : AppCompatActivity() {
         controlsOverlay.onRefreshClick = { controller.refreshRoom() }
         controlsOverlay.onPlayPauseClick = { togglePlayPause() }
         controlsOverlay.onDanmakuClick = { toggleDanmaku() }
-        controlsOverlay.onQualityClick = { Router.toast("清晰度切换：弹层后续任务实现") }
-        controlsOverlay.onLineClick = { Router.toast("线路切换：弹层后续任务实现") }
+        controlsOverlay.onQualityClick = { LiveRoomSheets.showQualitySheet(this, controller) }
+        controlsOverlay.onLineClick = { LiveRoomSheets.showPlayUrlsSheet(this, controller) }
         controlsOverlay.onFullScreenClick = { toggleFullScreen() }
 
         // 视频区手势：单击显隐控制层、双击播放/暂停、左右滑动调亮度/音量（对齐历史批次）。
@@ -638,6 +638,15 @@ class LiveRoomActivity : AppCompatActivity() {
                     controller.currentQualityInfo.value,
                     line,
                 )
+            }
+        }
+        scope.launch {
+            // 自动退出倒计时结束 → 退出直播间（对应 Dart autoExitCompleting 触发返回）
+            controller.autoExitCompleting.collect { completing ->
+                if (completing) {
+                    Router.toast("自动退出直播间")
+                    finish()
+                }
             }
         }
     }

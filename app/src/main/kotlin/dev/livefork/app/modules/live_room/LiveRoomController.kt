@@ -150,7 +150,9 @@ class LiveRoomController(
     private var _roomSwitching = false
     private var _pendingRoomSite: Site? = null
     private var _pendingRoomId: String? = null
-    private var _autoExitCompleting = false
+    /** 自动退出已完成（对应 Dart autoExitCompleting；UI 层监听后执行退出直播间）。 */
+    private val _autoExitCompleting = MutableStateFlow(false)
+    val autoExitCompleting: StateFlow<Boolean> = _autoExitCompleting
     private var _playbackMediaGeneration = 0
     private var mediaErrorRetryCount = 0
     private var _onlineRefreshInFlight = false
@@ -1119,6 +1121,14 @@ class LiveRoomController(
         }
     }
 
+    /** 调整自动退出时长（分钟；对应 Dart AutoExitSession 时长设置）。 */
+    fun setAutoExitMinutes(minutes: Int) {
+        _autoExitMinutes.value = minutes.coerceIn(1, 600)
+        if (_autoExitEnable.value) {
+            _countdown.value = _autoExitMinutes.value * 60
+        }
+    }
+
     private fun scheduleAutoExitDeadline() {
         autoExitDeadlineJob?.cancel()
         autoExitDeadlineJob = scope.launch {
@@ -1129,7 +1139,7 @@ class LiveRoomController(
                 }
             }
             if (_autoExitEnable.value && !_roomDisposed) {
-                _autoExitCompleting = true
+                _autoExitCompleting.value = true
                 // 退出直播间（UI 层监听 autoExitCompleting 执行返回/关闭）
                 Log.d("自动退出直播间倒计时结束")
             }
