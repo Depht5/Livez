@@ -107,21 +107,6 @@ class SyncClientRequest {
     suspend fun syncDouyinAccount(client: SyncClient, cookie: String): Boolean =
         postJson(client, "account/douyin", buildJsonObject { put("cookie", cookie) }.toString())
 
-    /** POST /sync/account/kuaishou（对应 Dart syncKuaishouAccount）。 */
-    suspend fun syncKuaishouAccount(
-        client: SyncClient,
-        cookie: String,
-        kww: String,
-        cookieExpiresAtMs: Long,
-    ): Boolean = postJson(
-        client, "account/kuaishou",
-        buildJsonObject {
-            put("cookie", cookie)
-            put("kww", kww)
-            put("cookieExpiresAt", cookieExpiresAtMs)
-        }.toString(),
-    )
-
     private suspend fun postJson(
         client: SyncClient,
         path: String,

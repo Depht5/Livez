@@ -7,7 +7,6 @@ import dev.livefork.app.services.FollowService
 import dev.livefork.app.services.CurrentRoomService
 import dev.livefork.app.services.DBService
 import dev.livefork.app.services.DouyinAccountService
-import dev.livefork.app.services.KuaishouAccountService
 import dev.livefork.app.services.LocalStorageService
 import dev.livefork.core.LiveSiteRegistry
 import dev.livefork.core.interfaces.LiveSite
@@ -38,9 +37,6 @@ object ServiceContainer {
     /** 抖音账号服务（对应 Dart DouyinAccountService）。 */
     val douyinAccount: DouyinAccountService by lazy { DouyinAccountService(localStorage) }
 
-    /** 快手账号服务（对应 Dart KuaishouAccountService）。 */
-    val kuaishouAccount: KuaishouAccountService by lazy { KuaishouAccountService(localStorage) }
-
     /** 应用设置控制器（对应 Dart AppSettingsController）。 */
     val appSettings: AppSettingsController by lazy { AppSettingsController(localStorage) }
 
@@ -55,7 +51,6 @@ object ServiceContainer {
         appSettings.init()
         biliBiliAccount.init()
         douyinAccount.init()
-        kuaishouAccount.init()
         followService.install()
         // 后续在此注册同步服务等
     }

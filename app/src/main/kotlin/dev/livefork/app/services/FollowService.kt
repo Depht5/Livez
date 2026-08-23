@@ -294,7 +294,6 @@ class FollowService(
             Constant.kHuya,
             Constant.kDouyu,
             Constant.kDouyin,
-            Constant.kKuaishou,
         )
         val seen = mutableSetOf<String>()
         val result = mutableListOf<String>()

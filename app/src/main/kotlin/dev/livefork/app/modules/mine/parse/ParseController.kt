@@ -4,7 +4,6 @@ import dev.livefork.app.app.Constant
 import dev.livefork.app.app.Log
 import dev.livefork.app.app.Site
 import dev.livefork.app.app.Sites
-import dev.livefork.core.common.KuaishouLiveLink
 import dev.livefork.core.model.LivePlayQuality
 import dev.livefork.core.model.LivePlayUrl
 import dev.livefork.core.model.LiveRoomDetail
@@ -89,47 +88,7 @@ class ParseController {
             val location = getLocation(u)
             return parse(location)
         }
-        val kuaishouRoomId = resolveKuaishouRoomId(target)
-        if (kuaishouRoomId.isNotEmpty()) {
-            return ParseResult(kuaishouRoomId, Sites.allSites[Constant.kKuaishou] ?: return null)
-        }
         return null
-    }
-
-    /** 解析快手直播间链接（对应 Dart resolveKuaishouRoomId）。 */
-    suspend fun resolveKuaishouRoomId(value: String): String {
-        val initial = KuaishouLiveLink.parseHttpUrl(value) ?: return ""
-        val directRoomId = KuaishouLiveLink.roomIdFromUri(initial)
-        if (directRoomId != null) return directRoomId
-        if (!KuaishouLiveLink.isShortLink(initial)) return ""
-
-        var current = initial
-        val visited = mutableSetOf<String>()
-        return withContext(Dispatchers.IO) {
-            try {
-                for (redirectCount in 0 until MAX_REDIRECTS) {
-                    if (!visited.add(current.toString())) return@withContext ""
-                    val response = redirectClient.newCall(
-                        Request.Builder().url(current.toURL()).build(),
-                    ).execute()
-                    response.use { resp ->
-                        val statusCode = resp.code
-                        if (statusCode < 300 || statusCode >= 400) return@withContext ""
-                        val location = resp.header("location")
-                        if (location.isNullOrBlank()) return@withContext ""
-                        val next = current.resolve(location.trim())
-                        if (!KuaishouLiveLink.isTrustedRedirectTarget(next)) return@withContext ""
-                        val roomId = KuaishouLiveLink.roomIdFromUri(next)
-                        if (roomId != null) return@withContext roomId
-                        current = next
-                    }
-                }
-                ""
-            } catch (e: Exception) {
-                Log.logPrint(e)
-                ""
-            }
-        }
     }
 
     /** 跟随重定向获取最终地址（对应 Dart getLocation）。 */

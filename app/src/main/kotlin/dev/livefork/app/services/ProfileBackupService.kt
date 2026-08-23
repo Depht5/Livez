@@ -281,12 +281,6 @@ object ProfileBackupService {
                             put("siteId", Constant.kDouyin)
                             put("cookie", localStorage.getValue(LocalStorageService.kDouyinCookie, ""))
                         },
-                        buildJsonObject {
-                            put("siteId", Constant.kKuaishou)
-                            put("cookie", localStorage.getValue(LocalStorageService.kKuaishouCookie, ""))
-                            put("kww", localStorage.getValue(LocalStorageService.kKuaishouKww, ""))
-                            put("cookieExpiresAt", localStorage.getValue(LocalStorageService.kKuaishouCookieExpiresAt, 0))
-                        },
                     ),
                 ),
             )
@@ -448,19 +442,6 @@ object ProfileBackupService {
                         dev.livefork.app.di.ServiceContainer.douyinAccount.clearCookie()
                     } else {
                         dev.livefork.app.di.ServiceContainer.douyinAccount.setCookie(cookie)
-                    }
-                }
-                Constant.kKuaishou -> {
-                    val kww = account["kww"]?.strTrim() ?: ""
-                    val expiresAtMs = (account["cookieExpiresAt"] as? JsonPrimitive)?.content?.toLongOrNull() ?: 0
-                    if (cookie.isEmpty()) {
-                        dev.livefork.app.di.ServiceContainer.kuaishouAccount.clearCookie()
-                    } else {
-                        dev.livefork.app.di.ServiceContainer.kuaishouAccount.setCookie(
-                            cookie,
-                            kww = if (kww.isEmpty()) null else kww,
-                            expiresAtMs = if (expiresAtMs > 0) expiresAtMs else null,
-                        )
                     }
                 }
             }

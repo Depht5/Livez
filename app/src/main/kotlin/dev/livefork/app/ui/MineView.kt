@@ -63,7 +63,7 @@ class MineView(context: Context) : LinearLayout(context) {
 
     private fun clickItem(item: MenuItem) {
         when (item.title) {
-            "B 站账号", "抖音账号", "快手账号" -> Router.openFeature("account", "账号管理")
+            "B 站账号", "抖音账号" -> Router.openFeature("account", "账号管理")
             "观看历史" -> Router.openFeature("history", "观看历史")
             "关注用户" -> Router.openFeature("follow", "关注用户")
             "我的收藏" -> Router.openFeature("favorite", "我的收藏")
@@ -94,9 +94,6 @@ class MineView(context: Context) : LinearLayout(context) {
         }
         scope.launch {
             ServiceContainer.douyinAccount.hasCookie.collect { refreshAccounts() }
-        }
-        scope.launch {
-            ServiceContainer.kuaishouAccount.hasCookie.collect { refreshAccounts() }
         }
     }
 
@@ -139,12 +136,10 @@ class MineView(context: Context) : LinearLayout(context) {
     private fun refreshAccounts() {
         val bili = ServiceContainer.biliBiliAccount.logined.value
         val douyin = ServiceContainer.douyinAccount.hasCookie.value
-        val kuaishou = ServiceContainer.kuaishouAccount.hasCookie.value
 
         accountItems.clear()
         accountItems.add(MenuItem("B 站账号", if (bili) "已登录" else "未登录"))
         accountItems.add(MenuItem("抖音账号", if (douyin) "已配置 Cookie" else "未配置"))
-        accountItems.add(MenuItem("快手账号", if (kuaishou) "已配置 Cookie" else "未配置"))
 
         val features = listOf(
             MenuItem("观看历史"),

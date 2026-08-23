@@ -4,7 +4,6 @@ import dev.livefork.app.app.Constant
 import dev.livefork.app.app.Log
 import dev.livefork.app.services.BiliBiliAccountService
 import dev.livefork.app.services.DouyinAccountService
-import dev.livefork.app.services.KuaishouAccountService
 import dev.livefork.core.common.DouyinCookieHelper
 import dev.livefork.core.site.DouyinSite
 import kotlinx.coroutines.CoroutineScope
@@ -30,29 +29,12 @@ import java.util.Locale
 class AccountController(
     private val bilibiliAccount: BiliBiliAccountService,
     private val douyinAccount: DouyinAccountService,
-    private val kuaishouAccount: KuaishouAccountService,
 ) {
 
     companion object {
         private const val DOUYIN_HOME_URL = "https://www.douyin.com/"
-        private const val KUAISHOU_HOME_URL = "https://live.kuaishou.com/"
         private val RFC_1123_FORMATTER: DateTimeFormatter =
             DateTimeFormatter.RFC_1123_DATE_TIME.withLocale(Locale.US)
-
-        /** 解析快手 Cookie 输入中的 kww/kwfv1（对应 Dart _extractKuaishouKww）。 */
-        fun extractKuaishouKww(input: String): String {
-            for (line in input.trim().split(Regex("\\r?\\n"))) {
-                val item = line.trim()
-                val lower = item.lowercase(Locale.ROOT)
-                val names = listOf("kww", "kwfv1")
-                for (name in names) {
-                    if (lower.startsWith("$name:") || lower.startsWith("$name=")) {
-                        return item.substring(name.length + 1).trim()
-                    }
-                }
-            }
-            return ""
-        }
 
         /** 归一化 Cookie 输入：捕获 "Cookie:" 头行（对应 Dart _normalizeCookieInput）。 */
         fun normalizeCookieInput(input: String): String {
@@ -278,56 +260,5 @@ class AccountController(
             defaultValue = defaultValue.substring(6)
         }
         return defaultValue
-    }
-
-    /* ---------- 快手 ---------- */
-
-    fun applyKuaishouCookieInput(rawInput: String) {
-        val cookie = normalizeCookieInput(rawInput)
-        val pastedKww = extractKuaishouKww(rawInput)
-        if (cookie.isEmpty()) {
-            kuaishouAccount.clearCookie()
-            Log.d("Toast: 已清除快手 Cookie")
-            return
-        }
-        kuaishouAccount.setCookie(cookie, kww = pastedKww)
-        val hasKwfv1 = parseCookieMap(cookie).containsKey("kwfv1")
-        if (hasKwfv1 || pastedKww.isNotEmpty()) {
-            Log.d("Toast: 快手 Cookie 已保存")
-        } else {
-            Log.d("Toast: Cookie 已保存，但缺少 kwfv1，弹幕可能需要重新网页登录")
-        }
-    }
-
-    /** 从文件内容导入快手 Cookie（对应 Dart importKuaishouCookieFromFile 的解析部分）。 */
-    fun importKuaishouCookie(content: String) {
-        val cookie = normalizeCookieInput(content)
-        if (cookie.isEmpty()) {
-            Log.d("Toast: Cookie 文件内容为空")
-            return
-        }
-        val kww = extractKuaishouKww(content)
-        kuaishouAccount.setCookie(cookie, kww = kww)
-        Log.d("Toast: 已从文件导入快手 Cookie")
-    }
-
-    /** 当前快手弹幕凭证文本（对应 Dart _currentKuaishouCredentialsText）。 */
-    fun currentKuaishouCredentialsText(): String {
-        val cookie = kuaishouAccount.cookie
-        return if (cookie.isEmpty()) "" else "Cookie: $cookie"
-    }
-
-    /** 快手 Cookie 汇总文案（对应 Dart getKuaishouCookieSummaryText）。 */
-    fun getKuaishouCookieSummaryText(): String {
-        _douyinCookieCountdownTick.value
-        kuaishouAccount.hasCookie.value
-        val cookie = kuaishouAccount.cookie
-        if (cookie.isEmpty()) return "建议配置 Cookie，用于搜索和弹幕"
-        val expiryMs = kuaishouAccount.cookieExpiresAtMs.value
-        if (expiryMs <= 0) return "已配置 Cookie（${cookie.length} 字符），有效期无法判断"
-        val expiry = Instant.ofEpochMilli(expiryMs).atZone(ZoneId.systemDefault())
-        val remain = java.time.Duration.between(ZonedDateTime.now(), expiry)
-        if (remain.isNegative) return "已配置 Cookie（${cookie.length} 字符），预计有效期已过"
-        return "已配置 Cookie（${cookie.length} 字符），预计剩余 ${formatDurationShort(remain)}"
     }
 }

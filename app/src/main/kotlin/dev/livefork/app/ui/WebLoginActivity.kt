@@ -14,10 +14,9 @@ import android.widget.ProgressBar
 import androidx.appcompat.app.AppCompatActivity
 import dev.livefork.app.modules.mine.account.bilibili.BiliBiliWebLoginController
 import dev.livefork.app.modules.mine.account.douyin.DouyinWebLoginController
-import dev.livefork.app.modules.mine.account.kuaishou.KuaishouWebLoginController
 
 /**
- * 网页登录页 —— 对应 Flutter `web_login_page.dart`（B 站/抖音/快手复用）。
+ * 网页登录页 —— 对应 Flutter `web_login_page.dart`（B 站/抖音复用）。
  * 内嵌 WebView，加载各站点登录页；用户完成登录后自动读取 Cookie 保存账号。
  */
 class WebLoginActivity : AppCompatActivity() {
@@ -36,7 +35,6 @@ class WebLoginActivity : AppCompatActivity() {
     private lateinit var progressBar: ProgressBar
     private var biliController: BiliBiliWebLoginController? = null
     private var douyinController: DouyinWebLoginController? = null
-    private var kuaishouController: KuaishouWebLoginController? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -64,31 +62,18 @@ class WebLoginActivity : AppCompatActivity() {
                 progressBar.progress = newProgress
                 when (target) {
                     "douyin" -> douyinController?.onProgressChanged(newProgress)
-                    "kuaishou" -> kuaishouController?.onProgressChanged(newProgress)
                 }
             }
         }
         webView.webViewClient = object : WebViewClient() {
             override fun onPageStarted(view: WebView?, url: String?, favicon: android.graphics.Bitmap?) {
                 super.onPageStarted(view, url, favicon)
-                if (target == "kuaishou") kuaishouController?.onLoadStart()
             }
 
             override fun onPageFinished(view: WebView?, url: String?) {
                 when (target) {
                     "bilibili" -> biliController?.onLoadStop(url)
                     "douyin" -> douyinController?.onLoadStop()
-                    "kuaishou" -> kuaishouController?.onLoadStop()
-                }
-            }
-
-            override fun onReceivedError(
-                view: WebView?,
-                request: android.webkit.WebResourceRequest?,
-                error: android.webkit.WebResourceError?,
-            ) {
-                if (request?.isForMainFrame == true) {
-                    kuaishouController?.onReceivedError(error?.description?.toString() ?: "加载失败")
                 }
             }
         }
@@ -115,16 +100,6 @@ class WebLoginActivity : AppCompatActivity() {
                     onExit = { finish() }
                 }
                 douyinController = controller
-                controller.onWebViewCreated()
-            }
-            "kuaishou" -> {
-                webView.settings.userAgentString = KuaishouWebLoginController().userAgent
-                val controller = KuaishouWebLoginController().apply {
-                    webView = this@WebLoginActivity.webView
-                    onToast = { Router.toast(it) }
-                    onExit = { finish() }
-                }
-                kuaishouController = controller
                 controller.onWebViewCreated()
             }
         }

@@ -419,17 +419,6 @@ class SyncHttpServer(port: Int) : NanoHTTPD(port) {
                     Log.d("已同步抖音账号")
                     successResponse()
                 }
-                "account/kuaishou" -> {
-                    val obj = json.parseToJsonElement(body).jsonObject
-                    val cookie = obj["cookie"]?.strOrEmpty() ?: ""
-                    ServiceContainer.kuaishouAccount.setCookie(
-                        cookie,
-                        kww = obj["kww"]?.strOrEmpty()?.takeIf { it.isNotEmpty() },
-                        expiresAtMs = (obj["cookieExpiresAt"] as? JsonPrimitive)?.content?.toLongOrNull(),
-                    )
-                    Log.d("已同步快手账号")
-                    successResponse()
-                }
                 else -> toJsonResponse(buildJsonObject {
                     put("status", false)
                     put("message", "unknown endpoint: $path")

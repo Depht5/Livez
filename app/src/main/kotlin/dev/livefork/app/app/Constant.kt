@@ -15,7 +15,6 @@ object Constant {
     const val kDouyu = "douyu"
     const val kHuya = "huya"
     const val kDouyin = "douyin"
-    const val kKuaishou = "kuaishou"
 }
 
 /** 首页底部导航项（对应 Dart HomePageItem）。 */

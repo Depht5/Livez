@@ -5,7 +5,6 @@ import dev.livefork.core.site.BiliBiliSite
 import dev.livefork.core.site.DouyinSite
 import dev.livefork.core.site.DouyuSite
 import dev.livefork.core.site.HuyaSite
-import dev.livefork.core.site.KuaishouSite
 
 /**
  * 核心聚合入口。
@@ -20,7 +19,6 @@ object LiveSiteRegistry {
         DouyuSite(),
         HuyaSite(),
         DouyinSite(),
-        KuaishouSite(),
     )
 
     fun find(id: String): LiveSite? = allSites.firstOrNull { it.id == id }

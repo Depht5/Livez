@@ -17,7 +17,7 @@ import kotlinx.coroutines.launch
 
 /**
  * 账号管理页 —— 对应 Flutter `account_page.dart`。
- * 三站账号状态 + 登录方式（网页登录/扫码登录/粘贴 Cookie）+ 登出；
+ * 两站账号状态 + 登录方式（网页登录/扫码登录/粘贴 Cookie）+ 登出；
  * 文件导入、浏览器打开等能力后续接入。
  */
 class AccountActivity : AppCompatActivity() {
@@ -32,7 +32,6 @@ class AccountActivity : AppCompatActivity() {
     private val account = AccountController(
         bilibiliAccount = ServiceContainer.biliBiliAccount,
         douyinAccount = ServiceContainer.douyinAccount,
-        kuaishouAccount = ServiceContainer.kuaishouAccount,
     )
     private lateinit var content: LinearLayout
 
@@ -50,7 +49,6 @@ class AccountActivity : AppCompatActivity() {
 
         buildBilibiliSection()
         buildDouyinSection()
-        buildKuaishouSection()
         refreshAccountStates()
     }
 
@@ -100,26 +98,11 @@ class AccountActivity : AppCompatActivity() {
         })
     }
 
-    private fun buildKuaishouSection() {
-        content.addView(SettingRows.sectionTitle(this, "快手"))
-        content.addView(SettingRows.clickRow(this, "网页登录", "在页面内完成快手登录") {
-            WebLoginActivity.start(this, "kuaishou")
-        })
-        content.addView(SettingRows.clickRow(this, "粘贴 Cookie") {
-            showCookieDialog("快手 Cookie", "请输入快手 Cookie（可附带 kwfv1）") { input ->
-                account.applyKuaishouCookieInput(input)
-                refreshAccountStates()
-            }
-        })
-    }
-
-    /** 刷新账号状态副标题。 */
     private fun refreshAccountStates() {
         // 简化：重建页面以显示最新状态
         content.removeAllViews()
         buildBilibiliSection()
         buildDouyinSection()
-        buildKuaishouSection()
     }
 
     private fun showCookieDialog(title: String, message: String, onConfirm: (String) -> Unit) {

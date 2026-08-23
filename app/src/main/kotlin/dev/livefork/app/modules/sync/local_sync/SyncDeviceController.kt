@@ -244,30 +244,4 @@ class SyncDeviceController(
             }
         }
     }
-
-    /** 同步快手账号（对应 Dart syncKuaishouAccount）。 */
-    fun syncKuaishouAccount(
-        onToast: (String) -> Unit = { Log.d("Toast: $it") },
-    ) {
-        val account = ServiceContainer.kuaishouAccount
-        if (!account.hasCookie.value) {
-            onToast("未配置快手 Cookie")
-            return
-        }
-        scope.launch {
-            try {
-                onToast("同步快手账号")
-                request.syncKuaishouAccount(
-                    client,
-                    account.cookie,
-                    account.kww,
-                    account.cookieExpiresAtMs.value,
-                )
-                onToast("已同步快手账号")
-            } catch (e: Exception) {
-                onToast("同步失败：${e.message}")
-                Log.logPrint(e)
-            }
-        }
-    }
 }
