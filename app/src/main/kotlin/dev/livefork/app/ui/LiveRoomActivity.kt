@@ -111,7 +111,8 @@ class LiveRoomActivity : AppCompatActivity() {
         onSingleTap = { controlsOverlay.toggle() },
         onDoubleTap = {
             if (ServiceContainer.appSettings.playerGestureControlEnable.value) {
-                togglePlayPause()
+                // 双击切换全屏/退出全屏（对齐原项目；暂停/播放交由全屏控制层按钮）
+                toggleFullScreen()
             }
         },
         onScroll = { startX, distanceY ->
@@ -435,6 +436,7 @@ class LiveRoomActivity : AppCompatActivity() {
         controlsOverlay.onRefreshClick = { controller.refreshRoom() }
         controlsOverlay.onPlayPauseClick = { togglePlayPause() }
         controlsOverlay.onDanmakuClick = { toggleDanmaku() }
+        controlsOverlay.onDanmakuSettingsClick = { LiveRoomSheets.showDanmuSettingsSheet(this) }
         controlsOverlay.onQualityClick = { LiveRoomSheets.showQualitySheet(this, controller) }
         controlsOverlay.onLineClick = { LiveRoomSheets.showPlayUrlsSheet(this, controller) }
         controlsOverlay.onFullScreenClick = { toggleFullScreen() }

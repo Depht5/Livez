@@ -50,6 +50,8 @@ class PlayerControlsOverlay @JvmOverloads constructor(
     var onRefreshClick: () -> Unit = {}
     var onPlayPauseClick: () -> Unit = {}
     var onDanmakuClick: () -> Unit = {}
+    /** 弹幕设置（对齐 Dart 弹幕开关旁的设置图标按钮）。 */
+    var onDanmakuSettingsClick: () -> Unit = {}
     var onQualityClick: () -> Unit = {}
     var onLineClick: () -> Unit = {}
     var onFullScreenClick: () -> Unit = {}
@@ -64,6 +66,7 @@ class PlayerControlsOverlay @JvmOverloads constructor(
 
     private lateinit var playPauseBtn: TextView
     private lateinit var danmakuBtn: TextView
+    private lateinit var danmakuSettingsBtn: TextView
     private lateinit var qualityBtn: TextView
     private lateinit var lineBtn: TextView
     private lateinit var fullScreenBtn: TextView
@@ -125,6 +128,12 @@ class PlayerControlsOverlay @JvmOverloads constructor(
         danmakuBtn = iconButton("弹")
         danmakuBtn.setOnClickListener { onDanmakuClick() }
         bottomBar.addView(danmakuBtn, LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+        ))
+        // 弹幕设置（对齐 Dart 弹幕设置图标；点击打开弹幕设置弹层）
+        danmakuSettingsBtn = iconButton("设置")
+        danmakuSettingsBtn.setOnClickListener { onDanmakuSettingsClick() }
+        bottomBar.addView(danmakuSettingsBtn, LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT,
         ))
         // 直播时长
@@ -221,17 +230,17 @@ class PlayerControlsOverlay @JvmOverloads constructor(
         danmakuBtn.setTextColor(if (value) Color.parseColor("#FFD857") else Color.WHITE)
     }
 
-    /** 全屏态更新：顶栏显隐 + 全屏按钮文字。 */
+    /** 全屏态更新：顶栏显隐 + 播放/线路按钮显隐（全屏按钮文字保持统一，不做 ⛶/⛶✕ 切换）。 */
     fun updateFullScreen(value: Boolean) {
         fullScreen = value
         topBar.visibility = if (value) View.VISIBLE else View.GONE
-        fullScreenBtn.text = if (value) "⛶✕" else "⛶"
+        refreshButtons()
     }
 
-    /** 直播状态：未开播时隐藏播放/暂停按钮。 */
+    /** 直播状态更新：只记录状态，按钮显隐统一由 refreshButtons 决定。 */
     fun updateLiveStatus(value: Boolean) {
         liveStatus = value
-        playPauseBtn.visibility = if (value) View.VISIBLE else View.GONE
+        refreshButtons()
     }
 
     /** 直播时长（对应 Dart liveDuration）。 */
@@ -266,11 +275,15 @@ class PlayerControlsOverlay @JvmOverloads constructor(
     }
 
     private fun refreshButtons() {
+        // 播放/暂停按钮：仅全屏显示（竖屏按钮过多会挤出屏幕，用户反馈对齐）
         playPauseBtn.text = if (playing) "⏸" else if (liveStatus) "▶" else ""
-        playPauseBtn.visibility = if (liveStatus) View.VISIBLE else View.GONE
+        playPauseBtn.visibility = if (fullScreen && liveStatus) View.VISIBLE else View.GONE
+        // 线路按钮：仅全屏显示（竖屏隐藏）
+        lineBtn.visibility = if (fullScreen) View.VISIBLE else View.GONE
         danmakuBtn.setTextColor(if (danmakuEnabled) Color.parseColor("#FFD857") else Color.WHITE)
         topBar.visibility = if (fullScreen) View.VISIBLE else View.GONE
-        fullScreenBtn.text = if (fullScreen) "⛶✕" else "⛶"
+        // 全屏按钮文字固定 ⛶（竖屏/全屏一致；点击切换逻辑由宿主处理）
+        fullScreenBtn.text = "⛶"
     }
 
     override fun onDetachedFromWindow() {

@@ -31,6 +31,9 @@ import kotlinx.coroutines.withContext
  */
 object LiveRoomSheets {
 
+    /** 字体粗细 1–9 档标签（对齐 Dart danmu_settings_page 的 ["极细".."极粗"]）。 */
+    private val FONT_WEIGHT_LABELS = listOf("极细", "很细", "细", "正常", "小粗", "偏粗", "粗", "很粗", "极粗")
+
     /* ---------- 入口：⋮ 菜单 ---------- */
 
     /** `⋮` 菜单：清晰度/线路/弹幕设置/直播设置/屏蔽/复制/分享/刷新。 */
@@ -107,7 +110,11 @@ object LiveRoomSheets {
 
     /* ---------- 弹幕设置 ---------- */
 
-    /** 弹幕设置：字号/速度/行数/透明度/描边/上下边距/延迟/表情渲染（即时持久化）。 */
+    /**
+     * 弹幕设置：「弹幕显示」8 项（默认开启/显示表情/显示区域/显示几行/不透明度/字号/粗细/速度），
+     * 即时持久化。对齐 Dart `danmu_settings_page.dart` 弹幕显示区块（范围外的延迟/边距/描边
+     * 等本次不做）。
+     */
     fun showDanmuSettingsSheet(activity: android.app.Activity) {
         val settings = ServiceContainer.appSettings
         val dialog = BottomSheetDialog(activity)
@@ -117,13 +124,21 @@ object LiveRoomSheets {
         }
         root.addView(sheetTitle(activity, "弹幕设置"))
 
+        /** Int 数值行（unit 显示后缀；valueLabel 覆盖数值显示）。 */
         fun row(
             label: String,
             current: Int,
             min: Int,
             max: Int,
+            unit: String = "",
+            valueLabel: ((Int) -> String)? = null,
             onChange: (Int) -> Unit,
         ) {
+            val valueText = TextView(activity).apply {
+                text = (valueLabel?.invoke(current) ?: "$current$unit")
+                textSize = 13f
+                setTextColor(Color.parseColor("#888888"))
+            }
             val row = LinearLayout(activity).apply {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER_VERTICAL
@@ -134,11 +149,6 @@ object LiveRoomSheets {
                 setTextColor(Color.parseColor("#333333"))
             }
             row.addView(labelText, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-            val valueText = TextView(activity).apply {
-                text = "$current"
-                textSize = 13f
-                setTextColor(Color.parseColor("#888888"))
-            }
             row.addView(valueText, LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT,
             ).apply { marginStart = dp(8) })
@@ -152,7 +162,7 @@ object LiveRoomSheets {
                     override fun onProgressChanged(seekBar: SeekBar, progress: Int, fromUser: Boolean) {
                         if (fromUser) {
                             val v = min + progress
-                            valueText.text = "$v"
+                            valueText.text = (valueLabel?.invoke(v) ?: "$v$unit")
                             onChange(v)
                         }
                     }
@@ -166,97 +176,53 @@ object LiveRoomSheets {
             ))
         }
 
-        // 字号 8–32（Float，显示为 1 位小数）
-        fun floatRow(
+        /** 百分比数值行（10–100 步进 10，显示 %）。 */
+        fun percentRow(
             label: String,
-            current: Float,
-            min: Float,
-            max: Float,
-            step: Float,
+            currentPercent: Int,
             onChange: (Float) -> Unit,
-        ) {
-            val row = LinearLayout(activity).apply {
-                orientation = LinearLayout.HORIZONTAL
-                gravity = Gravity.CENTER_VERTICAL
-            }
-            val labelText = TextView(activity).apply {
-                text = label
-                textSize = 14f
-                setTextColor(Color.parseColor("#333333"))
-            }
-            row.addView(labelText, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-            val valueText = TextView(activity).apply {
-                text = String.format("%.1f", current)
-                textSize = 13f
-                setTextColor(Color.parseColor("#888888"))
-            }
-            row.addView(valueText, LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT,
-            ).apply { marginStart = dp(8) })
-            root.addView(row, LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT,
-            ).apply { topMargin = dp(10) })
-            val steps = ((max - min) / step).toInt()
-            val bar = SeekBar(activity).apply {
-                this.max = steps
-                progress = ((current - min) / step).toInt().coerceIn(0, steps)
-                setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
-                    override fun onProgressChanged(seekBar: SeekBar, progress: Int, fromUser: Boolean) {
-                        if (fromUser) {
-                            val v = min + progress * step
-                            valueText.text = String.format("%.1f", v)
-                            onChange(v)
-                        }
-                    }
+        ) = row(label, currentPercent, 10, 100, unit = "%") { v -> onChange(v / 100f) }
 
-                    override fun onStartTrackingTouch(seekBar: SeekBar) {}
-                    override fun onStopTrackingTouch(seekBar: SeekBar) {}
-                })
-            }
-            root.addView(bar, LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT,
-            ))
+        // 默认开启
+        root.addView(switchRow(activity, "默认开启", settings.danmuEnable.value) {
+            settings.setDanmuEnable(it)
+        })
+        // 显示弹幕表情
+        root.addView(switchRow(activity, "显示弹幕表情", settings.danmuRenderEmoji.value) {
+            settings.setDanmuRenderEmoji(it)
+        })
+        // 显示区域（%）
+        percentRow("显示区域", (settings.danmuArea.value * 100).toInt()) {
+            settings.setDanmuArea(it)
         }
-
-        floatRow("字号", settings.danmuSize.value, 8f, 32f, 1f) { settings.setDanmuSize(it) }
-        floatRow("速度", settings.danmuSpeed.value, 1f, 20f, 1f) { settings.setDanmuSpeed(it) }
-        row("行数", settings.danmuLineCount.value, 1, 12) { settings.setDanmuLineCount(it) }
-        floatRow("透明度", settings.danmuOpacity.value, 0.2f, 1f, 0.05f) { settings.setDanmuOpacity(it) }
-        floatRow("描边", settings.danmuStrokeWidth.value, 0f, 6f, 0.5f) { settings.setDanmuStrokeWidth(it) }
-        floatRow("上边距", settings.danmuTopMargin.value, 0f, 200f, 5f) { settings.setDanmuTopMargin(it) }
-        floatRow("下边距", settings.danmuBottomMargin.value, 0f, 200f, 5f) { settings.setDanmuBottomMargin(it) }
-        row("延迟(ms)", settings.danmuDelayMs.value.coerceIn(0, 5000), 0, 5000) {
-            settings.setDanmuDelayMs(it, controllerSiteIdForDelay())
+        // 显示几行（0=不显示，对齐 Dart lineCount=0 语义）
+        row("显示几行", settings.danmuLineCount.value, 0, 12) {
+            settings.setDanmuLineCount(it)
         }
-
-        // 表情渲染开关
-        val emojiRow = LinearLayout(activity).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
+        // 不透明度（%）
+        percentRow("不透明度", (settings.danmuOpacity.value * 100).toInt()) {
+            settings.setDanmuOpacity(it)
         }
-        val emojiLabel = TextView(activity).apply {
-            text = "渲染表情"
-            textSize = 14f
-            setTextColor(Color.parseColor("#333333"))
+        // 字体大小
+        row("字体大小", settings.danmuSize.value.toInt(), 8, 72) {
+            settings.setDanmuSize(it.toFloat())
         }
-        emojiRow.addView(emojiLabel, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-        val emojiSwitch = android.widget.Switch(activity).apply {
-            isChecked = settings.danmuRenderEmoji.value
-            setOnCheckedChangeListener { _, checked -> settings.setDanmuRenderEmoji(checked) }
+        // 字体粗细（1–9，极细..极粗）
+        row(
+            "字体粗细",
+            settings.danmuFontWeight.value,
+            1,
+            9,
+            valueLabel = { v -> FONT_WEIGHT_LABELS.getOrElse(v - 1) { "$v" } },
+        ) { settings.setDanmuFontWeight(it) }
+        // 滚动速度（秒数，越小越快；对齐 Dart danmuSpeed 语义）
+        row("滚动速度", settings.danmuSpeed.value.toInt(), 4, 20, unit = "秒") {
+            settings.setDanmuSpeed(it.toFloat())
         }
-        emojiRow.addView(emojiSwitch, LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT,
-        ))
-        root.addView(emojiRow, LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT,
-        ).apply { topMargin = dp(14) })
 
         dialog.setContentView(root)
         dialog.show()
     }
-
-    /** 延迟按当前站点设置需要 siteId；此处返回空（全局设置），站点级延迟由设置页处理。 */
-    private fun controllerSiteIdForDelay(): String? = null
 
     /* ---------- 直播设置 ---------- */
 
