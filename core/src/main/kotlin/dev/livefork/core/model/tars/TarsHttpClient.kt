@@ -130,7 +130,11 @@ class TarsHttpClient(
         val ins = TarsInputStream(data, 4) // 跳过 4 字节大端长度
         val packet = TupRequestPacket()
         packet.readFrom(ins)
-        val newData = ins.readByteArrayMap(0, false)
+
+        // newData 是 RequestPacket.sBuffer 内的 tag0 map（对应 Dart decode 内层
+        // TarsInputStream(package.sBuffer).readMap(..., 0, false)）；不能在外层流上继续读。
+        val newDataIns = TarsInputStream(packet.sBuffer)
+        val newData = newDataIns.readByteArrayMap(0, false)
 
         // code = newData[""] 以 int 解析（对应 respPack.get("", 0)）
         val code: Long = try {
