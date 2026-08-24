@@ -151,24 +151,33 @@ class DanmakuOverlayView @JvmOverloads constructor(
             strokeWidthPx = appSettings.danmuStrokeWidth.value * resources.displayMetrics.density,
             strokeColor = Color.BLACK,
             font = font,
-            x = width.toFloat(),
+            x = 0f,
             speed = speedPxPerSec(appSettings.danmuSpeed.value),
         )
         item.measuredWidth = width
 
-        // 空闲轨道选择：取最右（x 最大）的轨道以减少遮挡
-        var target = 0
-        var maxX = -1f
+        // 轨道选择：优先找空轨道；全满则取 x 最小（最接近出界）的轨道复用
+        var target = -1
         for (i in tracks.indices) {
-            val t = tracks[i]
-            val x = t?.x ?: Float.MAX_VALUE
-            if (x > maxX) {
-                maxX = x
+            if (tracks[i] == null) {
                 target = i
+                break
             }
         }
-        // 起始位置在视口右侧外部（不挤占已存在弹幕）
-        item.x = width
+        if (target == -1) {
+            var minX = Float.MAX_VALUE
+            for (i in tracks.indices) {
+                val t = tracks[i] ?: continue
+                if (t.x < minX) {
+                    minX = t.x
+                    target = i
+                }
+            }
+        }
+        if (target == -1) return
+        // 起始位置：视口右侧外部（从屏幕右边缘外滑入，不挤占已有弹幕）；
+        // 注意用视口宽度 this.width，而非弹幕文本宽度，否则会在左半屏"突然出现"
+        item.x = this.width.toFloat()
 
         tracks[target] = item
         ensureAnimator()
