@@ -1163,16 +1163,29 @@ class LiveRoomController(
         autoExitTickerJob?.cancel()
     }
 
-    /* ---------- 直播时长（对应 Dart startLiveDurationTimer） ---------- */
+    /* ---------- 直播时长（对应 Dart startLiveDurationTimer：主播已开播时长） ---------- */
 
     private fun startLiveDurationTimer() {
+        // 先取消旧计时器（切换房间/状态变化时避免旧 job 继续推进）
         liveDurationJob?.cancel()
-        val start = System.currentTimeMillis()
+        val detailObj = _detail.value
+        val showTime = detailObj?.showTime
+        if (!_liveStatus.value || showTime == null) {
+            // 未开播或没有 showTime 时显示 00:00:00（对齐 Dart）
+            _liveDuration.value = "00:00:00"
+            return
+        }
+        val startTimeStamp = showTime.toLongOrNull()
+        if (startTimeStamp == null) {
+            // 解析失败显示占位值（对齐 Dart catch 分支）
+            _liveDuration.value = "--:--:--"
+            return
+        }
         liveDurationJob = scope.launch {
             while (!_roomDisposed) {
                 delay(1000)
-                val elapsed = System.currentTimeMillis() - start
-                val seconds = elapsed / 1000
+                val currentSeconds = System.currentTimeMillis() / 1000
+                var seconds = (currentSeconds - startTimeStamp).coerceAtLeast(0L)
                 val h = seconds / 3600
                 val m = (seconds % 3600) / 60
                 val s = seconds % 60
