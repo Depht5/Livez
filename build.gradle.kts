@@ -6,4 +6,6 @@ plugins {
     id("org.jetbrains.kotlin.android") version "2.0.21" apply false
     id("org.jetbrains.kotlin.jvm") version "2.0.21" apply false
     id("org.jetbrains.kotlin.plugin.serialization") version "2.0.21" apply false
+    // Kotlin 官方 Compose 编译器插件：与 Kotlin 同版本（2.0.21），供 app 模块应用。
+    id("org.jetbrains.kotlin.plugin.compose") version "2.0.21" apply false
 }

@@ -4,6 +4,8 @@ plugins {
     id("org.jetbrains.kotlin.android")
     id("org.jetbrains.kotlin.plugin.serialization")
     id("org.jetbrains.kotlin.kapt")
+    // Kotlin 官方 Compose 编译器插件（版本由根构建脚本声明，与 Kotlin 2.0.21 同版本）
+    id("org.jetbrains.kotlin.plugin.compose")
 }
 
 android {
@@ -12,6 +14,8 @@ android {
 
     buildFeatures {
         buildConfig = true
+        // 启用 Jetpack Compose（配合 kotlin.plugin.compose 编译器插件）
+        compose = true
     }
 
     defaultConfig {
@@ -80,6 +84,24 @@ dependencies {
 
     // 图片加载：Coil（对应 Dart extended_image / NetImage）
     implementation("io.coil-kt:coil:2.7.0")
+
+    // ===== Jetpack Compose（UI 迁移目标栈，对应 Dart Flutter widget 体系）=====
+    // BOM 统一管理 Compose 各库版本
+    implementation(platform("androidx.compose:compose-bom:2024.09.03"))
+    // Material3 组件库（对应 Dart MaterialApp/Material 组件）
+    implementation("androidx.compose.material3:material3")
+    // foundation 基础能力（LazyVerticalGrid / 手势等，对应 Dart GridView/Listener）
+    implementation("androidx.compose.foundation:foundation")
+    // Compose UI 核心（对应 Dart widget 渲染层）
+    implementation("androidx.compose.ui:ui")
+    // Activity 的 Compose 宿主入口 setContent（替代原 Activity + View 树）
+    implementation("androidx.activity:activity-compose:1.9.2")
+    // 单 Activity 导航（对应 Dart GetX 路由）
+    implementation("androidx.navigation:navigation-compose:2.8.1")
+    // Coil 的 Compose 封装 AsyncImage（对应 Dart NetImage/extended_image）
+    implementation("io.coil-kt:coil-compose:2.7.0")
+    // collectAsStateWithLifecycle：StateFlow 生命周期安全订阅（对应 Dart Rx Obx）
+    implementation("androidx.lifecycle:lifecycle-runtime-compose:2.8.6")
 
     // 下拉刷新（对应 Dart RefreshIndicator）
     implementation("androidx.swiperefreshlayout:swiperefreshlayout:1.1.0")
