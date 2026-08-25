@@ -1,5 +1,6 @@
 package dev.livefork.app.ui.nav
 
+import android.net.Uri
 import android.view.View
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -8,6 +9,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.lazy.grid.LazyGridState
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -25,13 +27,18 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.navigation.NavHostController
+import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
+import androidx.navigation.navArgument
 import dev.livefork.app.app.EventBus
+import dev.livefork.app.app.Sites
+import dev.livefork.app.modules.category.CategoryController
 import dev.livefork.app.modules.home.HomeController
-import dev.livefork.app.ui.CategoryView
 import dev.livefork.app.ui.MineView
 import dev.livefork.app.ui.Router
+import dev.livefork.app.ui.screens.CategoryDetailScreen
+import dev.livefork.app.ui.screens.CategoryScreen
 import dev.livefork.app.ui.screens.HomeScreen
 import dev.livefork.app.ui.theme.TextPrimary
 import dev.livefork.app.ui.theme.TextSecondary
@@ -39,22 +46,55 @@ import dev.livefork.app.ui.theme.TextSecondary
 /**
  * 应用导航宿主 —— 对应 Dart `lib/routes/pages.dart` 的路由表。
  * 单 Activity 架构：所有页面为 NavHost 内的 composable 路由；
- * 本批（Batch 1）仅注册 main 路由，其余路由按批次逐步迁入：
- * category/{siteId} / settings / history / search / account / follow /
+ * 已注册 main 与 category/{siteId}（分类详情），其余路由按批次逐步迁入：
+ * settings / history / search / account / follow /
  * weblogin/{siteId} / qrlogin / livertoom/{siteId}/{roomId}。
  */
 @Composable
 fun AppNavHost(navController: NavHostController, modifier: Modifier = Modifier) {
+    // 壳层状态提升到 NavHost 层：路由切换只销毁目的地内容，本组合始终存活——
+    // 进入分类详情等路由再返回时，三 Tab 的控制器数据与滚动状态原样保留
+    //（对齐原版 Activity 栈行为：MainActivity 常驻栈底不重建）。
+    val shell = remember { ShellState() }
+    DisposableEffect(Unit) {
+        onDispose { shell.dispose() }
+    }
+
     NavHost(
         navController = navController,
         startDestination = "main",
         modifier = modifier,
     ) {
         // 三 Tab 壳（首页/分类/我的为内部状态切换，非独立路由）
-        composable("main") { MainShell() }
+        composable("main") { MainShell(shell) }
+
+        // 分类详情：siteId 走 path 参数；categoryId/categoryName 为可选 query 参数
+        //（导航时经 Uri.encode 编码，NavController 解析后自动解码）
+        composable(
+            route = "category/{siteId}?categoryId={categoryId}&categoryName={categoryName}",
+            arguments = listOf(
+                navArgument("siteId") { type = NavType.StringType },
+                navArgument("categoryId") {
+                    type = NavType.StringType
+                    nullable = true
+                    defaultValue = null
+                },
+                navArgument("categoryName") {
+                    type = NavType.StringType
+                    nullable = true
+                    defaultValue = null
+                },
+            ),
+        ) { entry ->
+            CategoryDetailScreen(
+                siteId = entry.arguments?.getString("siteId").orEmpty(),
+                categoryId = entry.arguments?.getString("categoryId").orEmpty(),
+                categoryName = entry.arguments?.getString("categoryName").orEmpty(),
+                onBack = { navController.popBackStack() },
+            )
+        }
 
         // ===== 后续批次扩展的路由清单 =====
-        // composable("category/{siteId}") { ... }   // 分类详情（Batch 3）
         // composable("settings") { ... }             // 设置（Batch 4）
         // composable("history") { ... }              // 历史（Batch 4）
         // composable("search") { ... }               // 搜索（Batch 5）
@@ -66,57 +106,75 @@ fun AppNavHost(navController: NavHostController, modifier: Modifier = Modifier) 
     }
 }
 
-/** 三 Tab 页面实例缓存：对齐现版 MainActivity 的 categoryView/mineView 字段复用语义
- * （首页已迁移为 Compose HomeScreen，其控制器由壳层直接持有，不再走本缓存）。 */
-private class ShellTabs {
-    var category: CategoryView? = null
-    var mine: MineView? = null
+/**
+ * 三 Tab 壳层状态持有者 —— 对齐现版 MainActivity 的字段生命周期：
+ * homeView/categoryView 字段（控制器）与 mineView 实例缓存随壳层存活，
+ * 跨底栏 Tab 切换与路由导航（如进分类详情再返回）均不重建、不丢数据。
+ * 进程重建后整体重建并重新首屏加载（与原版「Activity 重建即全量重建」一致）。
+ */
+private class ShellState {
+    /** 我的 Tab 过渡期传统 View 实例缓存（首次切到才创建，之后复用）。 */
+    var mineView: MineView? = null
+
+    /** 首页/分类控制器（等价现版 homeView/categoryView 字段复用语义）。 */
+    val homeController = HomeController()
+    val categoryController = CategoryController()
+
+    /** 分类页各站点网格滚动状态（键 = 站点 id）：随壳层存活，跨 Tab 切换/路由导航不丢位置。 */
+    val categoryGridStates: Map<String, LazyGridState> =
+        Sites.supportSites.associate { it.id to LazyGridState() }
+
+    /** 首页各站点网格滚动状态（键 = 站点 id）：语义同上，与分类页保持同一壳层持有范式。 */
+    val homeGridStates: Map<String, LazyGridState> =
+        Sites.supportSites.associate { it.id to LazyGridState() }
+
+    /** 离开组合（Activity 销毁）时释放各页面控制器资源（对齐原 MainActivity.onDestroy 语义）。 */
+    fun dispose() {
+        homeController.dispose()
+        categoryController.dispose()
+        mineView?.onDestroy()
+    }
 }
 
 /**
  * 主界面三 Tab 壳 —— 对应 Flutter `home_page.dart` 的底部导航结构。
- * 内容区 + 底栏；首页已迁移为 Compose HomeScreen，分类/我的过渡期仍为传统 View
- * （AndroidView 互操作包裹），后续批次逐个替换为 Compose Screen。
+ * 内容区 + 底栏；首页/分类已迁移为 Compose Screen，我的过渡期仍为传统 View
+ * （AndroidView 互操作包裹），后续批次替换为 Compose Screen。
+ *
+ * @param shell 壳层状态（由 AppNavHost 持有，跨路由导航存活）
  */
 @Composable
-private fun MainShell() {
+private fun MainShell(shell: ShellState) {
     val context = LocalContext.current
 
-    // 当前选中 Tab（rememberSaveable：进程重建后恢复选中态）
-    // 取舍说明：tabs 实例缓存是普通 remember，不跨进程存活——进程重建后
-    // currentIndex 恢复但缓存为空，对应 Tab 首次组合时重新创建 View 并触发首屏加载；
-    // 与原版「Activity 重建即全量重建」行为一致，无需额外处理。
+    // 当前选中 Tab（rememberSaveable：进程重建后恢复选中态；路由往返经
+    // NavHost 的 SaveableStateHolder 同样恢复）
     var currentIndex by rememberSaveable { mutableIntStateOf(0) }
-
-    // 页面实例缓存：首次切到对应 Tab 才创建（各 View 构造即触发首屏加载，
-    // 保持原版「进入哪个 Tab 加载哪个」的行为），之后切换仅重新挂载不重建。
-    val tabs = remember { ShellTabs() }
-
-    // 首页控制器由壳层持有（等价现版 homeView 字段复用语义）：跨底栏 Tab 切换存活，
-    // 各站点列表数据与分页状态不丢失
-    val homeController = remember { HomeController() }
-
-    // 离开组合时释放各页面控制器资源（对齐原 MainActivity.onDestroy 语义）
-    DisposableEffect(Unit) {
-        onDispose {
-            homeController.dispose()
-            tabs.category?.onDestroy()
-            tabs.mine?.onDestroy()
-        }
-    }
 
     Column(modifier = Modifier.fillMaxSize()) {
         Box(modifier = Modifier.weight(1f)) {
             when (currentIndex) {
                 0 -> HomeScreen(
-                    controller = homeController,
+                    controller = shell.homeController,
+                    gridStates = shell.homeGridStates,
                     onOpenLiveRoom = { site, roomId ->
                         // 直播间仍为旧 Activity（Batch 7 才迁路由），入口保持 Router.openLiveRoom
                         Router.openLiveRoom(site, roomId)
                     },
                 )
-                1 -> InteropTab(tabs.category, { tabs.category = it }) { CategoryView(context) }
-                else -> InteropTab(tabs.mine, { tabs.mine = it }) { MineView(context) }
+                1 -> CategoryScreen(
+                    controller = shell.categoryController,
+                    gridStates = shell.categoryGridStates,
+                    onOpenCategory = { site, sub ->
+                        // 分类详情已迁路由（本批）：path/query 字符串传参，
+                        // 特殊字符经 URL 编码（NavController 解析后自动解码）
+                        val route = "category/${Uri.encode(site.id)}" +
+                            "?categoryId=${Uri.encode(sub.id)}" +
+                            "&categoryName=${Uri.encode(sub.name)}"
+                        Router.navigate(route)
+                    },
+                )
+                else -> InteropTab(shell.mineView, { shell.mineView = it }) { MineView(context) }
             }
         }
         MainBottomBar(currentIndex) { index ->
@@ -125,7 +183,7 @@ private fun MainShell() {
                 // 且发射值为「页面标识」而非底栏槽位——Dart 发射 items[i].index
                 // （Constant.allHomePages：首页 0 / 关注 1 / 分类 2 / 我的 3），
                 // 订阅方按页面标识过滤：HomeController/首页 Screen 收 index==0、
-                // CategoryController 收 index==2、FollowUserController 收 index==1。
+                // CategoryScreen 收 index==2、FollowUserController 收 index==1。
                 // 本 fork 底栏为 首页(槽0)/分类(槽1)/我的(槽2)，需做槽位→页面标识映射；
                 // 若直接发射槽位，重按「分类」发 1 会静默失效、重按「我的」发 2 会误触发分类刷新。
                 val pageIndex = when (index) {

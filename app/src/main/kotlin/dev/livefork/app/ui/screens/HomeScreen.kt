@@ -75,13 +75,15 @@ private const val LOAD_MORE_THRESHOLD_ITEMS = 6
  *
  * 底栏「重复点击首页 Tab」事件在本页监听：回顶或刷新（见下方 DisposableEffect 注释）。
  *
- * @param controller 首页控制器（由 MainShell 壳层 remember 持有）
+ * @param controller 首页控制器（由壳层 ShellState 持有）
+ * @param gridStates 各站点网格滚动状态（键 = 站点 id，由壳层持有——路由往返不丢位置）
  * @param onOpenLiveRoom 点击卡片回调（进直播间；直播间仍为旧 Activity，Batch 7 才迁移路由）
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun HomeScreen(
     controller: HomeController,
+    gridStates: Map<String, LazyGridState>,
     onOpenLiveRoom: (site: Site, roomId: String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -92,9 +94,6 @@ fun HomeScreen(
     var selectedSiteIndex by rememberSaveable { mutableIntStateOf(0) }
     // 越界保护：设置里站点排序变化导致索引失效时回落到第一个站点
     val siteIndex = selectedSiteIndex.coerceIn(0, sites.lastIndex.coerceAtLeast(0))
-
-    // 每个站点一个滚动状态：随壳层持有的 controller 存活，跨底栏 Tab 切换不丢滚动位置
-    val gridStates = remember(controller) { sites.map { LazyGridState() } }
 
     // ===== 底栏重复点击事件（对齐 Dart indexed_controller.setIndex 的发射语义）=====
     // Dart 行为（lib/modules/indexed/indexed_controller.dart setIndex + lib/modules/home/
@@ -108,7 +107,7 @@ fun HomeScreen(
                 // 委托属性读取当前值（不能用每次重组重算的局部变量）
                 val current = selectedSiteIndex.coerceIn(0, sites.lastIndex.coerceAtLeast(0))
                 val listController = controller.homeListControllers[sites[current].id]
-                val gridState = gridStates.getOrNull(current)
+                val gridState = gridStates[sites[current].id]
                 if (listController != null && gridState != null) {
                     val scrolled =
                         gridState.firstVisibleItemIndex > 0 || gridState.firstVisibleItemScrollOffset > 0
@@ -132,7 +131,7 @@ fun HomeScreen(
         )
 
         val currentListController = controller.homeListControllers[sites[siteIndex].id]
-        val currentGridState = gridStates.getOrNull(siteIndex)
+        val currentGridState = gridStates[sites[siteIndex].id]
         if (currentListController != null && currentGridState != null) {
             SiteRoomGrid(
                 listController = currentListController,
