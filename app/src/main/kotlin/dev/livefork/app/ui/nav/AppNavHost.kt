@@ -33,21 +33,26 @@ import dev.livefork.app.app.Sites
 import dev.livefork.app.modules.category.CategoryController
 import dev.livefork.app.modules.home.HomeController
 import dev.livefork.app.ui.Router
+import dev.livefork.app.ui.screens.AccountScreen
 import dev.livefork.app.ui.screens.CategoryDetailScreen
 import dev.livefork.app.ui.screens.CategoryScreen
 import dev.livefork.app.ui.screens.HomeScreen
 import dev.livefork.app.ui.screens.HistoryScreen
 import dev.livefork.app.ui.screens.MineScreen
+import dev.livefork.app.ui.screens.QRLoginScreen
+import dev.livefork.app.ui.screens.SearchScreen
 import dev.livefork.app.ui.screens.SettingsScreen
+import dev.livefork.app.ui.screens.WebLoginScreen
 import dev.livefork.app.ui.theme.TextPrimary
 import dev.livefork.app.ui.theme.TextSecondary
 
 /**
  * 应用导航宿主 —— 对应 Dart `lib/routes/pages.dart` 的路由表。
  * 单 Activity 架构：所有页面为 NavHost 内的 composable 路由；
- * 已注册 main、category/{siteId}（分类详情）、settings（设置）、history（观看历史），
+ * 已注册 main、category/{siteId}（分类详情）、settings（设置）、history（观看历史）、
+ * search（搜索）、account（账号管理）、weblogin/{siteId}（网页登录）、qrlogin（B 站扫码），
  * 其余路由按批次逐步迁入：
- * search / account / follow / weblogin/{siteId} / qrlogin / livertoom/{siteId}/{roomId}。
+ * follow / livertoom/{siteId}/{roomId}。
  */
 @Composable
 fun AppNavHost(navController: NavHostController, modifier: Modifier = Modifier) {
@@ -99,12 +104,33 @@ fun AppNavHost(navController: NavHostController, modifier: Modifier = Modifier) 
         // 观看历史（Batch 4）：控制器在 Screen 内 remember 创建、出栈销毁
         composable("history") { HistoryScreen() }
 
+        // 搜索（Batch 5）：控制器在 Screen 内 remember 创建、出栈销毁
+        composable("search") { SearchScreen() }
+
+        // 账号管理（Batch 5）：对话框/登录入口在 Screen 内，无路由参数
+        composable("account") { AccountScreen() }
+
+        // 网页登录（Batch 5）：siteId 走 path 参数（导航时经 Uri.encode 编码，
+        // NavController 解析后自动解码），按值选择 B 站/抖音登录控制器
+        composable(
+            route = "weblogin/{siteId}",
+            arguments = listOf(
+                navArgument("siteId") { type = NavType.StringType },
+            ),
+        ) { entry ->
+            WebLoginScreen(
+                siteId = entry.arguments?.getString("siteId").orEmpty(),
+                onBack = { navController.popBackStack() },
+            )
+        }
+
+        // B 站扫码登录（Batch 5）：generate + 3s 轮询在控制器内，无路由参数
+        composable("qrlogin") {
+            QRLoginScreen(onBack = { navController.popBackStack() })
+        }
+
         // ===== 后续批次扩展的路由清单 =====
-        // composable("search") { ... }               // 搜索（Batch 5）
-        // composable("account") { ... }              // 账号管理（Batch 5）
         // composable("follow") { ... }               // 关注（Batch 6）
-        // composable("weblogin/{siteId}") { ... }    // WebView 登录（Batch 5）
-        // composable("qrlogin") { ... }              // B 站扫码登录（Batch 5）
         // composable("livertoom/{siteId}/{roomId}") { ... } // 直播间（Batch 7）
     }
 }

@@ -1,6 +1,7 @@
 package dev.livefork.app.ui
 
 import android.content.Context
+import android.content.res.Resources
 import android.widget.Toast
 import androidx.navigation.NavController
 import dev.livefork.app.app.Log
@@ -71,16 +72,24 @@ object Router {
         toast("扫码登录功能将在后续版本接入")
     }
 
-    /** 打开功能页（设置/历史已迁路由；未迁移的 key 保持 startActivity 兜底或占位提示）。 */
+    /** 打开功能页（已迁 key 走 Compose 路由；follow 未迁移保持 startActivity 兜底）。 */
     fun openFeature(key: String, title: String) {
         Log.d("路由：打开功能页 key=$key")
         when (key) {
             "settings" -> navigate("settings")
             "history" -> navigate("history")
-            "account" -> AccountActivity.start(appContext!!)
-            "search" -> SearchActivity.start(appContext!!)
+            "account" -> navigate("account")
+            "search" -> navigate("search")
             "follow" -> FollowUserActivity.start(appContext!!)
             else -> toast("$title 页面将在后续版本接入")
         }
     }
 }
+
+/**
+ * View 像素换算（dp → px，取整）。
+ * 原声明在被删除的 ui/SettingRows.kt（View 版）中；关注页 FollowUserActivity
+ * （Batch 6 迁移）仍在使用，暂寄存于此文件，Batch 6 随其删除。
+ */
+internal fun dpR(value: Int): Int =
+    (value * Resources.getSystem().displayMetrics.density).toInt()
