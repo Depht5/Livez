@@ -71,12 +71,12 @@ object Router {
         toast("扫码登录功能将在后续版本接入")
     }
 
-    /** 打开功能页（设置/历史/账号等；未接入的 key 保持占位提示）。 */
+    /** 打开功能页（设置/历史已迁路由；未迁移的 key 保持 startActivity 兜底或占位提示）。 */
     fun openFeature(key: String, title: String) {
         Log.d("路由：打开功能页 key=$key")
         when (key) {
-            "settings" -> SettingsActivity.start(appContext!!)
-            "history" -> HistoryActivity.start(appContext!!)
+            "settings" -> navigate("settings")
+            "history" -> navigate("history")
             "account" -> AccountActivity.start(appContext!!)
             "search" -> SearchActivity.start(appContext!!)
             "follow" -> FollowUserActivity.start(appContext!!)

@@ -37,8 +37,6 @@
             android:configChanges="orientation|screenSize|keyboardHidden|screenLayout"
             android:screenOrientation="portrait" />
 
-        <activity android:name=".ui.SettingsActivity" android:exported="false" />
-        <activity android:name=".ui.HistoryActivity" android:exported="false" />
         <activity android:name=".ui.SearchActivity" android:exported="false" />
         <activity android:name=".ui.AccountActivity" android:exported="false" />
         <activity android:name=".ui.WebLoginActivity" android:exported="false" />

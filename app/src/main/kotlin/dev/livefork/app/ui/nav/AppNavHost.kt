@@ -1,7 +1,6 @@
 package dev.livefork.app.ui.nav
 
 import android.net.Uri
-import android.view.View
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Box
@@ -22,10 +21,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.viewinterop.AndroidView
 import androidx.navigation.NavHostController
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
@@ -35,20 +32,22 @@ import dev.livefork.app.app.EventBus
 import dev.livefork.app.app.Sites
 import dev.livefork.app.modules.category.CategoryController
 import dev.livefork.app.modules.home.HomeController
-import dev.livefork.app.ui.MineView
 import dev.livefork.app.ui.Router
 import dev.livefork.app.ui.screens.CategoryDetailScreen
 import dev.livefork.app.ui.screens.CategoryScreen
 import dev.livefork.app.ui.screens.HomeScreen
+import dev.livefork.app.ui.screens.HistoryScreen
+import dev.livefork.app.ui.screens.MineScreen
+import dev.livefork.app.ui.screens.SettingsScreen
 import dev.livefork.app.ui.theme.TextPrimary
 import dev.livefork.app.ui.theme.TextSecondary
 
 /**
  * 应用导航宿主 —— 对应 Dart `lib/routes/pages.dart` 的路由表。
  * 单 Activity 架构：所有页面为 NavHost 内的 composable 路由；
- * 已注册 main 与 category/{siteId}（分类详情），其余路由按批次逐步迁入：
- * settings / history / search / account / follow /
- * weblogin/{siteId} / qrlogin / livertoom/{siteId}/{roomId}。
+ * 已注册 main、category/{siteId}（分类详情）、settings（设置）、history（观看历史），
+ * 其余路由按批次逐步迁入：
+ * search / account / follow / weblogin/{siteId} / qrlogin / livertoom/{siteId}/{roomId}。
  */
 @Composable
 fun AppNavHost(navController: NavHostController, modifier: Modifier = Modifier) {
@@ -94,9 +93,13 @@ fun AppNavHost(navController: NavHostController, modifier: Modifier = Modifier) 
             )
         }
 
+        // 设置（Batch 4）：条目绑定 AppSettingsController，无路由参数
+        composable("settings") { SettingsScreen() }
+
+        // 观看历史（Batch 4）：控制器在 Screen 内 remember 创建、出栈销毁
+        composable("history") { HistoryScreen() }
+
         // ===== 后续批次扩展的路由清单 =====
-        // composable("settings") { ... }             // 设置（Batch 4）
-        // composable("history") { ... }              // 历史（Batch 4）
         // composable("search") { ... }               // 搜索（Batch 5）
         // composable("account") { ... }              // 账号管理（Batch 5）
         // composable("follow") { ... }               // 关注（Batch 6）
@@ -108,14 +111,11 @@ fun AppNavHost(navController: NavHostController, modifier: Modifier = Modifier) 
 
 /**
  * 三 Tab 壳层状态持有者 —— 对齐现版 MainActivity 的字段生命周期：
- * homeView/categoryView 字段（控制器）与 mineView 实例缓存随壳层存活，
+ * homeView/categoryView 字段（控制器）随壳层存活，
  * 跨底栏 Tab 切换与路由导航（如进分类详情再返回）均不重建、不丢数据。
  * 进程重建后整体重建并重新首屏加载（与原版「Activity 重建即全量重建」一致）。
  */
 private class ShellState {
-    /** 我的 Tab 过渡期传统 View 实例缓存（首次切到才创建，之后复用）。 */
-    var mineView: MineView? = null
-
     /** 首页/分类控制器（等价现版 homeView/categoryView 字段复用语义）。 */
     val homeController = HomeController()
     val categoryController = CategoryController()
@@ -132,21 +132,17 @@ private class ShellState {
     fun dispose() {
         homeController.dispose()
         categoryController.dispose()
-        mineView?.onDestroy()
     }
 }
 
 /**
  * 主界面三 Tab 壳 —— 对应 Flutter `home_page.dart` 的底部导航结构。
- * 内容区 + 底栏；首页/分类已迁移为 Compose Screen，我的过渡期仍为传统 View
- * （AndroidView 互操作包裹），后续批次替换为 Compose Screen。
+ * 内容区 + 底栏；三个 Tab 均已迁移为 Compose Screen。
  *
  * @param shell 壳层状态（由 AppNavHost 持有，跨路由导航存活）
  */
 @Composable
 private fun MainShell(shell: ShellState) {
-    val context = LocalContext.current
-
     // 当前选中 Tab（rememberSaveable：进程重建后恢复选中态；路由往返经
     // NavHost 的 SaveableStateHolder 同样恢复）
     var currentIndex by rememberSaveable { mutableIntStateOf(0) }
@@ -174,7 +170,7 @@ private fun MainShell(shell: ShellState) {
                         Router.navigate(route)
                     },
                 )
-                else -> InteropTab(shell.mineView, { shell.mineView = it }) { MineView(context) }
+                else -> MineScreen()
             }
         }
         MainBottomBar(currentIndex) { index ->
@@ -197,21 +193,6 @@ private fun MainShell(shell: ShellState) {
             }
         }
     }
-}
-
-/**
- * 过渡期互操作容器：把旧 View 包进 AndroidView。
- * factory 在每次重新入组合时都会调用，经 cache/register 复用既有实例，
- * 等价原版 FrameLayout 切换时复用同一 View（不丢滚动位置与加载状态）。
- * 各 Tab 替换为 Compose Screen 后本组件随之删除。
- */
-@Composable
-private fun <T : View> InteropTab(
-    existing: T?,
-    register: (T) -> Unit,
-    create: () -> T,
-) {
-    AndroidView(factory = { existing ?: create().also(register) })
 }
 
 /**
