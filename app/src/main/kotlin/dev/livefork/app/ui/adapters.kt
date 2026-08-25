@@ -1,13 +1,9 @@
 package dev.livefork.app.ui
 
-import android.graphics.Color
 import android.graphics.Rect
-import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
 import android.widget.FrameLayout
-import android.widget.TextView
-import androidx.core.view.setPadding
 import androidx.recyclerview.widget.GridLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import dev.livefork.core.model.LiveRoomItem
@@ -17,33 +13,6 @@ data class MenuItem(
     val title: String,
     val subtitle: String = "",
 )
-
-/** 通用列表适配器：渲染 [MenuItem] 文本条目，点击回调。 */
-class MenuAdapter(
-    private val items: List<MenuItem>,
-    private val onClick: (MenuItem) -> Unit,
-) : RecyclerView.Adapter<MenuAdapter.MenuViewHolder>() {
-
-    class MenuViewHolder(val textView: TextView) : RecyclerView.ViewHolder(textView)
-
-    override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): MenuViewHolder {
-        val text = TextView(parent.context).apply {
-            setPadding(dp(16), dp(14), dp(16), dp(14))
-            textSize = 15f
-            setTextColor(Color.parseColor("#222222"))
-            gravity = Gravity.CENTER_VERTICAL
-        }
-        return MenuViewHolder(text)
-    }
-
-    override fun onBindViewHolder(holder: MenuViewHolder, position: Int) {
-        val item = items[position]
-        holder.textView.text = if (item.subtitle.isEmpty()) item.title else "${item.title}　${item.subtitle}"
-        holder.textView.setOnClickListener { onClick(item) }
-    }
-
-    override fun getItemCount(): Int = items.size
-}
 
 /** 直播间卡片网格适配器：按 [LiveRoomGridLayout] 渲染 [LiveRoomCard]，点击回调。 */
 class LiveRoomAdapter(

@@ -1,35 +1,29 @@
 package dev.livefork.app.modules.home
 
-import dev.livefork.app.app.EventBus
 import dev.livefork.app.app.Site
 import dev.livefork.app.app.Sites
 import dev.livefork.app.app.controller.BaseController
-import kotlinx.coroutines.Job
 
 /**
  * 首页控制器 —— 对应 Dart `HomeController`
  * （lib/modules/home/home_controller.dart）。
- * Tab 控件（Flutter TabController）由页面层持有；此处管理站点子列表控制器。
+ * 站点 Tab 控件由页面层持有；此处仅管理站点子列表控制器。
+ *
+ * 注：kBottomNavigationBarClicked 的监听已移至 UI 层 `ui/screens/HomeScreen.kt` ——
+ * Dart 版监听后调用的 scrollToTopOrRefresh 依赖视图持有的 ScrollController /
+ * EasyRefreshController；Compose 下滚动状态（LazyGridState）同样由页面层持有，
+ * 故「重复点击首页底栏 Tab → 回顶或刷新」整体在 HomeScreen 处理
+ * （发射语义见 AppNavHost.MainShell 底栏：仅重复点击当前 Tab 时发射，对齐 Dart）。
  */
 class HomeController : BaseController() {
     val sites: List<Site> = Sites.supportSites
     val homeListControllers: Map<String, HomeListController> = sites.associate { it.id to HomeListController(it) }
 
-    private var eventSub: Job? = null
-
-    init {
-        eventSub = EventBus.listen<Int>(EventBus.kBottomNavigationBarClicked) { index ->
-            if (index == 0) refreshOrScrollTop(homeListControllers.values.firstOrNull()?.let { 0 } ?: 0)
-        }
-    }
-
-    /** 刷新或回到顶部（对应 Dart refreshOrScrollTop；滚动动画由 UI 层处理）。 */
-    fun refreshOrScrollTop(tabIndex: Int) {
-        val controller = sites.getOrNull(tabIndex)?.let { homeListControllers[it.id] } ?: return
-        controller.refreshData()
-    }
-
+    /**
+     * 释放资源（对应 Dart onClose 的 streamSubscription.cancel 与各子控制器 onClose）：
+     * 取消各站点列表控制器的协程作用域（其中可能存在进行中的网络请求）。
+     */
     fun dispose() {
-        eventSub?.cancel()
+        homeListControllers.values.forEach { it.dispose() }
     }
 }

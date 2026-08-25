@@ -28,9 +28,11 @@ import androidx.navigation.NavHostController
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import dev.livefork.app.app.EventBus
+import dev.livefork.app.modules.home.HomeController
 import dev.livefork.app.ui.CategoryView
-import dev.livefork.app.ui.HomeView
 import dev.livefork.app.ui.MineView
+import dev.livefork.app.ui.Router
+import dev.livefork.app.ui.screens.HomeScreen
 import dev.livefork.app.ui.theme.TextPrimary
 import dev.livefork.app.ui.theme.TextSecondary
 
@@ -64,17 +66,17 @@ fun AppNavHost(navController: NavHostController, modifier: Modifier = Modifier) 
     }
 }
 
-/** 三 Tab 页面实例缓存：对齐现版 MainActivity 的 homeView/categoryView/mineView 字段复用语义。 */
+/** 三 Tab 页面实例缓存：对齐现版 MainActivity 的 categoryView/mineView 字段复用语义
+ * （首页已迁移为 Compose HomeScreen，其控制器由壳层直接持有，不再走本缓存）。 */
 private class ShellTabs {
-    var home: HomeView? = null
     var category: CategoryView? = null
     var mine: MineView? = null
 }
 
 /**
  * 主界面三 Tab 壳 —— 对应 Flutter `home_page.dart` 的底部导航结构。
- * 内容区 + 底栏；三个页面本批仍为传统 View（过渡期 AndroidView 互操作包裹，
- * Batch 2+ 起逐个替换为 Compose Screen）。
+ * 内容区 + 底栏；首页已迁移为 Compose HomeScreen，分类/我的过渡期仍为传统 View
+ * （AndroidView 互操作包裹），后续批次逐个替换为 Compose Screen。
  */
 @Composable
 private fun MainShell() {
@@ -90,10 +92,14 @@ private fun MainShell() {
     // 保持原版「进入哪个 Tab 加载哪个」的行为），之后切换仅重新挂载不重建。
     val tabs = remember { ShellTabs() }
 
-    // 离开组合时释放三个页面的控制器资源（对齐原 MainActivity.onDestroy 语义）
+    // 首页控制器由壳层持有（等价现版 homeView 字段复用语义）：跨底栏 Tab 切换存活，
+    // 各站点列表数据与分页状态不丢失
+    val homeController = remember { HomeController() }
+
+    // 离开组合时释放各页面控制器资源（对齐原 MainActivity.onDestroy 语义）
     DisposableEffect(Unit) {
         onDispose {
-            tabs.home?.onDestroy()
+            homeController.dispose()
             tabs.category?.onDestroy()
             tabs.mine?.onDestroy()
         }
@@ -102,16 +108,34 @@ private fun MainShell() {
     Column(modifier = Modifier.fillMaxSize()) {
         Box(modifier = Modifier.weight(1f)) {
             when (currentIndex) {
-                0 -> InteropTab(tabs.home, { tabs.home = it }) { HomeView(context) }
+                0 -> HomeScreen(
+                    controller = homeController,
+                    onOpenLiveRoom = { site, roomId ->
+                        // 直播间仍为旧 Activity（Batch 7 才迁路由），入口保持 Router.openLiveRoom
+                        Router.openLiveRoom(site, roomId)
+                    },
+                )
                 1 -> InteropTab(tabs.category, { tabs.category = it }) { CategoryView(context) }
                 else -> InteropTab(tabs.mine, { tabs.mine = it }) { MineView(context) }
             }
         }
         MainBottomBar(currentIndex) { index ->
-            if (index != currentIndex) {
+            if (index == currentIndex) {
+                // 对齐 Dart indexed_controller.setIndex：仅重复点击当前 Tab 才发射事件，
+                // 且发射值为「页面标识」而非底栏槽位——Dart 发射 items[i].index
+                // （Constant.allHomePages：首页 0 / 关注 1 / 分类 2 / 我的 3），
+                // 订阅方按页面标识过滤：HomeController/首页 Screen 收 index==0、
+                // CategoryController 收 index==2、FollowUserController 收 index==1。
+                // 本 fork 底栏为 首页(槽0)/分类(槽1)/我的(槽2)，需做槽位→页面标识映射；
+                // 若直接发射槽位，重按「分类」发 1 会静默失效、重按「我的」发 2 会误触发分类刷新。
+                val pageIndex = when (index) {
+                    0 -> 0   // 首页
+                    1 -> 2   // 分类
+                    else -> 3 // 我的
+                }
+                EventBus.emit(EventBus.kBottomNavigationBarClicked, pageIndex)
+            } else {
                 currentIndex = index
-                // 对齐现版 BottomNavigationView 切换事件
-                EventBus.emit(EventBus.kBottomNavigationBarClicked, index)
             }
         }
     }
