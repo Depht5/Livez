@@ -2,17 +2,37 @@ package dev.livefork.app.ui
 
 import android.content.Context
 import android.widget.Toast
+import androidx.navigation.NavController
 import dev.livefork.app.app.Log
 import dev.livefork.app.app.Site
 
 /**
  * 全局路由 —— 对应 Flutter 端 `lib/routes/` 的导航职责。
- * UI 层页面跳转统一经此入口；当前实现为回调注册 + Toast 占位，
- * 直播详情/LiveRoomActivity 等页面落地下一步接入。
+ * UI 层页面跳转统一经此入口；过渡期为双模式：
+ * - 已迁移页面：navController 注入后走 [navigate]（Compose Navigation）；
+ * - 未迁移页面：保留 startActivity 兜底路径，全部迁移完成后删除 legacy。
  */
 object Router {
 
     private var appContext: Context? = null
+
+    /** Compose 导航控制器 —— 由 MainActivity setContent 后注入（见 ui/nav/AppNavHost.kt）。 */
+    internal var navController: NavController? = null
+
+    /**
+     * Compose 路由跳转（双模式）：
+     * - navController 非空：走 Compose Navigation；
+     * - 为空（如非 MainActivity 宿主场景）：legacy 兜底。本批仅 main 路由存在，
+     *   其余路由在后续批次迁移时在此接入对应兜底或直接改走 navigate。
+     */
+    fun navigate(route: String) {
+        val nc = navController
+        if (nc != null) {
+            nc.navigate(route)
+        } else {
+            Log.d("路由：navController 未注入，route=$route 暂无 legacy 兜底")
+        }
+    }
 
     /** 由 MainActivity/Application 在启动时注入。 */
     fun install(context: Context) {
