@@ -39,6 +39,7 @@ import dev.livefork.app.ui.screens.CategoryScreen
 import dev.livefork.app.ui.screens.FollowScreen
 import dev.livefork.app.ui.screens.HomeScreen
 import dev.livefork.app.ui.screens.HistoryScreen
+import dev.livefork.app.ui.screens.LiveRoomScreen
 import dev.livefork.app.ui.screens.MineScreen
 import dev.livefork.app.ui.screens.QRLoginScreen
 import dev.livefork.app.ui.screens.SearchScreen
@@ -52,8 +53,7 @@ import dev.livefork.app.ui.theme.TextSecondary
  * 单 Activity 架构：所有页面为 NavHost 内的 composable 路由；
  * 已注册 main、category/{siteId}（分类详情）、settings（设置）、history（观看历史）、
  * search（搜索）、account（账号管理）、weblogin/{siteId}（网页登录）、qrlogin（B 站扫码）、
- * follow（关注用户），其余路由按批次逐步迁入：
- * livertoom/{siteId}/{roomId}。
+ * follow（关注用户）、livertoom/{siteId}/{roomId}（直播间，Batch 7a）。
  */
 @Composable
 fun AppNavHost(navController: NavHostController, modifier: Modifier = Modifier) {
@@ -134,8 +134,22 @@ fun AppNavHost(navController: NavHostController, modifier: Modifier = Modifier) 
         // 底栏重按关注 Tab 的刷新由 FollowUserController 内部订阅处理，无需路由层介入
         composable("follow") { FollowScreen() }
 
-        // ===== 后续批次扩展的路由清单 =====
-        // composable("livertoom/{siteId}/{roomId}") { ... } // 直播间（Batch 7）
+        // 直播间（Batch 7a）：siteId/roomId 走 path 参数（导航时经 Uri.encode 编码，
+        // NavController 解析后自动解码）；控制器在 Screen 内 remember 创建 + DisposableEffect
+        // 销毁（等价原 LiveRoomActivity onDestroy：controller.dispose() + videoView.destroy()）
+        composable(
+            route = "livertoom/{siteId}/{roomId}",
+            arguments = listOf(
+                navArgument("siteId") { type = NavType.StringType },
+                navArgument("roomId") { type = NavType.StringType },
+            ),
+        ) { entry ->
+            LiveRoomScreen(
+                siteId = entry.arguments?.getString("siteId").orEmpty(),
+                roomId = entry.arguments?.getString("roomId").orEmpty(),
+                onBack = { navController.popBackStack() },
+            )
+        }
     }
 }
 

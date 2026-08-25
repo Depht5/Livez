@@ -1,0 +1,1011 @@
+package dev.livefork.app.ui.screens
+
+import android.app.Activity
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
+import android.content.Intent
+import android.content.pm.ActivityInfo
+import android.media.AudioManager
+import android.view.WindowManager
+import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.material3.Tab
+import androidx.compose.material3.TabRow
+import androidx.compose.material3.TabRowDefaults.tabIndicatorOffset
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.withStyle
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.compose.ui.viewinterop.AndroidView
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import dev.livefork.app.app.Constant
+import dev.livefork.app.app.Sites
+import dev.livefork.app.app.Utils
+import dev.livefork.app.di.ServiceContainer
+import dev.livefork.app.models.FollowUser
+import dev.livefork.app.modules.live_room.LiveRoomController
+import dev.livefork.app.player.MpvInitConfig
+import dev.livefork.app.player.MpvVideoView
+import dev.livefork.app.player.PlayerEngine
+import dev.livefork.app.services.MpvOptionsService
+import dev.livefork.app.ui.DanmakuOverlayView
+import dev.livefork.app.ui.Router
+import dev.livefork.app.ui.components.DanmuSettingsSheet
+import dev.livefork.app.ui.components.DanmuShieldSheet
+import dev.livefork.app.ui.components.LineDialog
+import dev.livefork.app.ui.components.LiveSettingsSheet
+import dev.livefork.app.ui.components.NetImage
+import dev.livefork.app.ui.components.PlayerControlsOverlay
+import dev.livefork.app.ui.components.QualityDialog
+import dev.livefork.app.ui.components.RoomMenuDialog
+import dev.livefork.app.ui.components.RoomSheet
+import dev.livefork.app.ui.theme.CardTitle
+import dev.livefork.app.ui.theme.CategoryBlue
+import dev.livefork.app.ui.theme.LiveRed
+import dev.livefork.app.ui.theme.TextDisabled
+import dev.livefork.app.ui.theme.TextPrimary
+import dev.livefork.app.ui.theme.TextTertiary
+import dev.livefork.core.model.LiveContributionRankItem
+import dev.livefork.core.model.LiveMessage
+import dev.livefork.core.model.LiveMessageType
+import dev.livefork.core.model.LiveSuperChatMessage
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+
+/**
+ * 直播间页面（Compose 版）—— 对应 Flutter `live_room_page.dart`，替换旧 View 体系
+ * `ui/LiveRoomActivity.kt`（Batch 7b 后该 Activity 已删除）。
+ *
+ * 结构镜像：标题栏（返回「←」/标题 16sp medium 单行省略/「⋮」菜单）→
+ * 视频区（AndroidView 包裹 MpvVideoView + DanmakuOverlayView 互操作；未开播黑底提示；
+ * Compose 版 PlayerControlsOverlay 控制层 + pointerInput 手势）→ 信息区 →
+ * 标签栏（聊天/SC(bilibili)/头条(huya)/关注/贡献榜(douyu 为亲密榜)/设置）→ 内容区。
+ *
+ * 全屏切换：isFullScreen 为 UI 层状态（rememberSaveable 持久，等价原 onSaveInstanceState），
+ * 全屏时隐藏竖屏布局区、视频区 fillMaxSize、系统栏隐藏 + SENSOR_LANDSCAPE 方向；
+ * MainActivity 已声明 configChanges 含 orientation|screenSize|screenLayout|keyboardHidden
+ * → 旋转不重建，布局重算由约束驱动（aspectRatio 随宽度变化自动重算 16:9 高度，
+ * 等价原 onConfigurationChanged 手动重算语义，无需显式读取 LocalConfiguration）。
+ *
+ * 弹层（清晰度/线路/弹幕设置/直播设置/屏蔽/⋮菜单）在 ui/components/LiveRoomDialogs.kt。
+ */
+@Composable
+fun LiveRoomScreen(
+    siteId: String,
+    roomId: String,
+    onBack: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val site = Sites.allSites[siteId]
+
+    // 站点不存在：提示后退出（对应原 onCreate 里 toast + finish）
+    LaunchedEffect(siteId) {
+        if (site == null) {
+            Router.toast("站点不存在：$siteId")
+            onBack()
+        }
+    }
+    if (site == null) {
+        // 空白帧等待返回动画（下一帧即 popBackStack）
+        Box(modifier = modifier.fillMaxSize().background(Color.White))
+        return
+    }
+
+    val context = LocalContext.current
+
+    // 控制器路由级生命周期：按 (siteId, roomId) 记住，离开组合销毁（等价原 Activity onDestroy）
+    val controller = remember(siteId, roomId) {
+        LiveRoomController(
+            appSettings = ServiceContainer.appSettings,
+            dbService = ServiceContainer.dbService,
+            followService = ServiceContainer.followService,
+            currentRoom = ServiceContainer.currentRoom,
+            player = PlayerEngine.instance,
+        )
+    }
+    // 互操作 View（白名单）：mpv 渲染内核 + Canvas 浮层弹幕，内部实现不改写。
+    // 随路由参数重建（正常换房走 controller.resetRoom，不经过这里）。
+    val videoView = remember(siteId, roomId) { MpvVideoView(context) }
+    val danmakuOverlay = remember(siteId, roomId) {
+        DanmakuOverlayView(context).apply { this.siteId = siteId }
+    }
+
+    // 屏幕常亮（对齐原 onCreate 的 FLAG_KEEP_SCREEN_ON；宿主为 MainActivity 单例窗口）
+    DisposableEffect(context) {
+        val activity = context as? Activity
+        activity?.window?.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        onDispose {
+            activity?.window?.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        }
+    }
+
+    /* ---------- 全屏态（UI 层状态；等价原 isFullScreen 字段）---------- */
+
+    // rememberSaveable：进程重建恢复语义对照原 onSaveInstanceState(KEY_FULL_SCREEN)——
+    // 恢复为 true 时下面的窗口副作用 LaunchedEffect 自动重新进入全屏
+    var isFullScreen by rememberSaveable { mutableStateOf(false) }
+
+    // 全屏系统栏/方向副作用：进入全屏 → SENSOR_LANDSCAPE + 隐藏 systemBars（滑动临时呼出）；
+    // 退出全屏 → PORTRAIT + 显示 systemBars。等价原 enterFullScreen/exitFull 的窗口操作。
+    LaunchedEffect(isFullScreen) {
+        val activity = context as? Activity ?: return@LaunchedEffect
+        val window = activity.window
+        if (isFullScreen) {
+            // 运行时方向覆盖 Manifest portrait（configChanges 已声明 → 不 recreate）
+            activity.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+            val insetsController = WindowInsetsControllerCompat(window, window.decorView)
+            insetsController.hide(WindowInsetsCompat.Type.systemBars())
+            insetsController.systemBarsBehavior =
+                WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+        } else {
+            activity.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+            WindowInsetsControllerCompat(window, window.decorView)
+                .show(WindowInsetsCompat.Type.systemBars())
+        }
+    }
+    // 离开直播间时若仍处于全屏：恢复竖屏方向与系统栏（避免 MainActivity 宿主窗口残留横屏沉浸）
+    DisposableEffect(context) {
+        onDispose {
+            val activity = context as? Activity
+            if (activity != null) {
+                runCatching {
+                    activity.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+                    WindowInsetsControllerCompat(activity.window, activity.window.decorView)
+                        .show(WindowInsetsCompat.Type.systemBars())
+                }
+            }
+        }
+    }
+    /* ---------- 控制层显隐 + 自动隐藏计时 ---------- */
+
+    // 控制层显隐（等价旧 PlayerControlsOverlay.show()/hide()/toggle()）
+    var controlsVisible by remember { mutableStateOf(false) }
+    // 触摸计数：每次触摸自增以重置 5s 自动隐藏计时（等价旧 postDelayed 移除重挂）
+    var controlsTouchTick by remember { mutableIntStateOf(0) }
+    LaunchedEffect(controlsVisible, controlsTouchTick) {
+        if (controlsVisible) {
+            delay(5000L)
+            controlsVisible = false
+        }
+    }
+
+    /* ---------- 调节提示条（亮度/音量；1.2s 自动消失，job 取消防叠加）---------- */
+
+    val coroutineScope = rememberCoroutineScope()
+    var adjustHint by remember { mutableStateOf<String?>(null) }
+    var adjustHintJob by remember { mutableStateOf<Job?>(null) }
+    fun showAdjustHint(message: String) {
+        // 取消旧提示 job 防叠加（等价旧 mainHandler.removeCallbacks(hideJob)）
+        adjustHintJob?.cancel()
+        adjustHintJob = coroutineScope.launch {
+            adjustHint = message
+            delay(1200L)
+            adjustHint = null
+        }
+    }
+
+    /* ---------- 全屏切换动作 ---------- */
+
+    fun toggleFullScreen() {
+        isFullScreen = !isFullScreen
+        // 进/退全屏后显示控制层并重置自动隐藏（等价旧 enter/exit 里的 controlsOverlay.show()）
+        controlsVisible = true
+        controlsTouchTick++
+    }
+
+    // 全屏时 BACK 先退全屏再出栈（等价原 onBackPressedDispatcher callback）
+    BackHandler(enabled = isFullScreen) {
+        toggleFullScreen()
+    }
+
+    /* ---------- 播放器接线 + 控制器生命周期 ---------- */
+
+    // 放在同一个 DisposableEffect 里保证销毁顺序确定：先停控制器再毁播放器内核。
+    DisposableEffect(controller, videoView) {
+        val videoConfig =
+            MpvOptionsService.videoControllerConfiguration(ServiceContainer.appSettings)
+        runCatching {
+            videoView.initialize(
+                configDir = context.filesDir.absolutePath,
+                cacheDir = context.cacheDir.absolutePath,
+                config = MpvInitConfig(
+                    vo = videoConfig.vo,
+                    hwdec = videoConfig.hwdec,
+                    options = MpvOptionsService.applyToPlayerOptions(ServiceContainer.appSettings),
+                ),
+            )
+        }.onFailure { e ->
+            // 播放器初始化失败不闪退：提示并继续展示弹幕/信息
+            Router.toast("播放器初始化失败：${e.message ?: e.javaClass.simpleName}")
+        }
+        controller.create(site, roomId)
+        onDispose {
+            controller.dispose()
+            videoView.destroy()
+        }
+    }
+
+    /* ---------- 状态订阅（controller 已赋值后，等价原 bindState）---------- */
+
+    val detail by controller.detail.collectAsStateWithLifecycle()
+    val online by controller.online.collectAsStateWithLifecycle()
+    val liveStatus by controller.liveStatus.collectAsStateWithLifecycle()
+    val messages by controller.messages.collectAsStateWithLifecycle()
+    val superChats by controller.superChats.collectAsStateWithLifecycle()
+    val contributionUsers by controller.contributionRankUsers.collectAsStateWithLifecycle()
+    val qualites by controller.qualites.collectAsStateWithLifecycle()
+    val qualityName by controller.currentQualityInfo.collectAsStateWithLifecycle()
+    val lineName by controller.currentLineInfo.collectAsStateWithLifecycle()
+    val liveDuration by controller.liveDuration.collectAsStateWithLifecycle()
+    val danmuEnable by ServiceContainer.appSettings.danmuEnable.collectAsStateWithLifecycle()
+    val followLive by ServiceContainer.followService.liveList.collectAsStateWithLifecycle()
+    val followNotLive by ServiceContainer.followService.notLiveList.collectAsStateWithLifecycle()
+    // 播放状态（▶/⏸ 图标）
+    val playerState by PlayerEngine.instance.state.collectAsStateWithLifecycle()
+
+    // 未开播期间自动隐藏控制层（等价旧 updateLiveStatus(!live) → hide()）
+    LaunchedEffect(liveStatus) {
+        if (!liveStatus) controlsVisible = false
+    }
+
+    // 播放器初始化失败（缺 native so 等）→ 提示，页面保持可用
+    LaunchedEffect(controller) {
+        PlayerEngine.instance.initError.collect { message ->
+            if (message != null) Router.toast(message)
+        }
+    }
+
+    // 自动退出倒计时结束 → 退出直播间（对应 Dart autoExitCompleting 触发返回）
+    LaunchedEffect(controller) {
+        controller.autoExitCompleting.collect { completing ->
+            if (completing) {
+                Router.toast("自动退出直播间")
+                onBack()
+            }
+        }
+    }
+
+    /* ---------- 浮层弹幕开关 ---------- */
+
+    // 浮层弹幕启停（本地开关状态；直播状态/总开关变化时重置，用户可手动切换）
+    var overlayDanmakuOn by remember(controller) { mutableStateOf(true) }
+    // 未开播/下播 或 弹幕总开关关闭 → 重置浮层弹幕启用（对齐原两条 collect 的合成条件）
+    LaunchedEffect(controller, liveStatus, danmuEnable) {
+        overlayDanmakuOn = liveStatus && danmuEnable
+    }
+    LaunchedEffect(controller, overlayDanmakuOn) {
+        danmakuOverlay.danmakuEnabled = overlayDanmakuOn
+    }
+
+    // 浮层弹幕增量收集：记录已入列计数，新消息 = 当前列表尾部新增；
+    // 列表变短视为切房间 → 重置计数并清轨（对齐原 danmakuLastCount 逻辑）
+    var danmakuLastCount by remember(controller) { mutableIntStateOf(0) }
+    LaunchedEffect(controller, messages) {
+        val list = messages
+        if (list.size < danmakuLastCount) {
+            danmakuLastCount = 0
+            danmakuOverlay.clear()
+        }
+        if (list.size > danmakuLastCount) {
+            for (msg in list.subList(danmakuLastCount, list.size)) {
+                danmakuOverlay.enqueue(msg)
+            }
+            danmakuLastCount = list.size
+        }
+    }
+
+    // 进房自动全屏：设置开启时读一次即进入（等价原 videoFrame.post { enterFullScreen() }，
+    // 位于 create 之后执行，无需持续 collect）
+    LaunchedEffect(controller) {
+        if (ServiceContainer.appSettings.autoFullScreen.value && !isFullScreen) {
+            isFullScreen = true
+            controlsVisible = true
+            controlsTouchTick++
+        }
+    }
+
+    /* ---------- 动作函数（控制层按钮回调）---------- */
+
+    fun togglePlayPause() {
+        val engine = PlayerEngine.instance
+        if (engine.state.value.playing) {
+            engine.pause()
+        } else {
+            engine.play()
+        }
+    }
+
+    /** 弹幕开关：切换浮层弹幕启用状态并提示（对应 Dart setDanmakuVisible）。 */
+    fun toggleDanmaku() {
+        overlayDanmakuOn = !overlayDanmakuOn
+        Router.toast(if (overlayDanmakuOn) "弹幕已开启" else "弹幕已关闭")
+    }
+
+    fun copyToClipboard(text: String, toast: String) {
+        val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+        cm.setPrimaryClip(ClipData.newPlainText("livefork", text))
+        Router.toast(toast)
+    }
+
+    /** 复制播放直链：suspend 桥接（IO 包裹，等价旧 CoroutineScope(Main).launch + withContext(IO)）。 */
+    fun copyPlayUrlToClipboard() {
+        coroutineScope.launch {
+            val url = withContext(Dispatchers.IO) { controller.copyPlayUrl() }
+            if (url == null) {
+                Router.toast("无法复制播放直链")
+            } else {
+                copyToClipboard(url, "已复制播放直链")
+            }
+        }
+    }
+
+    fun shareRoom() {
+        val url = controller.shareUrl()
+        if (url.isNullOrEmpty()) {
+            Router.toast("暂时没有可分享的链接")
+            return
+        }
+        val intent = Intent(Intent.ACTION_SEND).apply {
+            type = "text/plain"
+            putExtra(Intent.EXTRA_TEXT, url)
+        }
+        context.startActivity(Intent.createChooser(intent, "分享直播间"))
+    }
+
+    /* ---------- 弹层状态（单状态驱动，见 ui/components/LiveRoomDialogs.kt）---------- */
+
+    var activeSheet by rememberSaveable { mutableStateOf(RoomSheet.None) }
+
+    /* ---------- 视频区手势 ---------- */
+
+    // 本次拖动起点是否在左半屏（决定调亮度还是音量）；snapshot state 保证跨重组可见
+    var dragStartLeftHalf by remember { mutableStateOf(false) }
+
+    /**
+     * 手势判定（替代已删除的手写 GestureRouter，改用 Compose 内建检测器）：
+     * - 单击：显隐控制层；双击：切换全屏（playerGestureControlEnable 总控，每次触摸直读
+     *   StateFlow.value —— 单例对象被闭包捕获无过期快照问题，等价旧「监听器内检查总开关」）；
+     * - 垂直滑动：按 down 点 x 分左右半屏 → 左亮度（window.screenBrightness 0.05 步进、
+     *   跟随系统从 0.5 起）/ 右音量（STREAM_MUSIC 步进 1），步进/范围对齐现版。
+     */
+    val videoGestureModifier = Modifier
+        .pointerInput(context) {
+            detectVerticalDragGestures(
+                onDragStart = { offset ->
+                    // 每次触摸重置自动隐藏计时（等价旧 onUserTouch）
+                    controlsTouchTick++
+                    dragStartLeftHalf = offset.x < size.width / 2f
+                },
+                onDragEnd = { controlsTouchTick++ },
+                onDragCancel = { controlsTouchTick++ },
+            ) { change, dragAmount ->
+                change.consume()
+                // 手势总开关每次拖动帧读取最新值（对齐旧 onScroll 内逐次检查）
+                if (ServiceContainer.appSettings.playerGestureControlEnable.value) {
+                    // 上滑为正增量（等价旧 adjustXxx(-distanceY)）
+                    val delta = -dragAmount
+                    if (dragStartLeftHalf) {
+                        adjustBrightness(context as? Activity, delta) { showAdjustHint(it) }
+                    } else {
+                        adjustVolume(context, delta) { showAdjustHint(it) }
+                    }
+                }
+            }
+        }
+        .pointerInput(context) {
+            detectTapGestures(
+                onTap = {
+                    if (controlsVisible) {
+                        controlsVisible = false
+                    } else {
+                        controlsVisible = true
+                        controlsTouchTick++
+                    }
+                },
+                onDoubleTap = {
+                    // 双击切换全屏/退出全屏（对齐现版；暂停/播放交由全屏控制层按钮）
+                    if (ServiceContainer.appSettings.playerGestureControlEnable.value) {
+                        toggleFullScreen()
+                    }
+                },
+            )
+        }
+
+    /* ---------- 标签集合（无条件声明：进出全屏不丢选中态与聊天滚动位置）---------- */
+
+    val tabs = remember(siteId) { buildTabEntries(siteId) }
+    var selectedTabIndex by rememberSaveable { mutableIntStateOf(0) }
+    val selectedKey = tabs.getOrNull(selectedTabIndex)?.key
+    // 聊天列表滚动状态提升到页面级：切走再切回聊天 Tab 位置不丢（对齐原 RecyclerView 复用）
+    val chatListState = rememberLazyListState()
+
+    /* ---------- 布局：LinearLayout(VERTICAL) 等价 Column ---------- */
+
+    Column(modifier = modifier.fillMaxSize().background(Color.White)) {
+
+        // 标题栏：返回箭头 / 标题（16sp medium 单行省略）/ 「⋮」菜单 —— 全屏时隐藏
+        if (!isFullScreen) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(Color.White)
+                    .padding(horizontal = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = "←",
+                    fontSize = 22.sp,
+                    color = TextPrimary,
+                    modifier = Modifier
+                        .clickable(
+                            interactionSource = remember { MutableInteractionSource() },
+                            indication = null,
+                            onClick = onBack,
+                        )
+                        .padding(vertical = 12.dp, horizontal = 8.dp),
+                )
+                Text(
+                    text = detail?.title?.ifEmpty { null } ?: "直播间",
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.Medium,
+                    color = TextPrimary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier
+                        .weight(1f)
+                        .padding(vertical = 12.dp),
+                )
+                Text(
+                    text = "⋮",
+                    fontSize = 22.sp,
+                    color = TextPrimary,
+                    modifier = Modifier
+                        .clickable(
+                            interactionSource = remember { MutableInteractionSource() },
+                            indication = null,
+                            onClick = { activeSheet = RoomSheet.Menu },
+                        )
+                        .padding(vertical = 12.dp, horizontal = 8.dp),
+                )
+            }
+        }
+
+        // 视频区：竖屏高 = 屏宽 × 9/16（aspectRatio 由约束驱动，旋转时自动重算，
+        // 对应原 onConfigurationChanged 手动重算的语义）；全屏占满整屏。黑底由父容器承担
+        Box(
+            modifier = (if (isFullScreen) {
+                Modifier.fillMaxSize()
+            } else {
+                Modifier.fillMaxWidth().aspectRatio(16f / 9f)
+            })
+                .then(videoGestureModifier)
+                .background(Color.Black),
+        ) {
+            // mpv 渲染内核（互操作白名单）：Surface 附加由 MpvVideoView 的
+            // SurfaceHolder.Callback 自动处理（surfaceCreated → attachSurface）
+            AndroidView(
+                factory = { videoView },
+                modifier = Modifier.fillMaxSize(),
+            )
+            // 浮层弹幕：叠加在视频之上、未开播提示之下；非交互层不拦截点击
+            AndroidView(
+                factory = { danmakuOverlay },
+                modifier = Modifier.fillMaxSize(),
+            )
+            // 未开播覆盖层：白字居中（对应原 unliveOverlay）
+            if (!liveStatus) {
+                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    Text(text = "未开播", fontSize = 16.sp, color = Color.White)
+                }
+            }
+            // 控制层覆盖（Compose 版 PlayerControlsOverlay；显隐/计时由本页面驱动）
+            PlayerControlsOverlay(
+                visible = controlsVisible,
+                fullScreen = isFullScreen,
+                playing = playerState.playing,
+                liveStatus = liveStatus,
+                danmakuEnabled = overlayDanmakuOn,
+                durationText = liveDuration,
+                qualityName = qualityName,
+                lineName = lineName,
+                title = detail?.title.orEmpty(),
+                adjustHint = adjustHint,
+                onBackClick = { toggleFullScreen() }, // 顶栏返回 = 退出全屏（仅全屏显示顶栏）
+                onRefreshClick = { controller.refreshRoom() },
+                onPlayPauseClick = { togglePlayPause() },
+                onDanmakuToggle = { toggleDanmaku() },
+                onDanmakuSettingsClick = { activeSheet = RoomSheet.DanmuSettings },
+                onQualityClick = {
+                    if (controller.qualites.value.isEmpty()) {
+                        Router.toast("暂无清晰度信息")
+                    } else {
+                        activeSheet = RoomSheet.Quality
+                    }
+                },
+                onLineClick = {
+                    if (controller.playUrls.value.isEmpty()) {
+                        Router.toast("暂无播放线路")
+                    } else {
+                        activeSheet = RoomSheet.Line
+                    }
+                },
+                onMenuClick = { activeSheet = RoomSheet.Menu },
+                onFullScreenClick = { toggleFullScreen() },
+            )
+        }
+
+        // 信息区（对应 Dart buildUserProfile）：头像/名称/平台 + 人气 —— 全屏时隐藏
+        if (!isFullScreen) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(Color.White)
+                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                NetImage(
+                    url = detail?.userAvatar.orEmpty(),
+                    modifier = Modifier.size(48.dp),
+                    isRound = true,
+                )
+                Column(modifier = Modifier.weight(1f).padding(horizontal = 12.dp)) {
+                    Text(
+                        text = detail?.userName ?: "",
+                        fontSize = 14.sp,
+                        color = TextPrimary,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        // 平台行：图标 + 平台名
+                        Image(
+                            painter = painterResource(site.logoRes),
+                            contentDescription = null,
+                            modifier = Modifier.size(16.dp),
+                        )
+                        Spacer(modifier = Modifier.size(4.dp))
+                        Text(text = site.name, fontSize = 12.sp, color = TextTertiary)
+                    }
+                }
+                Text(
+                    text = "🔥 ${Utils.onlineToString(online)}",
+                    fontSize = 14.sp,
+                    // 人气橙色（现版 #FF9800，主题常量暂无此色值）
+                    color = Color(0xFFFF9800),
+                )
+            }
+        }
+
+        // 标签栏 + 内容区（weight=1）—— 全屏时隐藏（状态在上方无条件声明，不丢失）
+        if (!isFullScreen) {
+            TabRow(
+                selectedTabIndex = selectedTabIndex,
+                containerColor = Color.White,
+                contentColor = CategoryBlue,
+                indicator = { tabPositions ->
+                    Box(
+                        modifier = Modifier
+                            .tabIndicatorOffset(tabPositions[selectedTabIndex])
+                            .height(2.dp)
+                            .background(CategoryBlue),
+                    )
+                },
+            ) {
+                tabs.forEachIndexed { index, tab ->
+                    Tab(
+                        selected = selectedTabIndex == index,
+                        onClick = { selectedTabIndex = index },
+                        text = {
+                            Text(
+                                text = tab.label,
+                                fontSize = 14.sp,
+                                // 选中蓝 / 未选中灰（对齐原 setTabTextColors）
+                                color = if (selectedTabIndex == index) CategoryBlue else TextTertiary,
+                            )
+                        },
+                    )
+                }
+            }
+
+            Box(modifier = Modifier.weight(1f)) {
+                when (selectedKey) {
+                    TAB_KEY_CHAT -> {
+                        // 切回聊天 Tab 时滚到底部（对齐原 showTab 的 scrollToPosition）
+                        LaunchedEffect(selectedTabIndex) {
+                            if (messages.isNotEmpty()) {
+                                chatListState.scrollToItem(messages.size - 1)
+                            }
+                        }
+                        ChatTabContent(
+                            messages = messages,
+                            listState = chatListState,
+                        )
+                    }
+                    TAB_KEY_SUPER_CHAT -> SuperChatTabContent(superChats)
+                    TAB_KEY_FOLLOW -> FollowTabContent(
+                        items = followLive + followNotLive,
+                        onOpenRoom = { follow ->
+                            val target = Sites.allSites[follow.siteId] ?: return@FollowTabContent
+                            controller.resetRoom(target, follow.roomId)
+                        },
+                    )
+                    TAB_KEY_CONTRIBUTION_RANK -> ContributionRankTabContent(contributionUsers)
+                    TAB_KEY_SETTINGS -> SettingsTabPlaceholder(
+                        onOpenSettings = { activeSheet = RoomSheet.LiveSettings },
+                    )
+                }
+            }
+        }
+    }
+
+    /* ---------- 弹层渲染（单状态驱动；字段/setter 对照旧 LiveRoomSheets 1:1）---------- */
+
+    when (activeSheet) {
+        RoomSheet.None -> {}
+
+        RoomSheet.Menu -> RoomMenuDialog(
+            onAction = { index ->
+                activeSheet = RoomSheet.None
+                when (index) {
+                    0 -> if (controller.qualites.value.isEmpty()) {
+                        Router.toast("暂无清晰度信息")
+                    } else {
+                        activeSheet = RoomSheet.Quality
+                    }
+                    1 -> if (controller.playUrls.value.isEmpty()) {
+                        Router.toast("暂无播放线路")
+                    } else {
+                        activeSheet = RoomSheet.Line
+                    }
+                    2 -> activeSheet = RoomSheet.DanmuSettings
+                    3 -> activeSheet = RoomSheet.LiveSettings
+                    4 -> activeSheet = RoomSheet.DanmuShield
+                    5 -> copyToClipboard(controller.copyUrl() ?: "", "已复制直播间链接")
+                    6 -> copyPlayUrlToClipboard()
+                    7 -> shareRoom()
+                    8 -> controller.refreshRoom()
+                }
+            },
+            onDismiss = { activeSheet = RoomSheet.None },
+        )
+
+        RoomSheet.Quality -> QualityDialog(
+            names = qualites.map { it.quality },
+            // 弹层打开期间列表被清空（如刷新）时不崩溃：空列表回退 0（打开入口已拦截空列表）
+            checkedIndex = if (qualites.isEmpty()) {
+                0
+            } else {
+                controller.currentQuality.coerceIn(0, qualites.lastIndex)
+            },
+            onSelect = { which ->
+                activeSheet = RoomSheet.None
+                if (which != controller.currentQuality) {
+                    controller.currentQuality = which
+                    controller.getPlayUrl()
+                }
+            },
+            onDismiss = { activeSheet = RoomSheet.None },
+        )
+
+        RoomSheet.Line -> LineDialog(
+            count = controller.playUrls.value.size,
+            // 弹层打开期间列表被清空（如刷新）时不崩溃：空列表回退 0（打开入口已拦截空列表）
+            checkedIndex = if (controller.playUrls.value.isEmpty()) {
+                0
+            } else {
+                controller.currentLineIndex.coerceIn(0, controller.playUrls.value.size - 1)
+            },
+            onSelect = { which ->
+                activeSheet = RoomSheet.None
+                if (which != controller.currentLineIndex) {
+                    controller.changePlayLine(which)
+                }
+            },
+            onDismiss = { activeSheet = RoomSheet.None },
+        )
+
+        RoomSheet.DanmuSettings -> DanmuSettingsSheet(onDismiss = { activeSheet = RoomSheet.None })
+
+        RoomSheet.LiveSettings -> LiveSettingsSheet(
+            controller = controller,
+            onDismiss = { activeSheet = RoomSheet.None },
+        )
+
+        RoomSheet.DanmuShield -> DanmuShieldSheet(onDismiss = { activeSheet = RoomSheet.None })
+    }
+}
+
+/**
+ * 调节屏幕亮度（左半屏上滑增亮）：window.screenBrightness 0.05 步进（delta/400），
+ * 跟随系统（<0）时从 0.5 起，范围 0.05–1；提示条「亮度 N」。
+ */
+private fun adjustBrightness(activity: Activity?, delta: Float, showHint: (String) -> Unit) {
+    if (activity == null) return
+    val attributes = activity.window.attributes
+    var brightness = attributes.screenBrightness
+    if (brightness < 0f) brightness = 0.5f
+    brightness += delta / 400f
+    brightness = brightness.coerceIn(0.05f, 1f)
+    attributes.screenBrightness = brightness
+    activity.window.attributes = attributes
+    showHint("亮度 ${(brightness * 100).toInt()}")
+}
+
+/**
+ * 调节媒体音量（右半屏上滑增大）：AudioManager STREAM_MUSIC 步进 1，范围 0–max；
+ * 提示条「音量 x/max」。
+ */
+private fun adjustVolume(context: Context, delta: Float, showHint: (String) -> Unit) {
+    val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+    val max = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
+    var volume = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC)
+    volume += if (delta > 0f) 1 else -1
+    volume = volume.coerceIn(0, max)
+    audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, volume, 0)
+    showHint("音量 $volume/$max")
+}
+
+/* ---------- 标签集合（对应 Dart 默认标签顺序 + 条件过滤）---------- */
+
+private const val TAB_KEY_CHAT = "chat"
+private const val TAB_KEY_SUPER_CHAT = "super_chat"
+private const val TAB_KEY_FOLLOW = "follow"
+private const val TAB_KEY_CONTRIBUTION_RANK = "contribution_rank"
+private const val TAB_KEY_SETTINGS = "settings"
+
+/** 直播间标签项：key 用于内容切换，label 为展示文案（各平台叫法不同）。 */
+private data class RoomTab(val key: String, val label: String)
+
+/**
+ * 标签集合：聊天 / SC（仅 bilibili 叫「SC」、huya 叫「头条」）/ 关注 /
+ * 贡献榜（douyu 叫「亲密榜」）/ 设置——对照原 buildTabEntries 1:1。
+ */
+private fun buildTabEntries(siteId: String): List<RoomTab> {
+    val tabs = mutableListOf<RoomTab>()
+    tabs += RoomTab(TAB_KEY_CHAT, "聊天")
+    when (siteId) {
+        Constant.kBiliBili -> tabs += RoomTab(TAB_KEY_SUPER_CHAT, "SC")
+        Constant.kHuya -> tabs += RoomTab(TAB_KEY_SUPER_CHAT, "头条")
+    }
+    tabs += RoomTab(TAB_KEY_FOLLOW, "关注")
+    tabs += RoomTab(
+        TAB_KEY_CONTRIBUTION_RANK,
+        if (siteId == Constant.kDouyu) "亲密榜" else "贡献榜",
+    )
+    tabs += RoomTab(TAB_KEY_SETTINGS, "设置")
+    return tabs
+}
+
+/* ---------- 聊天 Tab：弹幕列表 ---------- */
+
+/**
+ * 聊天列表 —— 对应原 MessagesAdapter：
+ * 用户名（灰）+ 正文（深色）两段式；系统消息整行灰色；行距 8dp。
+ * 上滑暂停自动滚底、贴底恢复（等价原 RecyclerView.canScrollVertically(1) 判断）。
+ */
+@Composable
+private fun ChatTabContent(messages: List<LiveMessage>, listState: LazyListState) {
+    // 是否贴底（留 1 条容差：贴底时新增消息仍视为贴底，继续自动滚）
+    val atBottom by remember(listState) {
+        derivedStateOf {
+            val layoutInfo = listState.layoutInfo
+            val last = layoutInfo.visibleItemsInfo.lastOrNull()
+                ?: return@derivedStateOf true
+            last.index >= layoutInfo.totalItemsCount - 2 &&
+                last.offset + last.size <= layoutInfo.viewportEndOffset + 4
+        }
+    }
+    // 新消息到达且贴底 → 滚到底部（对齐原 disableAutoScroll 语义：上滑暂停、贴底恢复）
+    LaunchedEffect(messages, atBottom) {
+        if (messages.isNotEmpty() && atBottom) {
+            listState.scrollToItem(messages.size - 1)
+        }
+    }
+    LazyColumn(
+        state = listState,
+        modifier = Modifier.fillMaxSize(),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        items(messages) { msg ->
+            Text(
+                text = buildMessageText(msg),
+                fontSize = 14.sp,
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
+            )
+        }
+    }
+}
+
+/**
+ * 弹幕消息富文本 —— 对应原 SpannableStringBuilder 两段式语义改用 AnnotatedString：
+ * 用户名灰（#888888）+ 正文深色（#333333）；系统消息整行灰色；
+ * SC 类消息前缀加「【醒目】」（对齐原 MessagesAdapter.buildMessageText）。
+ */
+private fun buildMessageText(item: LiveMessage) = buildAnnotatedString {
+    if (item.userName == "LiveSysMessage") {
+        withStyle(SpanStyle(color = TextTertiary)) { append(item.message) }
+    } else {
+        val prefix = if (item.type == LiveMessageType.superChat) {
+            "【醒目】${item.userName}"
+        } else {
+            item.userName
+        }
+        withStyle(SpanStyle(color = TextTertiary)) { append("$prefix：") }
+        withStyle(SpanStyle(color = TextPrimary)) { append(item.message) }
+    }
+}
+
+/* ---------- SC / 头条 Tab：醒目留言列表 ---------- */
+
+/** SC 列表 —— 价格醒目（橙）+ 用户名（红）+ 留言（对齐原 SuperChatAdapter）。 */
+@Composable
+private fun SuperChatTabContent(items: List<LiveSuperChatMessage>) {
+    LazyColumn(modifier = Modifier.fillMaxSize()) {
+        items(items) { item ->
+            Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 10.dp)) {
+                Text(
+                    text = "💬 ${item.userName}（醒目留言）",
+                    fontSize = 13.sp,
+                    color = LiveRed,
+                )
+                Spacer(modifier = Modifier.size(4.dp))
+                Text(text = item.message, fontSize = 14.sp, color = TextPrimary)
+                Spacer(modifier = Modifier.size(4.dp))
+                Text(
+                    text = "¥${item.price}",
+                    fontSize = 12.sp,
+                    // 价格橙色（现版 #FF9800）
+                    color = Color(0xFFFF9800),
+                )
+            }
+        }
+    }
+}
+
+/* ---------- 贡献榜 Tab ---------- */
+
+/** 贡献榜列表 —— 名次（橙）+ 昵称 + 贡献值（对齐原 ContributionRankAdapter）。 */
+@Composable
+private fun ContributionRankTabContent(items: List<LiveContributionRankItem>) {
+    LazyColumn(modifier = Modifier.fillMaxSize()) {
+        items(items) { item ->
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 14.dp, vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = "${item.rank}",
+                    fontSize = 14.sp,
+                    color = Color(0xFFFF9800),
+                    modifier = Modifier.padding(end = 12.dp),
+                )
+                Text(
+                    text = item.userName,
+                    fontSize = 14.sp,
+                    color = TextPrimary,
+                    modifier = Modifier.weight(1f),
+                )
+                Text(text = item.scoreText, fontSize = 13.sp, color = TextTertiary)
+            }
+        }
+    }
+}
+
+/* ---------- 关注 Tab：直播间内关注列表 ---------- */
+
+/**
+ * 直播间内关注列表（简化版）—— 直播中优先 + 未开播（复用 FollowService 数据），
+ * 行样式对齐原 FollowTabAdapter：标题/平台+房间标题/直播状态徽标；点击换房。
+ */
+@Composable
+private fun FollowTabContent(
+    items: List<FollowUser>,
+    onOpenRoom: (FollowUser) -> Unit,
+) {
+    LazyColumn(modifier = Modifier.fillMaxSize()) {
+        items(items) { item ->
+            val siteName = Sites.allSites[item.siteId]?.name ?: item.siteId
+            val sub = if (item.roomTitle.isEmpty()) siteName else "$siteName · ${item.roomTitle}"
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable(onClick = { onOpenRoom(item) })
+                    .padding(horizontal = 16.dp, vertical = 12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = item.userName,
+                        fontSize = 15.sp,
+                        color = CardTitle,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    Text(text = sub, fontSize = 12.sp, color = TextTertiary)
+                }
+                Text(
+                    text = when (item.liveStatus) {
+                        2 -> "直播中"
+                        0 -> "状态未知"
+                        else -> "未开播"
+                    },
+                    fontSize = 12.sp,
+                    color = if (item.liveStatus == 2) LiveRed else TextDisabled,
+                )
+            }
+        }
+    }
+}
+
+/* ---------- 设置 Tab 入口 ---------- */
+
+/** 设置 Tab：入口说明（点击打开直播设置弹层，对齐原 tabPlaceholder 点击行为）。 */
+@Composable
+private fun SettingsTabPlaceholder(onOpenSettings: () -> Unit) {
+    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+        Text(
+            text = "直播间设置请使用顶部⋮菜单",
+            fontSize = 13.sp,
+            color = TextTertiary,
+            textAlign = TextAlign.Center,
+            modifier = Modifier
+                .clickable(
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = null,
+                    onClick = onOpenSettings,
+                )
+                .padding(16.dp),
+        )
+    }
+}
