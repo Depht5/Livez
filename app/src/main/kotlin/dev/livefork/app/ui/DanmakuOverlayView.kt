@@ -21,6 +21,7 @@ import dev.livefork.app.di.ServiceContainer
 import dev.livefork.core.model.LiveMessage
 import dev.livefork.core.model.LiveMessageSpan
 import dev.livefork.core.model.LiveMessageType
+import dev.livefork.app.ui.screens.DanmuDebug
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -31,8 +32,36 @@ import kotlinx.coroutines.launch
  * （`live_room_controller.dart` `_scheduleOverlayDanmaku` + `addDanmaku`）。
  * 消息来自弹幕流（View 层增量收集后 enqueue）；录制参数直读 [AppSettingsController]。
  * 渲染：Canvas 逐片段绘制（文本 描边+填充；表情图 内联 bitmap），从右向左滚动，
- * 出左边界释放轨道。`danmuRenderEmoji` 开 → 渲染 spans/imageUrls 内联表情图。
+ * 完全走出左边界后从列表移除。`danmuRenderEmoji` 开 → 渲染 spans/imageUrls 内联表情图。
  * 实现为**非交互层**（不拦截点击），保证全屏/控制层手势可用。
+ *
+ * ## 与 canvas_danmaku 的轨道管理对比结论
+ *
+ * 参照源码：`dart_simple_live/third_party/canvas_danmaku`（pubspec.lock 锁定 v0.2.7 本地包）
+ * 的 `danmaku_screen.dart` / `scroll_danmaku_painter.dart`。真机实证（tag=DanmuDebug）：
+ * 旧实现「一槽一弹、完全出左边界才释放」导致轨道恒满，每条新弹幕都按"全满选 x 最小"
+ * 顶掉刚出发的在飞弹幕（replaced=true 每小时数千次，prevX≈视口右侧 0.5 秒行程处）。
+ *
+ * 原版轨道管理语义（本次修复的对齐目标）：
+ * 1. 轨道只是 y 行号列表，弹幕存于**单一扁平 List**；**同一条轨道可同时容纳多条弹幕**。
+ * 2. 入轨条件（`_scrollCanAddToTrack`）：候选轨道上每一条在飞弹幕都满足
+ *    `viewWidth - (x + width) >= 0`，即**前一条的右边缘已进入屏幕内**
+ *    （新弹幕起点 x=viewWidth，恰接在其尾部之后，入场瞬间不重叠）——
+ *    而不是等前一条完全走出左边界。这是旧实现"轨道永不空闲"的根因差异。
+ * 3. 追及校验：原版速度 ∝ 弹幕宽度（px/s = (viewWidth+width)/duration，宽者快），
+ *    若前一条比新弹幕窄（更慢），还需校验新弹幕不会在旧弹幕出界前追上它。
+ * 4. 全部轨道均不可入轨时：**静默丢弃新弹幕**（selfSend 强制插首轨 / massiveMode
+ *    随机插轨仅用于用户自发消息，直播间聊天不走这两条路径）→ 绝不顶掉在飞弹幕。
+ * 5. 轨道数 = floor(可视高 × area / (fontSize×lineHeight))；Dart 层由
+ *    `resolveDanmuTargetLineCount` 等把 danmuLineCount 设置折算成 area/lineHeight 传入；
+ *    本重写直接以 danmuLineCount 作为轨道行数（视觉等效，不改传参）。
+ *
+ * 与原版的已知行为差异（有意保留）：
+ * 1. 速度模型：原版宽弹幕更快；本实现所有弹幕等速（viewWidth/danmuSpeed）。
+ *    等速下一旦前一条右边缘进入屏幕，两条弹幕间距单调不减，永不重叠，
+ *    故原版第 3 条追及校验在本实现中恒通过，予以省略。
+ * 2. 无 selfSend / massiveMode 特性（无自发送弹幕浮层回显需求），全满一律丢弃。
+ * 3. 表情图为独立 bitmap 片段绘制（非原版 Paragraph 内联占位），观感一致。
  */
 class DanmakuOverlayView @JvmOverloads constructor(
     context: Context,
@@ -78,6 +107,8 @@ class DanmakuOverlayView @JvmOverloads constructor(
         val strokeWidthPx: Float,
         val strokeColor: Int,
         val font: Typeface,
+        /** 所属轨道行号（对齐原版 yPosition；同轨可同时多条在飞） */
+        val track: Int,
         /** 起始 x = 视口宽度（右侧外部） */
         var x: Float,
         /** px/秒 */
@@ -88,8 +119,8 @@ class DanmakuOverlayView @JvmOverloads constructor(
         var measuredWidth: Float = 0f
     }
 
-    /** 轨道：每轨道同时一条弹幕（简单分配）。 */
-    private val tracks = ArrayList<TrackItem?>()
+    /** 在飞弹幕扁平列表（对齐 canvas_danmaku：轨道只是行号，同轨可同时多条）。 */
+    private val items = ArrayList<TrackItem>()
 
     private val fillPaint = Paint(Paint.ANTI_ALIAS_FLAG)
     private val strokePaint = Paint(Paint.ANTI_ALIAS_FLAG)
@@ -102,10 +133,17 @@ class DanmakuOverlayView @JvmOverloads constructor(
 
     /* ---------- 表情图缓存（LRU，上限 64） ---------- */
 
+    // 线程安全修正：本 map 为 accessOrder=true 的 LinkedHashMap——连 get() 都会改内部
+    // 链表结构；而 ensureEmojiPreload 在 Dispatchers.IO 写入、绘制/测宽在主线程读取，
+    // 无同步并发读写可能损坏桶结构（症状可为静默错乱）。所有访问统一持锁；
+    // 锁内只有 O(1) map 操作，无绘制/解码等重活，不构成主线程瓶颈。
     private val emojiCache = object : LinkedHashMap<String, Bitmap>(32, 0.75f, true) {
         override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Bitmap>?): Boolean =
             size > 64
     }
+
+    /** emojiCache 的统一锁（读写在哪个线程发生不确定，必须全部持锁）。 */
+    private val emojiCacheLock = Any()
 
     private val ioScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
@@ -132,6 +170,13 @@ class DanmakuOverlayView @JvmOverloads constructor(
                 addToTrack(msg)
             }
         }
+        // 诊断日志，定位后移除：观察入队节奏与延迟队列积压
+        if (DanmuDebug.enabled) {
+            android.util.Log.d(
+                DanmuDebug.TAG,
+                "enqueue: pending=${pendingRunnables.size} delay=${totalDelay}ms text=${msg.message.take(12)}",
+            )
+        }
         if (totalDelay == 0) {
             addToTrack(msg)
         } else {
@@ -142,11 +187,13 @@ class DanmakuOverlayView @JvmOverloads constructor(
 
     /** 清空轨道与未触发的延迟弹幕（切房间/关闭弹幕时调用）。 */
     fun clear() {
+        // 诊断日志，定位后移除：任何非预期 clear 都会清掉在飞弹幕，需核对调用方
+        if (DanmuDebug.enabled) {
+            android.util.Log.d(DanmuDebug.TAG, "clear: 在飞弹幕=${items.size} pending=${pendingRunnables.size}", Throwable("clear 调用栈"))
+        }
         pendingRunnables.forEach { mainHandler.removeCallbacks(it) }
         pendingRunnables.clear()
-        for (i in tracks.indices) {
-            tracks[i] = null
-        }
+        items.clear()
         stopAnimator()
         invalidate()
     }
@@ -163,10 +210,7 @@ class DanmakuOverlayView @JvmOverloads constructor(
         // 对齐 Dart：显示几行 = 0 → 不显示弹幕
         val lineCount = appSettings.danmuLineCount.value
         if (lineCount <= 0) return
-        // 轨道懒初始化：按当前弹幕行数保证轨道槽数量（tracks 初始为空，首条弹幕到达时补齐）
-        while (tracks.size < lineCount) {
-            tracks.add(null)
-        }
+
         val size = appSettings.danmuSize.value
         val textSizePx = size * resources.displayMetrics.density
         val font = when (appSettings.danmuFontWeight.value) {
@@ -199,6 +243,36 @@ class DanmakuOverlayView @JvmOverloads constructor(
             }
         if (segments.isEmpty()) return
 
+        val itemWidth = segments.sumOf { it.width.toDouble() }.toFloat()
+
+        // 轨道选择 —— 对齐 canvas_danmaku `_scrollCanAddToTrack`（根因修复）：
+        // 按行号顺序找第一条可入轨的轨道。可入轨 = 该轨道上**每一条**在飞弹幕的右边缘
+        // (x+width) 已进入屏幕内（前一条已左移到为新弹幕让出整个入口宽度），
+        // 而非旧实现的"等前一条完全走出左边界才释放轨道"——后者导致高弹幕量下
+        // 轨道恒满，新弹幕被"全满选 x 最小"策略顶掉刚出发的在飞弹幕。
+        var target = -1
+        for (track in 0 until lineCount) {
+            if (canEnterTrack(track)) {
+                target = track
+                break
+            }
+        }
+        val freeHit = target != -1
+        if (!freeHit) {
+            // 全满兜底：对齐原版 = 静默丢弃新弹幕，绝不顶掉在飞弹幕
+            // （原版 selfSend/massiveMode 强插路径仅用于用户自发消息，聊天弹幕不适用）
+            if (DanmuDebug.enabled) {
+                android.util.Log.d(
+                    DanmuDebug.TAG,
+                    "addToTrack: drop(全满丢弃) freeHit=false items=${items.size} itemW=${itemWidth.toInt()} viewW=$width",
+                )
+            }
+            return
+        }
+
+        // 起始位置：视口右侧外部（从屏幕右边缘外滑入）；注意用视口宽度 this.width，
+        // 而非弹幕文本宽度，否则会在左半屏"突然出现"
+        val startX = this.width.toFloat()
         val item = TrackItem(
             segments = segments,
             color = color,
@@ -206,39 +280,47 @@ class DanmakuOverlayView @JvmOverloads constructor(
             strokeWidthPx = strokeWidthPx,
             strokeColor = Color.BLACK,
             font = font,
-            x = 0f,
+            track = target,
+            x = startX,
             speed = speedPxPerSec(appSettings.danmuSpeed.value),
             imageHeightPx = imageHeightPx,
         )
-        item.measuredWidth = segments.sumOf { it.width.toDouble() }.toFloat()
+        item.measuredWidth = itemWidth
 
-        // 轨道选择：优先找空轨道；全满则取 x 最小（最接近出界）的轨道复用
-        var target = -1
-        for (i in tracks.indices) {
-            if (tracks[i] == null) {
-                target = i
-                break
-            }
+        // 诊断日志：freeHit=true 表示命中空闲判定入轨；false 只会走上面的丢弃分支。
+        // 真机复验预期：freeHit=true 占比接近 100%，drop(全满丢弃) 仅在瞬间洪峰出现，
+        // 且不再有任何"顶掉在飞弹幕"的行为。
+        if (DanmuDebug.enabled) {
+            val prev = items.lastOrNull { it.track == target }
+            android.util.Log.d(
+                DanmuDebug.TAG,
+                "addToTrack: track=$target freeHit=$freeHit prevX=${prev?.x?.toInt() ?: -1} newX=${item.x.toInt()} itemW=${item.measuredWidth.toInt()} viewW=$width",
+            )
         }
-        if (target == -1) {
-            var minX = Float.MAX_VALUE
-            for (i in tracks.indices) {
-                val t = tracks[i] ?: continue
-                if (t.x < minX) {
-                    minX = t.x
-                    target = i
-                }
-            }
-        }
-        if (target == -1) return
-        // 起始位置：视口右侧外部（从屏幕右边缘外滑入，不挤占已有弹幕）；
-        // 注意用视口宽度 this.width，而非弹幕文本宽度，否则会在左半屏"突然出现"
-        item.x = this.width.toFloat()
-
-        tracks[target] = item
+        items.add(item)
         // 预取未加载的表情图（异步；就绪后动画循环自然重绘出现）
         preloadEmojis(segments)
         ensureAnimator()
+    }
+
+    /**
+     * 轨道可入轨判定 —— 对齐 canvas_danmaku `_scrollCanAddToTrack` 的主条件：
+     * 候选轨道上每一条在飞弹幕都满足「右边缘(x+width) ≤ 视口宽度」才允许入轨
+     * （新弹幕起点 x=视口宽度，恰好接在前一条尾部之后，入场瞬间不重叠）。
+     *
+     * 原版的第二条追及校验（前一条更窄→更慢，可能被更宽更快的新弹幕在出界前追上）
+     * 在本实现中省略：本实现所有弹幕等速（见类 KDoc 差异 1），同轨前后两条的间距
+     * 单调不减，追及重叠不可能发生。
+     */
+    private fun canEnterTrack(track: Int): Boolean {
+        val viewW = this.width.toFloat()
+        for (item in items) {
+            if (item.track != track) continue
+            if (viewW - (item.x + item.measuredWidth) < 0f) {
+                return false
+            }
+        }
+        return true
     }
 
     /** 构建图文混合片段（对齐 Dart `_buildDanmakuContentParts`：spans 富文本，兜底 imageUrls）。 */
@@ -274,7 +356,7 @@ class DanmakuOverlayView @JvmOverloads constructor(
                                 text = null,
                                 imageUrl = url,
                                 width = scaled.first + if (out.isNotEmpty()) gap else 0f,
-                                bitmap = emojiCache[url],
+                                bitmap = synchronized(emojiCacheLock) { emojiCache[url] },
                                 imageHeight = scaled.second,
                             ),
                         )
@@ -286,16 +368,16 @@ class DanmakuOverlayView @JvmOverloads constructor(
             // 无 spans 但有 imageUrls（纯图弹幕）：图 + 文本兜底（对齐 Dart parts==null 分支）
             for (url in msg.imageUrls) {
                 if (url.isBlank()) continue
-                val scaled = scaledImageSize(url, textSizePx, imageHeightPx)
-                out.add(
-                    Segment(
-                        text = null,
-                        imageUrl = url,
-                        width = scaled.first,
-                        bitmap = emojiCache[url],
-                        imageHeight = scaled.second,
-                    ),
-                )
+                    val scaled = scaledImageSize(url, textSizePx, imageHeightPx)
+                        out.add(
+                            Segment(
+                                text = null,
+                                imageUrl = url,
+                                width = scaled.first,
+                                bitmap = synchronized(emojiCacheLock) { emojiCache[url] },
+                                imageHeight = scaled.second,
+                            ),
+                        )
                 ensureEmojiPreload(url)
             }
             if (out.isNotEmpty() && msg.message.isNotBlank()) {
@@ -325,7 +407,7 @@ class DanmakuOverlayView @JvmOverloads constructor(
 
     /** 图片显示尺寸：高=imageHeightPx、宽按原图比例，限宽 120dp。 */
     private fun scaledImageSize(url: String, textSizePx: Float, imageHeightPx: Float): Pair<Float, Float> {
-        val cached = emojiCache[url]
+        val cached = synchronized(emojiCacheLock) { emojiCache[url] }
         if (cached != null) {
             val ratio = if (cached.height > 0) cached.width.toFloat() / cached.height.toFloat() else 1f
             var w = imageHeightPx * ratio
@@ -341,7 +423,7 @@ class DanmakuOverlayView @JvmOverloads constructor(
 
     /** 异步预取表情图（Coil 解码 → LRU 缓存）；轨道持有 bitmap 引用，出界释放。 */
     private fun ensureEmojiPreload(url: String) {
-        if (emojiCache.containsKey(url)) return
+        if (synchronized(emojiCacheLock) { emojiCache.containsKey(url) }) return
         ioScope.launch {
             try {
                 val request = ImageRequest.Builder(context)
@@ -354,7 +436,7 @@ class DanmakuOverlayView @JvmOverloads constructor(
                     bmp?.copy(Bitmap.Config.ARGB_8888, false)
                 }
                 if (bitmap != null) {
-                    emojiCache[url] = bitmap
+                    synchronized(emojiCacheLock) { emojiCache[url] = bitmap }
                     // 主线程重绘（动画可能在跑，量小直接 invalidate）
                     mainHandler.post { invalidate() }
                 }
@@ -366,7 +448,9 @@ class DanmakuOverlayView @JvmOverloads constructor(
 
     private fun preloadEmojis(segments: List<Segment>) {
         for (seg in segments) {
-            if (seg.imageUrl != null && !emojiCache.containsKey(seg.imageUrl)) {
+            if (seg.imageUrl != null &&
+                synchronized(emojiCacheLock) { !emojiCache.containsKey(seg.imageUrl) }
+            ) {
                 ensureEmojiPreload(seg.imageUrl)
             }
         }
@@ -386,6 +470,11 @@ class DanmakuOverlayView @JvmOverloads constructor(
 
     private fun ensureAnimator() {
         if (animator != null) return
+        // 诊断日志，定位后移除：动画重启打点——若弹幕断流后出现本日志而无后续
+        // addToTrack，说明是入队侧停了；有 addToTrack 却无本日志说明启动分支被跳过
+        if (DanmuDebug.enabled) {
+            android.util.Log.d(DanmuDebug.TAG, "animator: 启动")
+        }
         val a = ValueAnimator.ofFloat(0f, 1f)
         a.duration = Long.MAX_VALUE
         a.interpolator = LinearInterpolator()
@@ -404,6 +493,11 @@ class DanmakuOverlayView @JvmOverloads constructor(
     }
 
     private fun stopAnimator() {
+        // 诊断日志，定位后移除：动画停止打点（全轨道空时正常省电停止；若在飞弹幕
+        // 仍存在时出现，说明轨道被异常清空）
+        if (DanmuDebug.enabled) {
+            android.util.Log.d(DanmuDebug.TAG, "animator: 停止（剩余在飞弹幕=${items.size}）")
+        }
         animator?.cancel()
         animator = null
         lastFrameTime = 0L
@@ -411,12 +505,13 @@ class DanmakuOverlayView @JvmOverloads constructor(
 
     private fun step(dtSec: Float) {
         var dirty = false
-        for (i in tracks.indices) {
-            val t = tracks[i] ?: continue
+        // 倒序遍历：移除元素只影响其后索引，倒序安全
+        for (i in items.indices.reversed()) {
+            val t = items[i]
             t.x -= t.speed * dtSec
             if (t.x + t.measuredWidth <= 0f) {
-                // 出左边界 → 释放轨道
-                tracks[i] = null
+                // 完全走出左边界 → 从列表移除（轨道是逻辑行号，无需"释放"动作）
+                items.removeAt(i)
             }
             dirty = true
         }
@@ -424,7 +519,7 @@ class DanmakuOverlayView @JvmOverloads constructor(
             invalidate()
         }
         // 全空 → 停动画省电
-        if (tracks.all { it == null }) {
+        if (items.isEmpty()) {
             stopAnimator()
         }
     }
@@ -439,7 +534,7 @@ class DanmakuOverlayView @JvmOverloads constructor(
 
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
-        if (tracks.isEmpty()) return
+        if (items.isEmpty()) return
 
         val lineCount = appSettings.danmuLineCount.value.coerceAtLeast(1)
         // 对齐 Dart 弹幕显示"区域"：danmuArea 限定可用高度
@@ -449,14 +544,20 @@ class DanmakuOverlayView @JvmOverloads constructor(
         val usableHeight = (height * area).coerceAtLeast(0f)
         val lineHeight = usableHeight / lineCount
 
-        for (i in tracks.indices) {
-            val t = tracks[i] ?: continue
-            val baseline = i * lineHeight + lineHeight * 0.8f
+        for (t in items) {
             fillPaint.color = t.color
             fillPaint.alpha = (opacity * 255).toInt()
             fillPaint.textSize = t.textSizePx
             fillPaint.typeface = t.font
 
+            // 根因修复（真机症状 2：最上方的弹幕超出播放器边界几个像素）：
+            // 原基线 = trackIndex*lineHeight + lineHeight*0.8 固定比例，未校验文本 ascent——
+            // 当行高（usableHeight/lineCount，随 danmuArea/danmuLineCount 设置变小）低于
+            // 字高时，第一条轨道的基线小于「文本顶(+描边半径)」，字形越出视口上边界。
+            // 最小修复：基线向下钳制到文本完整落在视口内的最小值；行高充足时比例不变。
+            // （fontMetrics 是纯结构体读取，逐项读取开销可忽略，不影响绘制性能。）
+            val minBaseline = -fillPaint.fontMetrics.top + t.strokeWidthPx / 2f
+            val baseline = (t.track * lineHeight + lineHeight * 0.8f).coerceAtLeast(minBaseline)
             if (t.strokeWidthPx > 0) {
                 strokePaint.color = t.strokeColor
                 strokePaint.alpha = fillPaint.alpha
@@ -476,7 +577,7 @@ class DanmakuOverlayView @JvmOverloads constructor(
                     canvas.drawText(seg.text, x, baseline, fillPaint)
                     x += seg.width
                 } else if (seg.imageUrl != null) {
-                    val bmp = seg.bitmap ?: emojiCache[seg.imageUrl]
+                    val bmp = seg.bitmap ?: synchronized(emojiCacheLock) { emojiCache[seg.imageUrl] }
                     if (bmp != null) {
                         // 图片底边对齐文本基线：top = baseline - imageHeight
                         val top = baseline - seg.imageHeight

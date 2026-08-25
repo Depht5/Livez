@@ -166,6 +166,9 @@ class LiveRoomController(
     private var recentDanmuEventsSincePrune = 0
     private val danmuFingerprintMutex = Mutex()
 
+    /** 累计收到的 chat 消息数（诊断日志采样用；诊断日志，定位后移除）。 */
+    private var wsChatReceivedCount = 0
+
     /** 临时静音用户（对应 Dart tempMutedUsers） */
     private val _tempMutedUsers = MutableStateFlow<Set<String>>(emptySet())
     val tempMutedUsers: StateFlow<Set<String>> = _tempMutedUsers
@@ -646,9 +649,10 @@ class LiveRoomController(
     fun onWSMessage(raw: LiveMessage) {
         val msg = sanitizeLiveMessage(raw)
         if (msg.type == LiveMessageType.chat) {
-            if (_messages.value.size > 200 && !_disableAutoScroll.value) {
-                _messages.value = _messages.value.drop(1)
-            }
+            // 顺序修正（弹幕持续性排查候选 1 的结论）：原先「先 drop(1) 裁剪、后过滤」
+            // 会让被屏蔽/重复的消息造成列表净缩短——聊天列表无故丢行 + StateFlow 多一次
+            // 无意义发射。引用游标本身不受影响（不可变列表，元素引用不变），但语义上
+            // 应只在真正追加新消息时才裁剪头部。对齐 Dart：过滤判定在前、裁剪+追加在后。
             if (isUserShielded(msg.userName) || isTempMutedUser(msg.userName)) {
                 Log.d("已过滤被屏蔽用户: ${msg.userName}")
                 return
@@ -659,7 +663,20 @@ class LiveRoomController(
             if (isDuplicateDanmu(msg)) {
                 return
             }
+            if (_messages.value.size > 200 && !_disableAutoScroll.value) {
+                _messages.value = _messages.value.drop(1)
+            }
             _messages.value = _messages.value + msg
+            // 诊断日志，定位后移除：采样打印（每 25 条一次）——用于区分「控制器停发」
+            // 还是「UI 层停收」。若本日志持续增长而 DanmuDebug collect 日志停滞，
+            // 问题在 UI 收集侧；两者都停滞则是 WS 断流/过滤全吞。
+            wsChatReceivedCount++
+            if (wsChatReceivedCount % 25 == 0) {
+                android.util.Log.d(
+                    "DanmuDebug",
+                    "onWSMessage: 累计chat=$wsChatReceivedCount 列表=${_messages.value.size}",
+                )
+            }
             if (!_liveStatus.value || (_isBackground && !allowBackgroundPlayback())) {
                 return
             }

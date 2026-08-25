@@ -1,6 +1,11 @@
 package dev.livefork.app.ui.nav
 
 import android.net.Uri
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Box
@@ -140,12 +145,33 @@ fun AppNavHost(navController: NavHostController, modifier: Modifier = Modifier) 
         // 直播间（Batch 7a）：siteId/roomId 走 path 参数（导航时经 Uri.encode 编码，
         // NavController 解析后自动解码）；控制器在 Screen 内 remember 创建 + DisposableEffect
         // 销毁（等价原 LiveRoomActivity onDestroy：controller.dispose() + videoView.destroy()）
+        //
+        // 转场动画（用户反馈：进入/退出直播间改为右侧滑入/滑出，替代默认渐变）：
+        // - enter：从屏幕右缘滑入（initialOffsetX = it，即 100% 宽度偏移起步）；
+        // - popExit：向屏幕右缘滑出（targetOffsetX = it），与 enter 镜像；
+        // - exit / popEnter：保持淡出/淡入——「main」壳层是底栏页面，若跟随左移会出现
+        //   「整个首页横移」的观感，淡入淡出让下层页面原地过渡、只有直播间层在滑动；
+        // - 时长统一 tween(280)（250–300 区间取中）：固定时长比默认 spring 更可控，
+        //   且与 leaveRoom() 的「先 GONE 等两帧再出栈」兼容——Surface 图层先消失、
+        //   滑出动画随后播放，视频不会残留在滑动画面上。
         composable(
             route = "livertoom/{siteId}/{roomId}",
             arguments = listOf(
                 navArgument("siteId") { type = NavType.StringType },
                 navArgument("roomId") { type = NavType.StringType },
             ),
+            enterTransition = {
+                slideInHorizontally(animationSpec = tween(280)) { fullX -> fullX }
+            },
+            exitTransition = {
+                fadeOut(animationSpec = tween(280))
+            },
+            popEnterTransition = {
+                fadeIn(animationSpec = tween(280))
+            },
+            popExitTransition = {
+                slideOutHorizontally(animationSpec = tween(280)) { fullX -> fullX }
+            },
         ) { entry ->
             LiveRoomScreen(
                 siteId = entry.arguments?.getString("siteId").orEmpty(),

@@ -7,6 +7,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.ActivityInfo
 import android.media.AudioManager
+import android.view.View
 import android.view.WindowManager
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.Image
@@ -45,6 +46,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -241,9 +243,39 @@ fun LiveRoomScreen(
         controlsTouchTick++
     }
 
+    /* ---------- 退出直播间（Surface 转场时序处理）---------- */
+
+    // 根因说明（真机症状 1：退出直播间后播放器画面残留零点几秒）：
+    // MpvVideoView 是 SurfaceView（独立 Z 层，由系统合成器直接上屏，不参与 View 层级绘制）。
+    // 导航 pop 的转场动画期间，Compose 页面整体退出，但 Surface 图层不受该动画影响，
+    // 会一直显示到视图脱离窗口为止 → 视频画面浮在目标页之上残留数百毫秒。
+    // 修复：返回前先把两个互操作 View 置 GONE——SurfaceView GONE 会立即触发
+    // surfaceDestroyed → detachSurface，Surface 随之销毁；等待两帧确保合成器
+    // 移除图层后再 popBackStack。AndroidView 未提供 update 回调，重组不会重置 visibility。
+    var leaving by remember { mutableStateOf(false) }
+    fun leaveRoom() {
+        if (leaving) return
+        leaving = true
+        // 先停播放器：onDispose 的 destroy 要等滑出转场结束才执行，期间 mpv 音频仍在播
+        //（真机症状：退出后声音残留零点几秒）。stop 立即停音视频，销毁顺序不变。
+        runCatching { PlayerEngine.instance.stop() }
+        videoView.visibility = View.GONE
+        danmakuOverlay.visibility = View.GONE
+        coroutineScope.launch {
+            // 第一帧应用 GONE 触发 surfaceDestroyed，第二帧确保 Surface 图层从合成器移除
+            repeat(2) { withFrameNanos { } }
+            onBack()
+        }
+    }
+
     // 全屏时 BACK 先退全屏再出栈（等价原 onBackPressedDispatcher callback）
     BackHandler(enabled = isFullScreen) {
         toggleFullScreen()
+    }
+    // 非全屏的系统返回（手势/按键）也经由 leaveRoom 先藏 Surface 再出栈，
+    // 避免「页面已退、视频残留」；两者 enabled 条件互斥。
+    BackHandler(enabled = !isFullScreen && !leaving) {
+        leaveRoom()
     }
 
     /* ---------- 播放器接线 + 控制器生命周期 ---------- */
@@ -303,12 +335,13 @@ fun LiveRoomScreen(
         }
     }
 
-    // 自动退出倒计时结束 → 退出直播间（对应 Dart autoExitCompleting 触发返回）
+    // 自动退出倒计时结束 → 退出直播间（对应 Dart autoExitCompleting 触发返回；
+    // 同样走 leaveRoom 先藏 Surface 再出栈，避免残留）
     LaunchedEffect(controller) {
         controller.autoExitCompleting.collect { completing ->
             if (completing) {
                 Router.toast("自动退出直播间")
-                onBack()
+                leaveRoom()
             }
         }
     }
@@ -325,20 +358,58 @@ fun LiveRoomScreen(
         danmakuOverlay.danmakuEnabled = overlayDanmakuOn
     }
 
-    // 浮层弹幕增量收集：记录已入列计数，新消息 = 当前列表尾部新增；
-    // 列表变短视为切房间 → 重置计数并清轨（对齐原 danmakuLastCount 逻辑）
-    var danmakuLastCount by remember(controller) { mutableIntStateOf(0) }
+    // 浮层弹幕增量收集：以「最后一条已入队消息」为实例引用游标做尾部增量。
+    // 历史说明：控制器在消息数超过 200 后每来一条新消息会先 drop(1) 裁剪头部再追加；
+    // 旧的「按列表长度差量」在此场景失效，故改用尾部实例引用比对（列表为不可变拷贝，
+    // drop(1) 不改变既有元素引用，从尾部回溯到游标即可精确算出新增段）。
+    //
+    // 游标失联的语义（本版修正）：indexOfLast 找不到游标（返回 -1）说明两次收集之间
+    // 涌入的消息数超过了整个列表容量（>200 条/帧间隙，高热房间突发流量才可能），
+    // 游标被头部裁剪吞掉。此时**绝不能**从 0 全量重放——重放会把上百条延迟弹幕
+    // （最长 6s）瞬间灌进 DanmakuOverlayView，轨道全满后每条新弹幕都会按「最小 x」
+    // 覆盖一条在飞弹幕，宏观表现正是「弹幕走到屏幕中间偏右就成批消失」。
+    // 保守做法：把游标重置为当前列表尾、跳过本帧（丢几条弹幕可接受），绝不清轨。
+    var danmakuLastEnqueued by remember(controller) { mutableStateOf<LiveMessage?>(null) }
     LaunchedEffect(controller, messages) {
         val list = messages
-        if (list.size < danmakuLastCount) {
-            danmakuLastCount = 0
+        if (list.isEmpty()) {
+            // 切房间/刷新清空：重置游标并清轨（对齐原 danmakuLastCount 重置语义）
+            danmakuLastEnqueued = null
             danmakuOverlay.clear()
+            if (DanmuDebug.enabled) {
+                android.util.Log.d(DanmuDebug.TAG, "collect: 列表清空 → 重置游标 + clear()")
+            }
+            return@LaunchedEffect
         }
-        if (list.size > danmakuLastCount) {
-            for (msg in list.subList(danmakuLastCount, list.size)) {
+        val cursor = danmakuLastEnqueued
+        val fromIndex: Int = if (cursor == null) {
+            0 // 进房首帧（列表从空开始增长）：全量入队
+        } else {
+            val idx = list.indexOfLast { it === cursor }
+            if (idx == -1) {
+                // 游标失联：保守跳过本帧（见上方注释），不清轨、不全量重放
+                danmakuLastEnqueued = list.last()
+                if (DanmuDebug.enabled) {
+                    android.util.Log.d(
+                        DanmuDebug.TAG,
+                        "collect: 游标失联！listSize=${list.size} → 跳过本帧，游标重置为列表尾",
+                    )
+                }
+                return@LaunchedEffect
+            }
+            idx + 1
+        }
+        if (DanmuDebug.enabled) {
+            android.util.Log.d(
+                DanmuDebug.TAG,
+                "collect: listSize=${list.size} cursorIdx=${if (cursor == null) -1 else list.indexOfLast { it === cursor }} enqueue=${(list.size - fromIndex).coerceAtLeast(0)}",
+            )
+        }
+        if (fromIndex < list.size) {
+            for (msg in list.subList(fromIndex, list.size)) {
                 danmakuOverlay.enqueue(msg)
             }
-            danmakuLastCount = list.size
+            danmakuLastEnqueued = list.last()
         }
     }
 
@@ -471,27 +542,33 @@ fun LiveRoomScreen(
 
     Column(modifier = modifier.fillMaxSize().background(Color.White)) {
 
-        // 标题栏：返回箭头 / 标题（16sp medium 单行省略）/ 「⋮」菜单 —— 全屏时隐藏
+        // 标题栏：返回箭头 / 标题（16sp medium 单行省略）/ 「⋮」菜单 —— 全屏时隐藏。
+        // 根因说明（真机症状 4：标题不居中、返回按钮左侧缺几个像素）：
+        // 旧实现标题用 weight(1f) 挤在左右两个文本按钮之间——「←」与「⋮」字形推进宽度
+        // 不相等，可用空间不对称导致标题整体偏移几个像素；且「←」按字形紧排，负 left
+        // bearing 使箭头左侧尖端被裁切。
+        // 修复：三段对称结构——两侧各固定 48dp 方形触控区、字形在其中居中（留足空间
+        // 不再裁切）；标题脱离 Row 权重分配、由 Box 正中对齐，实现真正水平居中。
         if (!isFullScreen) {
-            Row(
+            Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .background(Color.White)
-                    .padding(horizontal = 8.dp),
-                verticalAlignment = Alignment.CenterVertically,
+                    .height(48.dp)
+                    .background(Color.White),
             ) {
-                Text(
-                    text = "←",
-                    fontSize = 22.sp,
-                    color = TextPrimary,
+                Box(
                     modifier = Modifier
+                        .align(Alignment.CenterStart)
+                        .size(48.dp)
                         .clickable(
                             interactionSource = remember { MutableInteractionSource() },
                             indication = null,
-                            onClick = onBack,
-                        )
-                        .padding(vertical = 12.dp, horizontal = 8.dp),
-                )
+                            onClick = { leaveRoom() },
+                        ),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(text = "←", fontSize = 22.sp, color = TextPrimary)
+                }
                 Text(
                     text = detail?.title?.ifEmpty { null } ?: "直播间",
                     fontSize = 16.sp,
@@ -501,26 +578,31 @@ fun LiveRoomScreen(
                     overflow = TextOverflow.Ellipsis,
                     textAlign = TextAlign.Center,
                     modifier = Modifier
-                        .weight(1f)
-                        .padding(vertical = 12.dp),
+                        .align(Alignment.Center)
+                        // 左右各留出超过 48dp 按钮区的边距，长标题省略而不压到按钮
+                        .padding(horizontal = 56.dp),
                 )
-                Text(
-                    text = "⋮",
-                    fontSize = 22.sp,
-                    color = TextPrimary,
+                Box(
                     modifier = Modifier
+                        .align(Alignment.CenterEnd)
+                        .size(48.dp)
                         .clickable(
                             interactionSource = remember { MutableInteractionSource() },
                             indication = null,
                             onClick = { activeSheet = RoomSheet.Menu },
-                        )
-                        .padding(vertical = 12.dp, horizontal = 8.dp),
-                )
+                        ),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(text = "⋮", fontSize = 22.sp, color = TextPrimary)
+                }
             }
         }
 
         // 视频区：竖屏高 = 屏宽 × 9/16（aspectRatio 由约束驱动，旋转时自动重算，
-        // 对应原 onConfigurationChanged 手动重算的语义）；全屏占满整屏。黑底由父容器承担
+        // 对应原 onConfigurationChanged 手动重算的语义）；全屏占满整屏。黑底由父容器承担。
+        // 进入直播间「先黑底、后出画面」属 mpv 异步初始化的正常表现
+        // （initialize/create/surface attach 均异步完成），不做伪加载动画，
+        // 黑底占位由本 Box 的 background(Color.Black) 承担。
         Box(
             modifier = (if (isFullScreen) {
                 Modifier.fillMaxSize()
@@ -792,6 +874,19 @@ private fun adjustVolume(context: Context, delta: Float, showHint: (String) -> U
     volume = volume.coerceIn(0, max)
     audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, volume, 0)
     showHint("音量 $volume/$max")
+}
+
+/* ---------- 弹幕诊断日志开关 ---------- */
+
+/**
+ * 弹幕持续性问题的临时诊断打点（tag 统一 "DanmuDebug"，android.util.Log.d）。
+ * 诊断日志，定位后移除：把 [enabled] 置 false 即全量静默；确认根因后删除全部打点。
+ * 打点位置：LiveRoomScreen 收集处、LiveRoomController.onWSMessage（采样）、
+ * DanmakuOverlayView 的 enqueue/addToTrack/动画启停。
+ */
+object DanmuDebug {
+    const val TAG = "DanmuDebug"
+    const val enabled = true
 }
 
 /* ---------- 标签集合（对应 Dart 默认标签顺序 + 条件过滤）---------- */
