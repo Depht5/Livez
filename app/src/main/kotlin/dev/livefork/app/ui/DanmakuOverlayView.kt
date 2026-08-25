@@ -21,7 +21,7 @@ import dev.livefork.app.di.ServiceContainer
 import dev.livefork.core.model.LiveMessage
 import dev.livefork.core.model.LiveMessageSpan
 import dev.livefork.core.model.LiveMessageType
-import dev.livefork.app.ui.screens.DanmuDebug
+import dev.livefork.app.ui.theme.ImageError
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -170,13 +170,7 @@ class DanmakuOverlayView @JvmOverloads constructor(
                 addToTrack(msg)
             }
         }
-        // 诊断日志，定位后移除：观察入队节奏与延迟队列积压
-        if (DanmuDebug.enabled) {
-            android.util.Log.d(
-                DanmuDebug.TAG,
-                "enqueue: pending=${pendingRunnables.size} delay=${totalDelay}ms text=${msg.message.take(12)}",
-            )
-        }
+        // 诊断日志已移除（弹幕轨道模型对齐 canvas_danmaku 后问题关闭）
         if (totalDelay == 0) {
             addToTrack(msg)
         } else {
@@ -187,10 +181,6 @@ class DanmakuOverlayView @JvmOverloads constructor(
 
     /** 清空轨道与未触发的延迟弹幕（切房间/关闭弹幕时调用）。 */
     fun clear() {
-        // 诊断日志，定位后移除：任何非预期 clear 都会清掉在飞弹幕，需核对调用方
-        if (DanmuDebug.enabled) {
-            android.util.Log.d(DanmuDebug.TAG, "clear: 在飞弹幕=${items.size} pending=${pendingRunnables.size}", Throwable("clear 调用栈"))
-        }
         pendingRunnables.forEach { mainHandler.removeCallbacks(it) }
         pendingRunnables.clear()
         items.clear()
@@ -257,16 +247,9 @@ class DanmakuOverlayView @JvmOverloads constructor(
                 break
             }
         }
-        val freeHit = target != -1
-        if (!freeHit) {
+        if (target == -1) {
             // 全满兜底：对齐原版 = 静默丢弃新弹幕，绝不顶掉在飞弹幕
             // （原版 selfSend/massiveMode 强插路径仅用于用户自发消息，聊天弹幕不适用）
-            if (DanmuDebug.enabled) {
-                android.util.Log.d(
-                    DanmuDebug.TAG,
-                    "addToTrack: drop(全满丢弃) freeHit=false items=${items.size} itemW=${itemWidth.toInt()} viewW=$width",
-                )
-            }
             return
         }
 
@@ -287,16 +270,6 @@ class DanmakuOverlayView @JvmOverloads constructor(
         )
         item.measuredWidth = itemWidth
 
-        // 诊断日志：freeHit=true 表示命中空闲判定入轨；false 只会走上面的丢弃分支。
-        // 真机复验预期：freeHit=true 占比接近 100%，drop(全满丢弃) 仅在瞬间洪峰出现，
-        // 且不再有任何"顶掉在飞弹幕"的行为。
-        if (DanmuDebug.enabled) {
-            val prev = items.lastOrNull { it.track == target }
-            android.util.Log.d(
-                DanmuDebug.TAG,
-                "addToTrack: track=$target freeHit=$freeHit prevX=${prev?.x?.toInt() ?: -1} newX=${item.x.toInt()} itemW=${item.measuredWidth.toInt()} viewW=$width",
-            )
-        }
         items.add(item)
         // 预取未加载的表情图（异步；就绪后动画循环自然重绘出现）
         preloadEmojis(segments)
@@ -470,11 +443,6 @@ class DanmakuOverlayView @JvmOverloads constructor(
 
     private fun ensureAnimator() {
         if (animator != null) return
-        // 诊断日志，定位后移除：动画重启打点——若弹幕断流后出现本日志而无后续
-        // addToTrack，说明是入队侧停了；有 addToTrack 却无本日志说明启动分支被跳过
-        if (DanmuDebug.enabled) {
-            android.util.Log.d(DanmuDebug.TAG, "animator: 启动")
-        }
         val a = ValueAnimator.ofFloat(0f, 1f)
         a.duration = Long.MAX_VALUE
         a.interpolator = LinearInterpolator()
@@ -493,11 +461,6 @@ class DanmakuOverlayView @JvmOverloads constructor(
     }
 
     private fun stopAnimator() {
-        // 诊断日志，定位后移除：动画停止打点（全轨道空时正常省电停止；若在飞弹幕
-        // 仍存在时出现，说明轨道被异常清空）
-        if (DanmuDebug.enabled) {
-            android.util.Log.d(DanmuDebug.TAG, "animator: 停止（剩余在飞弹幕=${items.size}）")
-        }
         animator?.cancel()
         animator = null
         lastFrameTime = 0L

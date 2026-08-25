@@ -667,16 +667,7 @@ class LiveRoomController(
                 _messages.value = _messages.value.drop(1)
             }
             _messages.value = _messages.value + msg
-            // 诊断日志，定位后移除：采样打印（每 25 条一次）——用于区分「控制器停发」
-            // 还是「UI 层停收」。若本日志持续增长而 DanmuDebug collect 日志停滞，
-            // 问题在 UI 收集侧；两者都停滞则是 WS 断流/过滤全吞。
             wsChatReceivedCount++
-            if (wsChatReceivedCount % 25 == 0) {
-                android.util.Log.d(
-                    "DanmuDebug",
-                    "onWSMessage: 累计chat=$wsChatReceivedCount 列表=${_messages.value.size}",
-                )
-            }
             if (!_liveStatus.value || (_isBackground && !allowBackgroundPlayback())) {
                 return
             }

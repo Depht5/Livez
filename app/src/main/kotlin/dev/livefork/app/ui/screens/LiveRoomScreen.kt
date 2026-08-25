@@ -376,9 +376,6 @@ fun LiveRoomScreen(
             // 切房间/刷新清空：重置游标并清轨（对齐原 danmakuLastCount 重置语义）
             danmakuLastEnqueued = null
             danmakuOverlay.clear()
-            if (DanmuDebug.enabled) {
-                android.util.Log.d(DanmuDebug.TAG, "collect: 列表清空 → 重置游标 + clear()")
-            }
             return@LaunchedEffect
         }
         val cursor = danmakuLastEnqueued
@@ -389,21 +386,9 @@ fun LiveRoomScreen(
             if (idx == -1) {
                 // 游标失联：保守跳过本帧（见上方注释），不清轨、不全量重放
                 danmakuLastEnqueued = list.last()
-                if (DanmuDebug.enabled) {
-                    android.util.Log.d(
-                        DanmuDebug.TAG,
-                        "collect: 游标失联！listSize=${list.size} → 跳过本帧，游标重置为列表尾",
-                    )
-                }
                 return@LaunchedEffect
             }
             idx + 1
-        }
-        if (DanmuDebug.enabled) {
-            android.util.Log.d(
-                DanmuDebug.TAG,
-                "collect: listSize=${list.size} cursorIdx=${if (cursor == null) -1 else list.indexOfLast { it === cursor }} enqueue=${(list.size - fromIndex).coerceAtLeast(0)}",
-            )
         }
         if (fromIndex < list.size) {
             for (msg in list.subList(fromIndex, list.size)) {
@@ -874,19 +859,6 @@ private fun adjustVolume(context: Context, delta: Float, showHint: (String) -> U
     volume = volume.coerceIn(0, max)
     audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, volume, 0)
     showHint("音量 $volume/$max")
-}
-
-/* ---------- 弹幕诊断日志开关 ---------- */
-
-/**
- * 弹幕持续性问题的临时诊断打点（tag 统一 "DanmuDebug"，android.util.Log.d）。
- * 诊断日志，定位后移除：把 [enabled] 置 false 即全量静默；确认根因后删除全部打点。
- * 打点位置：LiveRoomScreen 收集处、LiveRoomController.onWSMessage（采样）、
- * DanmakuOverlayView 的 enqueue/addToTrack/动画启停。
- */
-object DanmuDebug {
-    const val TAG = "DanmuDebug"
-    const val enabled = true
 }
 
 /* ---------- 标签集合（对应 Dart 默认标签顺序 + 条件过滤）---------- */
