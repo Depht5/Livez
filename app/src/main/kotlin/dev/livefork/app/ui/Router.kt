@@ -49,18 +49,6 @@ object Router {
         navigate("livertoom/${Uri.encode(site.id)}/${Uri.encode(roomId)}")
     }
 
-    /** 打开网页登录（WebView 登录页，后续接入）。 */
-    fun openWebLogin(target: String) {
-        Log.d("路由：打开网页登录 target=$target")
-        toast("网页登录功能将在后续版本接入")
-    }
-
-    /** 打开扫码登录（B 站）。 */
-    fun openQRLogin() {
-        Log.d("路由：打开扫码登录")
-        toast("扫码登录功能将在后续版本接入")
-    }
-
     /** 打开功能页（全部 key 均走 Compose 路由）。 */
     fun openFeature(key: String, title: String) {
         Log.d("路由：打开功能页 key=$key")

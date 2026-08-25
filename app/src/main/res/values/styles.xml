@@ -1,4 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- Theme.LiveApp：Manifest android:theme 在用，不可删。
+     parent 为 Theme.MaterialComponents.DayNight.NoActionBar —— 这是 material /
+     appcompat 依赖在 Batch 8 后仍保留的唯一原因（无 Kotlin 代码直接引用）。 -->
 <resources>
     <style name="Theme.LiveApp" parent="Theme.MaterialComponents.DayNight.NoActionBar">
         <item name="android:statusBarColor">@android:color/transparent</item>

@@ -63,9 +63,12 @@ dependencies {
 
     // AndroidX 基础
     implementation("androidx.core:core-ktx:1.13.1")
+    // appcompat / material：无 Kotlin 代码直接引用，但 res/values/styles.xml 的
+    // Theme.LiveApp parent 为 Theme.MaterialComponents.DayNight.NoActionBar（Manifest
+    // android:theme 在用），主题层级运行时需要这两个库 —— Batch 8 评估后保守保留。
     implementation("androidx.appcompat:appcompat:1.7.0")
     implementation("com.google.android.material:material:1.12.0")
-    implementation("androidx.constraintlayout:constraintlayout:2.1.4")
+    // constraintlayout：全仓零引用（Batch 8 grep 证据），删除。
 
     // 生命周期 / ViewModel（替代 GetX 状态）
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.6")
@@ -103,8 +106,8 @@ dependencies {
     // collectAsStateWithLifecycle：StateFlow 生命周期安全订阅（对应 Dart Rx Obx）
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.8.6")
 
-    // 下拉刷新（对应 Dart RefreshIndicator）
-    implementation("androidx.swiperefreshlayout:swiperefreshlayout:1.1.0")
+    // 下拉刷新：Compose 侧用 material3 PullToRefreshBox，swiperefreshlayout 全仓零引用
+    //（仅注释提及），Batch 8 删除。
 
     // 播放内核：libmpv（Jellyfin 维护的 Android 构建，mvp-android 同源 JNI API）
     // holdallsn 对应 Dart media_kit(mpv) 内核；本 AAR 自带 ffmpeg+mpv so（arm64-v8a）。

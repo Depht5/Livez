@@ -198,7 +198,8 @@ private fun MainShell(shell: ShellState) {
                     controller = shell.homeController,
                     gridStates = shell.homeGridStates,
                     onOpenLiveRoom = { site, roomId ->
-                        // 直播间仍为旧 Activity（Batch 7 才迁路由），入口保持 Router.openLiveRoom
+                        // 直播间已迁路由（Batch 7）：Router.openLiveRoom 导航至
+                        // livertoom/{siteId}/{roomId}（siteId/roomId 经 URL 编码）
                         Router.openLiveRoom(site, roomId)
                     },
                 )
