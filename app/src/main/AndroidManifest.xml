@@ -36,8 +36,6 @@
             android:exported="false"
             android:configChanges="orientation|screenSize|keyboardHidden|screenLayout"
             android:screenOrientation="portrait" />
-
-        <activity android:name=".ui.FollowUserActivity" android:exported="false" />
     </application>
 
 </manifest>

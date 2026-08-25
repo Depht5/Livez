@@ -36,6 +36,7 @@ import dev.livefork.app.ui.Router
 import dev.livefork.app.ui.screens.AccountScreen
 import dev.livefork.app.ui.screens.CategoryDetailScreen
 import dev.livefork.app.ui.screens.CategoryScreen
+import dev.livefork.app.ui.screens.FollowScreen
 import dev.livefork.app.ui.screens.HomeScreen
 import dev.livefork.app.ui.screens.HistoryScreen
 import dev.livefork.app.ui.screens.MineScreen
@@ -50,9 +51,9 @@ import dev.livefork.app.ui.theme.TextSecondary
  * 应用导航宿主 —— 对应 Dart `lib/routes/pages.dart` 的路由表。
  * 单 Activity 架构：所有页面为 NavHost 内的 composable 路由；
  * 已注册 main、category/{siteId}（分类详情）、settings（设置）、history（观看历史）、
- * search（搜索）、account（账号管理）、weblogin/{siteId}（网页登录）、qrlogin（B 站扫码），
- * 其余路由按批次逐步迁入：
- * follow / livertoom/{siteId}/{roomId}。
+ * search（搜索）、account（账号管理）、weblogin/{siteId}（网页登录）、qrlogin（B 站扫码）、
+ * follow（关注用户），其余路由按批次逐步迁入：
+ * livertoom/{siteId}/{roomId}。
  */
 @Composable
 fun AppNavHost(navController: NavHostController, modifier: Modifier = Modifier) {
@@ -129,8 +130,11 @@ fun AppNavHost(navController: NavHostController, modifier: Modifier = Modifier) 
             QRLoginScreen(onBack = { navController.popBackStack() })
         }
 
+        // 关注用户（Batch 6）：控制器在 Screen 内 remember 创建、出栈销毁；
+        // 底栏重按关注 Tab 的刷新由 FollowUserController 内部订阅处理，无需路由层介入
+        composable("follow") { FollowScreen() }
+
         // ===== 后续批次扩展的路由清单 =====
-        // composable("follow") { ... }               // 关注（Batch 6）
         // composable("livertoom/{siteId}/{roomId}") { ... } // 直播间（Batch 7）
     }
 }
