@@ -3,7 +3,9 @@ package dev.livefork.app
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.ui.Modifier
 import androidx.navigation.compose.rememberNavController
 import dev.livefork.app.ui.Router
 import dev.livefork.app.ui.nav.AppNavHost
@@ -29,7 +31,11 @@ class MainActivity : ComponentActivity() {
                     Router.navController = navController
                     onDispose { Router.navController = null }
                 }
-                AppNavHost(navController)
+                // 根级填满窗口（NavHost 内部包内容测量，必须由根约束撑起）
+                AppNavHost(
+                    navController = navController,
+                    modifier = Modifier.fillMaxSize(),
+                )
             }
         }
     }

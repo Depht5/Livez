@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.lazy.grid.LazyGridState
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.Text
@@ -68,7 +69,9 @@ fun AppNavHost(navController: NavHostController, modifier: Modifier = Modifier) 
     NavHost(
         navController = navController,
         startDestination = "main",
-        modifier = modifier,
+        // 必须显式填满：否则 NavHost 包内容测量，竖屏壳层高度塌缩为底栏高度
+        //（实测症状：内容区高度 0、底栏被垂直居中）
+        modifier = modifier.fillMaxSize(),
     ) {
         // 三 Tab 壳（首页/分类/我的为内部状态切换，非独立路由）
         composable("main") { MainShell(shell) }
@@ -252,7 +255,15 @@ private fun MainShell(shell: ShellState) {
 private fun MainBottomBar(currentIndex: Int, onSelect: (Int) -> Unit) {
     val titles = listOf("首页", "分类", "我的")
 
-    NavigationBar(containerColor = Color.White, tonalElevation = 0.dp) {
+    // 必须固定高度：M3 NavigationBar 自身不限定高度（默认 80dp 观感来自 NavigationBarItem
+    // 的内置高度）；自定义 item 用 fillMaxHeight 时会把底栏撑满整个 Column，
+    // 导致内容区 weight=1f 分到 0 高度（实测：全屏只剩垂直居中的底栏、内容空白）。
+    // 56dp 对齐旧版 BottomNavigationView。
+    NavigationBar(
+        containerColor = Color.White,
+        tonalElevation = 0.dp,
+        modifier = Modifier.height(56.dp),
+    ) {
         titles.forEachIndexed { index, title ->
             // NavigationBar 的 content 即 RowScope，item 直接以扩展函数放置
             MainBottomBarItem(
