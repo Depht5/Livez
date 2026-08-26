@@ -10,7 +10,9 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.height
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
@@ -18,7 +20,6 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -26,7 +27,6 @@ import dev.livefork.app.modules.mine.account.bilibili.BiliBiliWebLoginController
 import dev.livefork.app.modules.mine.account.douyin.DouyinWebLoginController
 import dev.livefork.app.ui.Router
 import dev.livefork.app.ui.theme.ImageError
-import dev.livefork.app.ui.theme.LiveRed
 
 /**
  * 网页登录页（Compose 版）—— 对应 Dart `web_login_page.dart`（B 站/抖音复用），
@@ -120,14 +120,14 @@ fun WebLoginScreen(
         }
     }
 
-    Column(modifier = modifier.fillMaxSize().background(Color.White)) {
+    Column(modifier = modifier.fillMaxSize().background(MaterialTheme.colorScheme.surface).statusBarsPadding()) {
         // 顶部进度条：3dp 高度对齐现版 horizontal ProgressBar（红系进度 + 浅灰轨道）
         Box(modifier = Modifier.fillMaxWidth().height(3.dp).background(ImageError)) {
             Box(
                 modifier = Modifier
                     .fillMaxWidth(progress / 100f)
                     .height(3.dp)
-                    .background(LiveRed),
+                    .background(MaterialTheme.colorScheme.primary),
             )
         }
 

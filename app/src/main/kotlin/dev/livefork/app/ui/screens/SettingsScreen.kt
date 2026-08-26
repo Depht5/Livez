@@ -9,9 +9,11 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -23,7 +25,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.sp
 import androidx.core.app.ActivityCompat
@@ -35,16 +36,12 @@ import dev.livefork.app.ui.Router
 import dev.livefork.app.ui.components.SettingClickRow
 import dev.livefork.app.ui.components.SettingSectionTitle
 import dev.livefork.app.ui.components.SettingSwitchRow
-import dev.livefork.app.ui.theme.CardTitle
-
-/** 页面底色（对应旧版 SettingsActivity 的 #F5F5F5，仅本页使用）。 */
-private val SettingsBackground = Color(0xFFF5F5F5)
 
 /**
  * 设置页（Compose 版）—— 对应 Dart `settings_page.dart`（核心播放/弹幕/画质项），
  * 替换现版 View 体系 `ui/SettingsActivity.kt`，注册为 "settings" 路由。
  *
- * 结构镜像：#F5F5F5 底 + 可滚动列 + 四个分组（播放/弹幕/画质/其他），
+ * 结构镜像：surfaceContainerLow 底（对应原 #F5F5F5）+ 可滚动列 + 四个分组（播放/弹幕/画质/其他），
  * 行组件复用 ui/components/SettingRows.kt（Compose 版）。
  * 全部条目直接绑定 [AppSettingsController] 的 StateFlow 与 setter；
  * 声明式订阅自动刷新行副标题，替代旧版「改档位后整页重建」的简化实现。
@@ -74,6 +71,8 @@ fun SettingsScreen(modifier: Modifier = Modifier) {
     val qualityLevel by settings.qualityLevel.collectAsStateWithLifecycle()
     val logEnable by settings.logEnable.collectAsStateWithLifecycle()
     val contributionRankEnable by settings.contributionRankEnable.collectAsStateWithLifecycle()
+    // 动态取色开关（外观分组；API < 31 无 Monet，禁用并提示）
+    val isDynamic by settings.isDynamic.collectAsStateWithLifecycle()
 
     // 单选对话框显隐
     var showMpvProfileDialog by remember { mutableStateOf(false) }
@@ -87,9 +86,26 @@ fun SettingsScreen(modifier: Modifier = Modifier) {
     Column(
         modifier = modifier
             .fillMaxSize()
-            .background(SettingsBackground)
+            .background(MaterialTheme.colorScheme.surfaceContainerLow)
+            .statusBarsPadding()
             .verticalScroll(rememberScrollState()),
     ) {
+        // ===== 外观（Material 3 动态取色）=====
+        SettingSectionTitle("外观")
+
+        SettingSwitchRow(
+            title = "动态取色",
+            subtitle = if (Build.VERSION.SDK_INT >= 31) {
+                "跟随系统壁纸提取主题色；关闭使用 M3 默认色板"
+            } else {
+                "动态取色仅 Android 12+ 支持，当前系统使用 M3 默认色板"
+            },
+            checked = isDynamic,
+            // Android 12 以下无 Monet API，开关禁用（主副标题灰显）
+            enabled = Build.VERSION.SDK_INT >= 31,
+            onChange = { settings.setIsDynamic(it) },
+        )
+
         // ===== 播放 =====
         SettingSectionTitle("播放")
 
@@ -290,7 +306,7 @@ private fun SingleChoiceDialog(
                         modifier = Modifier.fillMaxWidth(),
                     ) {
                         RadioButton(selected = value == selectedValue, onClick = { onSelect(value) })
-                        Text(text = label, fontSize = 15.sp, color = CardTitle)
+                        Text(text = label, fontSize = 15.sp, color = MaterialTheme.colorScheme.onSurface)
                     }
                 }
             }

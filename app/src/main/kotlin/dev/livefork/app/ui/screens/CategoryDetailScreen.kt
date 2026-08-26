@@ -2,13 +2,14 @@ package dev.livefork.app.ui.screens
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.grid.LazyGridState
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -16,7 +17,6 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -26,8 +26,6 @@ import dev.livefork.app.app.Sites
 import dev.livefork.app.modules.category.detail.CategoryDetailController
 import dev.livefork.app.ui.Router
 import dev.livefork.app.ui.components.PagedRoomGrid
-import dev.livefork.app.ui.theme.CategoryBlue
-import dev.livefork.app.ui.theme.TextPrimary
 import dev.livefork.core.model.LiveSubCategory
 
 /**
@@ -66,7 +64,7 @@ fun CategoryDetailScreen(
     }
     if (site == null) {
         // 空白帧等待返回动画（下一帧即 popBackStack）
-        Box(modifier = modifier.fillMaxSize().background(Color.White))
+        Box(modifier = modifier.fillMaxSize().background(MaterialTheme.colorScheme.surface))
         return
     }
 
@@ -82,7 +80,7 @@ fun CategoryDetailScreen(
         onDispose { controller.dispose() }
     }
 
-    Column(modifier = modifier.fillMaxSize().background(Color.White)) {
+    Column(modifier = modifier.fillMaxSize().background(MaterialTheme.colorScheme.surface).statusBarsPadding()) {
         DetailTitleBar(title = categoryName.ifEmpty { "分类详情" }, onBack = onBack)
         PagedRoomGrid(
             listController = controller,
@@ -91,7 +89,7 @@ fun CategoryDetailScreen(
                 // 直播间仍为旧 Activity（Batch 7 才迁路由），入口保持 Router.openLiveRoom
                 Router.openLiveRoom(site, roomId)
             },
-            indicatorColor = CategoryBlue,
+            indicatorColor = MaterialTheme.colorScheme.secondary,
             // 错误/空态文案对齐现版 CategoryDetailActivity（区别于 HomeScreen 默认文案）
             errorTextBuilder = { msg -> "加载失败：" + msg.trim().ifEmpty { "未知错误" } + "\n点击刷新" },
             emptyText = "暂无内容\n点击刷新",
@@ -101,34 +99,30 @@ fun CategoryDetailScreen(
 }
 
 /**
- * 顶部栏 —— 对齐现版布局：返回键（22sp #333）+ 居中标题（16sp medium 单行省略）+
+ * 顶部栏 —— 对齐现版布局：返回键（22sp onSurface）+ 居中标题（16sp medium 单行省略）+
  * 右侧占位使标题居中。
  */
 @Composable
 private fun DetailTitleBar(title: String, onBack: () -> Unit) {
     Row(
         modifier = Modifier
-            .background(Color.White)
+            .background(MaterialTheme.colorScheme.surface)
             .padding(horizontal = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(
             text = "←",
             fontSize = 22.sp,
-            color = TextPrimary,
+            color = MaterialTheme.colorScheme.onSurface,
             modifier = Modifier
-                .clickable(
-                    interactionSource = remember { MutableInteractionSource() },
-                    indication = null,
-                    onClick = onBack,
-                )
+                .clickable(onClick = onBack)
                 .padding(vertical = 12.dp, horizontal = 8.dp),
         )
         Text(
             text = title,
             fontSize = 16.sp,
             fontWeight = FontWeight.Medium,
-            color = TextPrimary,
+            color = MaterialTheme.colorScheme.onSurface,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
             textAlign = TextAlign.Center,

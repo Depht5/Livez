@@ -3,13 +3,13 @@ package dev.livefork.app.ui.screens
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -20,6 +20,7 @@ import androidx.compose.foundation.layout.wrapContentSize
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.PagerState
 import androidx.compose.foundation.pager.rememberPagerState
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ScrollableTabRow
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -33,7 +34,6 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -42,9 +42,6 @@ import dev.livefork.app.app.EventBus
 import dev.livefork.app.app.Site
 import dev.livefork.app.modules.home.HomeController
 import dev.livefork.app.ui.components.PagedRoomGrid
-import dev.livefork.app.ui.theme.CategoryBlue
-import dev.livefork.app.ui.theme.LiveRed
-import dev.livefork.app.ui.theme.TextSecondary
 import kotlin.math.floor
 import kotlinx.coroutines.launch
 
@@ -124,7 +121,7 @@ fun HomeScreen(
         onDispose { job.cancel() }
     }
 
-    Column(modifier = modifier.fillMaxSize().background(Color.White)) {
+    Column(modifier = modifier.fillMaxSize().background(MaterialTheme.colorScheme.surface).statusBarsPadding()) {
         SiteTabRow(
             sites = sites,
             selectedIndex = siteIndex,
@@ -145,12 +142,12 @@ fun HomeScreen(
             val listController = controller.homeListControllers[pageSite.id]
             val gridState = gridStates[pageSite.id]
             if (listController != null && gridState != null) {
-                // 推荐网格：三态覆盖由 PagedRoomGrid 公共组件承载（指示器色 #3498DB）
+                // 推荐网格：三态覆盖由 PagedRoomGrid 公共组件承载（指示器色跟随 secondary）
                 PagedRoomGrid(
                     listController = listController,
                     gridState = gridState,
                     onOpenRoom = { roomId -> onOpenLiveRoom(pageSite, roomId) },
-                    indicatorColor = CategoryBlue,
+                    indicatorColor = MaterialTheme.colorScheme.secondary,
                     modifier = Modifier.fillMaxSize(),
                 )
             } else {
@@ -182,11 +179,10 @@ private fun SiteTabRow(
 ) {
     ScrollableTabRow(
         selectedTabIndex = selectedIndex,
-        containerColor = Color.White,
+        containerColor = MaterialTheme.colorScheme.surface,
         // Tab 内容左右留白（对应 Dart labelPadding H20）；起始边距取小值贴近左缘（对齐 GRAVITY_START）
         edgePadding = 12.dp,
-        // 指示条颜色对齐现版 setSelectedTabIndicatorColor(#FF3F4B)，宽度随标签内容
-        //（对齐 isTabIndicatorFullWidth = false）
+        // 指示条颜色跟随 primary（M3），宽度随标签内容（对齐 isTabIndicatorFullWidth = false）
         indicator = { tabPositions ->
             // 连续页位置：整数部分 = 当前页，小数部分 = 滑动进度（可为负——往回滑时
             // currentPage 已进位而 offset 为负，floor 后仍落在正确的相邻区间）
@@ -204,7 +200,7 @@ private fun SiteTabRow(
                     .offset(x = lerp(leftRect.left.value, rightRect.left.value, fraction).dp)
                     .width(lerp(leftRect.width.value, rightRect.width.value, fraction).dp)
                     .height(3.dp)
-                    .background(LiveRed),
+                    .background(MaterialTheme.colorScheme.primary),
             )
         },
         // 现版 TabLayout 无底部分隔线，去掉 M3 默认 divider
@@ -214,10 +210,7 @@ private fun SiteTabRow(
             val selected = index == selectedIndex
             Row(
                 modifier = Modifier
-                    .clickable(
-                        interactionSource = remember { MutableInteractionSource() },
-                        indication = null, // 移除点击涟漪
-                    ) { onSelect(index) }
+                    .clickable { onSelect(index) }
                     .padding(horizontal = 20.dp, vertical = 12.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
@@ -231,8 +224,12 @@ private fun SiteTabRow(
                 Text(
                     text = site.name,
                     fontSize = 16.sp,
-                    // 手动切色：选中 #FF3F4B / 未选中 #666666（对齐 setTabTextColors）
-                    color = if (selected) LiveRed else TextSecondary,
+                    // 手动切色：选中 primary / 未选中 onSurfaceVariant（对齐 setTabTextColors）
+                    color = if (selected) {
+                        MaterialTheme.colorScheme.primary
+                    } else {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    },
                 )
             }
         }

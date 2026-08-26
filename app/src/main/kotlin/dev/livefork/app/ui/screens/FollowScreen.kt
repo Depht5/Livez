@@ -5,13 +5,13 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.horizontalScroll
-import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -23,6 +23,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -35,7 +36,6 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -50,21 +50,8 @@ import dev.livefork.app.modules.follow_user.FollowGroupOption
 import dev.livefork.app.modules.follow_user.FollowUserController
 import dev.livefork.app.ui.Router
 import dev.livefork.app.ui.components.NetImage
-import dev.livefork.app.ui.theme.CardTitle
-import dev.livefork.app.ui.theme.LiveRed
-import dev.livefork.app.ui.theme.TextDisabled
-import dev.livefork.app.ui.theme.TextSecondary
-import dev.livefork.app.ui.theme.TextTertiary
+import dev.livefork.app.ui.theme.LiveIndicatorRed
 import dev.livefork.core.model.FollowRefreshProgress
-
-/** 页面底色（对齐现版 FollowUserActivity 根布局 #F5F5F5，仅本页使用）。 */
-private val FollowBackground = Color(0xFFF5F5F5)
-
-/** 未选中标签底色（对齐现版 chip 背景 #F0F0F0，仅本页使用）。 */
-private val TagChipBackground = Color(0xFFF0F0F0)
-
-/** 刷新进度卡片底色（对应 Dart _buildRefreshProgress 的 surfaceContainerHighest 近似灰）。 */
-private val ProgressCardBackground = Color(0xFFE8E8E8)
 
 /**
  * 关注用户页（Compose 版）—— 对应 Dart `follow_user_page.dart`，
@@ -120,7 +107,7 @@ fun FollowScreen(modifier: Modifier = Modifier) {
     // 任一变化驱动本组合重组，此处随重组重算（平台分组的站点项随之增减）。
     val groupOptions = controller.groupOptions
 
-    Column(modifier = modifier.fillMaxSize().background(FollowBackground)) {
+    Column(modifier = modifier.fillMaxSize().background(MaterialTheme.colorScheme.surfaceContainerLow).statusBarsPadding()) {
         FollowTopBar(
             modeLabel = if (groupMode == FollowGroupMode.liveStatus) "状态分组" else "平台分组",
             onToggleMode = {
@@ -147,7 +134,7 @@ fun FollowScreen(modifier: Modifier = Modifier) {
 
         RefreshProgressCard(progress = refreshProgress)
 
-        LazyColumn(modifier = Modifier.fillMaxSize().background(Color.White)) {
+        LazyColumn(modifier = Modifier.fillMaxSize().background(MaterialTheme.colorScheme.surface)) {
             itemsIndexed(
                 items = list,
                 key = { _, item ->
@@ -177,7 +164,7 @@ fun FollowScreen(modifier: Modifier = Modifier) {
                         pendingUnfollow = null
                         controller.removeItem(target)
                     },
-                ) { Text(text = "取消关注", color = LiveRed) }
+                ) { Text(text = "取消关注", color = MaterialTheme.colorScheme.error) }
             },
             dismissButton = {
                 TextButton(onClick = { pendingUnfollow = null }) { Text(text = "取消") }
@@ -212,20 +199,16 @@ private fun FollowTopBar(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .background(Color.White)
+            .background(MaterialTheme.colorScheme.surface)
             .padding(start = 12.dp, top = 8.dp, end = 12.dp, bottom = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(
             text = modeLabel,
             fontSize = 13.sp,
-            color = LiveRed,
+            color = MaterialTheme.colorScheme.primary,
             modifier = Modifier
-                .clickable(
-                    interactionSource = remember { MutableInteractionSource() },
-                    indication = null,
-                    onClick = onToggleMode,
-                )
+                .clickable(onClick = onToggleMode)
                 .padding(horizontal = 8.dp, vertical = 6.dp),
         )
         Spacer(modifier = Modifier.width(4.dp))
@@ -233,30 +216,26 @@ private fun FollowTopBar(
             value = keyword,
             onValueChange = onKeywordChange,
             modifier = Modifier.weight(1f),
-            placeholder = { Text(text = "搜索关注的用户", fontSize = 14.sp, color = TextDisabled) },
-            textStyle = TextStyle(fontSize = 14.sp, color = CardTitle),
+            placeholder = { Text(text = "搜索关注的用户", fontSize = 14.sp, color = MaterialTheme.colorScheme.outline) },
+            textStyle = TextStyle(fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurface),
             singleLine = true,
         )
         Spacer(modifier = Modifier.width(8.dp))
         Text(
             text = "刷新",
             fontSize = 13.sp,
-            color = Color.White,
+            color = MaterialTheme.colorScheme.surface,
             modifier = Modifier
-                .background(LiveRed)
-                .clickable(
-                    interactionSource = remember { MutableInteractionSource() },
-                    indication = null,
-                    onClick = onRefreshAll,
-                )
+                .background(MaterialTheme.colorScheme.primary)
+                .clickable(onClick = onRefreshAll)
                 .padding(horizontal = 10.dp, vertical = 6.dp),
         )
     }
 }
 
 /**
- * 分组标签栏：横向滚动 chip 行（视觉照搬现版 tagBar——选中红底白字、
- * 未选 #F0F0F0 底 #666 字，内边距 14/6、间距 8dp）。
+ * 分组标签栏：横向滚动 chip 行（M3 token：选中 primary 底 surface 字、
+ * 未选 surfaceContainerHigh 底 onSurfaceVariant 字，内边距 14/6、间距 8dp）。
  * 「全部」选项始终在首位；状态分组含 直播中/未开播，平台分组含各站点。
  */
 @Composable
@@ -278,14 +257,12 @@ private fun TagChipBar(
                 text = option.title,
                 fontSize = 13.sp,
                 fontWeight = if (selected) FontWeight.Medium else FontWeight.Normal,
-                color = if (selected) Color.White else TextSecondary,
+                color = if (selected) MaterialTheme.colorScheme.surface else MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier
-                    .background(if (selected) LiveRed else TagChipBackground)
-                    .clickable(
-                        interactionSource = remember { MutableInteractionSource() },
-                        indication = null,
-                        onClick = { onSelect(option) },
+                    .background(
+                        if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceContainerHigh
                     )
+                    .clickable { onSelect(option) }
                     .padding(horizontal = 14.dp, vertical = 6.dp),
             )
         }
@@ -306,33 +283,33 @@ private fun RefreshProgressCard(progress: FollowRefreshProgress) {
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = 8.dp, vertical = 4.dp)
-            .background(ProgressCardBackground, RoundedCornerShape(8.dp))
+            .background(MaterialTheme.colorScheme.surfaceContainerHighest, RoundedCornerShape(8.dp))
             .padding(12.dp),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(
                 text = progress.stage,
                 fontSize = 14.sp,
-                color = CardTitle,
+                color = MaterialTheme.colorScheme.onSurface,
                 modifier = Modifier.weight(1f),
             )
-            Text(text = "${progress.resolvedCount}/${progress.total}", fontSize = 13.sp, color = CardTitle)
+            Text(text = "${progress.resolvedCount}/${progress.total}", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurface)
         }
         if (progress.detail.isNotEmpty()) {
             Spacer(modifier = Modifier.height(4.dp))
-            Text(text = progress.detail, fontSize = 12.sp, color = TextTertiary)
+            Text(text = progress.detail, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
         Spacer(modifier = Modifier.height(8.dp))
         if (progress.total > 0) {
             LinearProgressIndicator(
                 progress = { progress.percent.toFloat() },
                 modifier = Modifier.fillMaxWidth().height(6.dp),
-                color = LiveRed,
+                color = MaterialTheme.colorScheme.primary,
             )
         } else {
             LinearProgressIndicator(
                 modifier = Modifier.fillMaxWidth().height(6.dp),
-                color = LiveRed,
+                color = MaterialTheme.colorScheme.primary,
             )
         }
     }
@@ -342,7 +319,7 @@ private fun RefreshProgressCard(progress: FollowRefreshProgress) {
  * 单条关注行：44dp 圆形头像（NetImage isRound）+ 标题（15sp #222 单行省略）+
  * 副标题「站点 · 房间标题」（无房间标题时回退标签名，12sp #888）+
  * 直播状态徽标（直播中红字 / 其余灰字，12sp）。
- * 点击进直播间、长按弹取消关注确认；去涟漪对齐整体简洁风格（旧版纯文本行本无涟漪）。
+ * 点击进直播间、长按弹取消关注确认。
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -355,10 +332,8 @@ private fun FollowItemRow(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .background(Color.White)
+            .background(MaterialTheme.colorScheme.surface)
             .combinedClickable(
-                interactionSource = remember { MutableInteractionSource() },
-                indication = null,
                 onClick = onClick,
                 onLongClick = onLongClick,
             )
@@ -375,14 +350,14 @@ private fun FollowItemRow(
             Text(
                 text = item.userName,
                 fontSize = 15.sp,
-                color = CardTitle,
+                color = MaterialTheme.colorScheme.onSurface,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
             Text(
                 text = "${site?.name ?: item.siteId} · ${item.roomTitle.ifEmpty { item.tag }}",
                 fontSize = 12.sp,
-                color = TextTertiary,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
@@ -395,7 +370,7 @@ private fun FollowItemRow(
                 else -> "未开播"
             },
             fontSize = 12.sp,
-            color = if (item.liveStatus == 2) LiveRed else TextDisabled,
+            color = if (item.liveStatus == 2) LiveIndicatorRed else MaterialTheme.colorScheme.outline,
         )
     }
 }

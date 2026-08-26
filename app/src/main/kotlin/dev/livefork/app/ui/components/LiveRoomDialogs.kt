@@ -10,6 +10,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Slider
@@ -30,9 +31,6 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.livefork.app.di.ServiceContainer
 import dev.livefork.app.modules.live_room.LiveRoomController
 import dev.livefork.app.ui.Router
-import dev.livefork.app.ui.theme.LiveRed
-import dev.livefork.app.ui.theme.TextPrimary
-import dev.livefork.app.ui.theme.TextTertiary
 import kotlin.math.roundToInt
 
 /** ⋮ 菜单条目（对齐旧 LiveRoomSheets.showMenuSheet 的 items 顺序与文案）。 */
@@ -71,7 +69,7 @@ fun RoomMenuDialog(
 ) {
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text(text = "直播间菜单", fontSize = 17.sp, color = TextPrimary) },
+        title = { Text(text = "直播间菜单", fontSize = 17.sp, color = MaterialTheme.colorScheme.onSurface) },
         confirmButton = {},
         text = {
             Column {
@@ -79,7 +77,7 @@ fun RoomMenuDialog(
                     Text(
                         text = item,
                         fontSize = 15.sp,
-                        color = TextPrimary,
+                        color = MaterialTheme.colorScheme.onSurface,
                         modifier = Modifier
                             .fillMaxWidth()
                             .clickable { onAction(index) }
@@ -106,7 +104,7 @@ fun QualityDialog(
 ) {
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text(text = "清晰度", fontSize = 17.sp, color = TextPrimary) },
+        title = { Text(text = "清晰度", fontSize = 17.sp, color = MaterialTheme.colorScheme.onSurface) },
         confirmButton = {},
         text = {
             Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
@@ -119,7 +117,7 @@ fun QualityDialog(
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         RadioButton(selected = index == checkedIndex, onClick = { onSelect(index) })
-                        Text(text = name, fontSize = 15.sp, color = TextPrimary)
+                        Text(text = name, fontSize = 15.sp, color = MaterialTheme.colorScheme.onSurface)
                     }
                 }
             }
@@ -140,7 +138,7 @@ fun LineDialog(
 ) {
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text(text = "播放线路", fontSize = 17.sp, color = TextPrimary) },
+        title = { Text(text = "播放线路", fontSize = 17.sp, color = MaterialTheme.colorScheme.onSurface) },
         confirmButton = {},
         text = {
             Column {
@@ -153,7 +151,7 @@ fun LineDialog(
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         RadioButton(selected = index == checkedIndex, onClick = { onSelect(index) })
-                        Text(text = "线路${index + 1}", fontSize = 15.sp, color = TextPrimary)
+                        Text(text = "线路${index + 1}", fontSize = 15.sp, color = MaterialTheme.colorScheme.onSurface)
                     }
                 }
             }
@@ -280,7 +278,7 @@ fun LiveSettingsSheet(
             Text(
                 text = "退出时长：${minutes.coerceIn(5, 180)} 分钟",
                 fontSize = 13.sp,
-                color = TextTertiary,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(top = 12.dp),
             )
             Slider(
@@ -335,14 +333,14 @@ fun DanmuShieldSheet(onDismiss: () -> Unit) {
             Text(
                 text = "已屏蔽关键词 ${shieldList.size} 个：",
                 fontSize = 13.sp,
-                color = TextTertiary,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(top = 12.dp),
             )
             for (word in shieldList) {
                 Text(
                     text = "✕ $word",
                     fontSize = 13.sp,
-                    color = TextPrimary,
+                    color = MaterialTheme.colorScheme.onSurface,
                     modifier = Modifier
                         .clickable { settings.removeShieldList(word) }
                         .padding(horizontal = 8.dp, vertical = 4.dp),
@@ -377,7 +375,7 @@ private fun SheetTitle(text: String) {
     Text(
         text = text,
         fontSize = 16.sp,
-        color = TextPrimary,
+        color = MaterialTheme.colorScheme.onSurface,
         modifier = Modifier.padding(bottom = 4.dp),
     )
 }
@@ -396,14 +394,14 @@ private fun SheetSwitchRow(
         Text(
             text = label,
             fontSize = 14.sp,
-            color = TextPrimary,
+            color = MaterialTheme.colorScheme.onSurface,
             modifier = Modifier.weight(1f),
         )
         Switch(
             checked = checked,
             onCheckedChange = onChange,
             // 选中态用主色红系，与全局配色一致（对齐 SettingRows 的处理）
-            colors = SwitchDefaults.colors(checkedTrackColor = LiveRed),
+            colors = SwitchDefaults.colors(checkedTrackColor = MaterialTheme.colorScheme.primary),
         )
     }
 }
@@ -417,7 +415,7 @@ private fun SheetClickRow(
     Text(
         text = label,
         fontSize = 14.sp,
-        color = TextPrimary,
+        color = MaterialTheme.colorScheme.onSurface,
         modifier = Modifier
             .fillMaxWidth()
             .clickable(onClick = onClick)
@@ -447,10 +445,10 @@ private fun SheetSliderRow(
         Text(
             text = label,
             fontSize = 14.sp,
-            color = TextPrimary,
+            color = MaterialTheme.colorScheme.onSurface,
             modifier = Modifier.weight(1f),
         )
-        Text(text = display, fontSize = 13.sp, color = TextTertiary)
+        Text(text = display, fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
     Slider(
         value = value.toFloat().coerceIn(min.toFloat(), max.toFloat()),

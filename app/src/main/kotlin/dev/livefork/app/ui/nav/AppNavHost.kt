@@ -6,16 +6,14 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.RowScope
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.lazy.grid.LazyGridState
 import androidx.compose.material3.NavigationBar
+import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -24,9 +22,7 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.navigation.NavHostController
@@ -51,8 +47,6 @@ import dev.livefork.app.ui.screens.QRLoginScreen
 import dev.livefork.app.ui.screens.SearchScreen
 import dev.livefork.app.ui.screens.SettingsScreen
 import dev.livefork.app.ui.screens.WebLoginScreen
-import dev.livefork.app.ui.theme.TextPrimary
-import dev.livefork.app.ui.theme.TextSecondary
 
 /**
  * 应用导航宿主 —— 对应 Dart `lib/routes/pages.dart` 的路由表。
@@ -270,59 +264,29 @@ private fun MainShell(shell: ShellState) {
 }
 
 /**
- * 底部导航栏：白底、无阴影（tonalElevation = 0）、去涟漪。
- *
- * 取舍说明：M3 NavigationBar 自带 indicator 药丸与固定图标槽位，而现版
- * BottomNavigationView 的菜单项只有文字（res/menu/main_nav.xml 无 icon），
- * 故 item 区域改放自定义朴素布局：纯文字、选中黑字（#333）/未选灰字（#666）、
- * 点击无涟漪，视觉对齐现版的简洁样式而非 M3 默认观感。
+ * 底部导航栏 —— Material 3 默认观感（task 08-26-material3-ui-restyle）：
+ * NavigationBarItem + 药丸选中指示器 + ripple 状态层，颜色跟随 colorScheme
+ * （选中 onSecondaryContainer / 未选中 onSurfaceVariant，M3 语义）。
+ * 移除旧版「白底、纯文字、无 indicator、去涟漪」的自定义观感
+ * （main_nav.xml 无 icon，故 icon 位放平台文字、label 置空）。
+ * 高度：按用户反馈定为 60dp（原项目 56dp 基础上调 4dp 微调；tab 下移 4dp 保留）。
+ * 底部导航条 insets 由 NavigationBar 默认 windowInsets 处理。
  */
 @Composable
 private fun MainBottomBar(currentIndex: Int, onSelect: (Int) -> Unit) {
     val titles = listOf("首页", "分类", "我的")
 
-    // 必须固定高度：M3 NavigationBar 自身不限定高度（默认 80dp 观感来自 NavigationBarItem
-    // 的内置高度）；自定义 item 用 fillMaxHeight 时会把底栏撑满整个 Column，
-    // 导致内容区 weight=1f 分到 0 高度（实测：全屏只剩垂直居中的底栏、内容空白）。
-    // 56dp 对齐旧版 BottomNavigationView。
-    NavigationBar(
-        containerColor = Color.White,
-        tonalElevation = 0.dp,
-        modifier = Modifier.height(56.dp),
-    ) {
+    NavigationBar(modifier = Modifier.height(60.dp)) {
         titles.forEachIndexed { index, title ->
-            // NavigationBar 的 content 即 RowScope，item 直接以扩展函数放置
-            MainBottomBarItem(
-                title = title,
+            NavigationBarItem(
                 selected = currentIndex == index,
                 onClick = { onSelect(index) },
+                modifier = Modifier.offset(y = 4.dp),
+                icon = {
+                    Text(text = title, fontSize = 13.sp)
+                },
+                label = null,
             )
         }
-    }
-}
-
-/** 单个底栏 item：等分宽度、居中文字、去涟漪点击。 */
-@Composable
-private fun RowScope.MainBottomBarItem(
-    title: String,
-    selected: Boolean,
-    onClick: () -> Unit,
-) {
-    Box(
-        modifier = Modifier
-            .weight(1f)
-            .fillMaxHeight()
-            .clickable(
-                interactionSource = remember { MutableInteractionSource() },
-                indication = null, // 移除点击涟漪（对齐现版 itemRippleColor = TRANSPARENT）
-                onClick = onClick,
-            ),
-        contentAlignment = Alignment.Center,
-    ) {
-        Text(
-            text = title,
-            fontSize = 14.sp,
-            color = if (selected) TextPrimary else TextSecondary,
-        )
     }
 }

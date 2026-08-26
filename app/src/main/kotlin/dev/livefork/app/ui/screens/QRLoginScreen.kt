@@ -7,7 +7,9 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -15,7 +17,6 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -25,8 +26,6 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.livefork.app.modules.mine.account.bilibili.BiliBiliQRLoginController
 import dev.livefork.app.modules.mine.account.bilibili.QRStatus
 import dev.livefork.app.ui.Router
-import dev.livefork.app.ui.theme.CardTitle
-import dev.livefork.app.ui.theme.TextTertiary
 
 /**
  * B 站扫码登录页（Compose 版）—— 对应 Dart `qr_login_page.dart`，
@@ -80,11 +79,11 @@ fun QRLoginScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
         QRStatus.failed -> "二维码加载失败"
     }
 
-    Column(modifier = modifier.fillMaxSize().background(Color.White)) {
+    Column(modifier = modifier.fillMaxSize().background(MaterialTheme.colorScheme.surface).statusBarsPadding()) {
         Text(
             text = "B 站扫码登录",
             fontSize = 18.sp,
-            color = CardTitle,
+            color = MaterialTheme.colorScheme.onSurface,
             textAlign = TextAlign.Center,
             modifier = Modifier
                 .fillMaxWidth()
@@ -93,7 +92,7 @@ fun QRLoginScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
         Text(
             text = statusText,
             fontSize = 13.sp,
-            color = TextTertiary,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
             textAlign = TextAlign.Center,
             modifier = Modifier
                 .fillMaxWidth()

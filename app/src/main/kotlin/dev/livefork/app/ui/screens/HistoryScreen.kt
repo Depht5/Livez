@@ -3,18 +3,19 @@ package dev.livefork.app.ui.screens
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
-import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -28,7 +29,6 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -38,20 +38,14 @@ import dev.livefork.app.di.ServiceContainer
 import dev.livefork.app.models.History
 import dev.livefork.app.modules.mine.history.HistoryController
 import dev.livefork.app.ui.Router
-import dev.livefork.app.ui.theme.CardTitle
-import dev.livefork.app.ui.theme.LiveRed
-import dev.livefork.app.ui.theme.TextTertiary
 import kotlinx.coroutines.launch
-
-/** 页面底色（对应旧版 HistoryActivity 根布局的 #F5F5F5，仅本页使用）。 */
-private val HistoryBackground = Color(0xFFF5F5F5)
 
 /**
  * 观看历史页（Compose 版）—— 对应 Dart `history_page.dart`，
  * 替换现版 View 体系 `ui/HistoryActivity.kt`，注册为 "history" 路由。
  *
- * 结构镜像：白底标题栏（「观看历史」18sp + 红底「清空」按钮）+ 记录列表
- * （标题 15sp #222 单行 + 副标题「站点 · 主播名」12sp #888 + 行间分隔线）。
+ * 结构镜像：surface 底标题栏（「观看历史」18sp + error 底「清空」按钮）+ 记录列表
+ * （标题 15sp onSurface 单行 + 副标题「站点 · 主播名」12sp onSurfaceVariant + 行间分隔线）。
  * 点击进直播间（Router.openLiveRoom 保持）；清空需确认对话框（取消无副作用）。
  *
  * 与现版的差异（implement.md 本批要求新增）：长按单条记录弹确认框删除
@@ -80,11 +74,11 @@ fun HistoryScreen(modifier: Modifier = Modifier) {
         controller.loadData()
     }
 
-    Column(modifier = modifier.fillMaxSize().background(HistoryBackground)) {
+    Column(modifier = modifier.fillMaxSize().background(MaterialTheme.colorScheme.surfaceContainerLow).statusBarsPadding()) {
         HistoryTitleBar(onClear = { showClearDialog = true })
 
         LazyColumn(
-            modifier = Modifier.fillMaxSize().background(Color.White),
+            modifier = Modifier.fillMaxSize().background(MaterialTheme.colorScheme.surface),
         ) {
             itemsIndexed(list) { index, item ->
                 HistoryItemRow(
@@ -145,25 +139,25 @@ fun HistoryScreen(modifier: Modifier = Modifier) {
     }
 }
 
-/** 标题栏：白底、左右 16dp 上下 12dp；标题 18sp #222 占满剩余宽度 + 红底「清空」按钮。 */
+/** 标题栏：surface 底、左右 16dp 上下 12dp；标题 18sp onSurface 占满剩余宽度 + error 底「清空」按钮。 */
 @Composable
 private fun HistoryTitleBar(onClear: () -> Unit) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .background(Color.White)
+            .background(MaterialTheme.colorScheme.surface)
             .padding(start = 16.dp, top = 12.dp, end = 16.dp, bottom = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(
             text = "观看历史",
             fontSize = 18.sp,
-            color = CardTitle,
+            color = MaterialTheme.colorScheme.onSurface,
             modifier = Modifier.weight(1f),
         )
         Button(
             onClick = onClear,
-            colors = ButtonDefaults.buttonColors(containerColor = LiveRed),
+            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
             contentPadding = PaddingValues(horizontal = 16.dp, vertical = 6.dp),
         ) {
             Text(text = "清空", fontSize = 13.sp)
@@ -173,7 +167,7 @@ private fun HistoryTitleBar(onClear: () -> Unit) {
 
 /**
  * 单条记录行：标题 15sp #222 单行省略 + 副标题「站点 · 主播名」12sp #888；
- * 点击进直播间、长按删除。去涟漪对齐整体简洁风格（旧版纯文本行本无涟漪）。
+ * 点击进直播间、长按删除。
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -186,10 +180,8 @@ private fun HistoryItemRow(
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .background(Color.White)
+            .background(MaterialTheme.colorScheme.surface)
             .combinedClickable(
-                interactionSource = remember { MutableInteractionSource() },
-                indication = null,
                 onClick = onClick,
                 onLongClick = onLongClick,
             )
@@ -198,10 +190,10 @@ private fun HistoryItemRow(
         Text(
             text = item.userName,
             fontSize = 15.sp,
-            color = CardTitle,
+            color = MaterialTheme.colorScheme.onSurface,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
         )
-        Text(text = "${site?.name ?: item.siteId} · ${item.userName}", fontSize = 12.sp, color = TextTertiary)
+        Text(text = "${site?.name ?: item.siteId} · ${item.userName}", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }

@@ -5,8 +5,11 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.compose.rememberNavController
+import dev.livefork.app.di.ServiceContainer
 import dev.livefork.app.ui.Router
 import dev.livefork.app.ui.nav.AppNavHost
 import dev.livefork.app.ui.theme.AppTheme
@@ -24,7 +27,11 @@ class MainActivity : ComponentActivity() {
         Router.install(applicationContext)
 
         setContent {
-            AppTheme {
+            // 动态取色开关（设置 → 外观）：状态驱动主题即时切换，无需重建 Activity。
+            // API < 31 时 AppTheme 内部自动回退 M3 默认色板。
+            val dynamicColor by ServiceContainer.appSettings.isDynamic
+                .collectAsStateWithLifecycle()
+            AppTheme(dynamicColor = dynamicColor) {
                 val navController = rememberNavController()
                 // 注入 Router 双模式导航；离开组合时清空引用避免泄漏
                 DisposableEffect(navController) {

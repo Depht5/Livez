@@ -11,20 +11,18 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.shadow
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.livefork.app.app.Utils
-import dev.livefork.app.ui.theme.CardTitle
 import dev.livefork.app.ui.theme.ImagePlaceholder
-import dev.livefork.app.ui.theme.TextTertiary
 import dev.livefork.core.model.LiveRoomItem
 
 /**
@@ -48,9 +46,9 @@ fun LiveRoomCard(
     Column(
         modifier = modifier
             .fillMaxWidth()
-            // 白底 8dp 圆角；阴影 elevation 2dp 对齐 View 版
+            // M3 surface 底、8dp 圆角；阴影 elevation 2dp（对齐 View 版）
             .shadow(elevation = 2.dp, shape = RoundedCornerShape(8.dp))
-            .background(Color.White, RoundedCornerShape(8.dp))
+            .background(MaterialTheme.colorScheme.surface, RoundedCornerShape(8.dp))
             .clickable(onClick = onClick),
     ) {
         // 封面：16:9，顶部两角圆角（底部直角，由卡片整体裁剪配合）
@@ -73,7 +71,7 @@ fun LiveRoomCard(
             // 标题：14sp 加粗、单行省略；空标题回退用户名
             Text(
                 text = item.title.trim().ifEmpty { item.userName },
-                color = CardTitle,
+                color = MaterialTheme.colorScheme.onSurface,
                 fontSize = 14.sp,
                 fontWeight = FontWeight.Bold,
                 maxLines = 1,
@@ -91,7 +89,7 @@ fun LiveRoomCard(
             ) {
                 Text(
                     text = item.userName,
-                    color = TextTertiary,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                     fontSize = 12.sp,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
@@ -99,7 +97,7 @@ fun LiveRoomCard(
                 )
                 Text(
                     text = "🔥 ${Utils.onlineToString(item.online)}",
-                    color = TextTertiary,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                     fontSize = 12.sp,
                     maxLines = 1,
                 )

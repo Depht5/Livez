@@ -2,54 +2,44 @@ package dev.livefork.app.ui.components
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import dev.livefork.app.ui.theme.CardTitle
-import dev.livefork.app.ui.theme.LiveRed
-import dev.livefork.app.ui.theme.TextTertiary
-
-/** 行内箭头色（对应旧版 SettingRows 的 #BBBBBB，仅组件内部使用）。 */
-private val RowArrow = Color(0xFFBBBBBB)
 
 /**
- * Compose 版通用设置行 —— 对应旧 View 体系 `ui/SettingRows.kt` 的视觉规格
- * （白底行、标题 15sp #222、副标题 12sp #888、分组标题 13sp 红系、箭头 ›）。
- * API 形态不必逐参复刻：按 Compose 惯例改为 @Composable 函数 + 命名参数。
+ * Compose 版通用设置行 —— 对应旧 View 体系 `ui/SettingRows.kt` 的视觉规格。
+ * Material 3 风格化（task 08-26-material3-ui-restyle）：颜色统一取
+ * `MaterialTheme.colorScheme`（表面 surface / 正文 onSurface / 次级 onSurfaceVariant /
+ * 占位 outline / 选中 primary），点击恢复默认 ripple（不再去涟漪）。
  * 供设置页使用；直播间弹幕设置等弹层（Batch 7）可复用。
- *
- * 注意：旧版 View SettingRows 仍被 AccountActivity 引用（Batch 5 迁移时随其删除），
- * 本文件与其同名不同包，互不影响。
  */
 
-/** 分组标题：13sp 红系 #FF3F4B，上 14dp 下 4dp 左右 16dp（对齐旧版 sectionTitle）。 */
+/** 分组标题：13sp primary 色（M3 下跟随主题/动态取色），上 14dp 下 4dp 左右 16dp。 */
 @Composable
 fun SettingSectionTitle(text: String, modifier: Modifier = Modifier) {
     Text(
         text = text,
         fontSize = 13.sp,
-        color = LiveRed,
+        color = MaterialTheme.colorScheme.primary,
         modifier = modifier
             .fillMaxWidth()
-            .background(Color.White)
+            .background(MaterialTheme.colorScheme.surface)
             .padding(start = 16.dp, top = 14.dp, end = 16.dp, bottom = 4.dp),
     )
 }
 
-/** 可点击行：标题+副标题+右侧箭头 ›（对齐旧版 clickRow；去涟漪对齐整体简洁风格）。 */
+/** 可点击行：标题+副标题+右侧箭头 ›（对齐旧版 clickRow；默认 ripple）。 */
 @Composable
 fun SettingClickRow(
     title: String,
@@ -60,21 +50,17 @@ fun SettingClickRow(
     Row(
         modifier = modifier
             .fillMaxWidth()
-            .background(Color.White)
-            .clickable(
-                interactionSource = remember { MutableInteractionSource() },
-                indication = null,
-                onClick = onClick,
-            )
+            .background(MaterialTheme.colorScheme.surface)
+            .clickable(onClick = onClick)
             .padding(start = 16.dp, top = 12.dp, end = 16.dp, bottom = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         SettingRowTexts(title = title, subtitle = subtitle, modifier = Modifier.weight(1f))
-        Text(text = "›", fontSize = 18.sp, color = RowArrow)
+        Text(text = "›", fontSize = 18.sp, color = MaterialTheme.colorScheme.outline)
     }
 }
 
-/** 开关行：标题+副标题+右侧 Switch（对齐旧版 switchRow）。 */
+/** 开关行：标题+副标题+右侧 Switch（对齐旧版 switchRow；选中态用 primary）。 */
 @Composable
 fun SettingSwitchRow(
     title: String,
@@ -82,20 +68,27 @@ fun SettingSwitchRow(
     checked: Boolean,
     onChange: (Boolean) -> Unit,
     modifier: Modifier = Modifier,
+    enabled: Boolean = true,
 ) {
     Row(
         modifier = modifier
             .fillMaxWidth()
-            .background(Color.White)
+            .background(MaterialTheme.colorScheme.surface)
             .padding(start = 16.dp, top = 8.dp, end = 8.dp, bottom = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        SettingRowTexts(title = title, subtitle = subtitle, modifier = Modifier.weight(1f))
+        SettingRowTexts(
+            title = title,
+            subtitle = subtitle,
+            modifier = Modifier.weight(1f),
+            enabled = enabled,
+        )
         Switch(
             checked = checked,
-            onCheckedChange = onChange,
-            // 选中态用主色红系，视觉贴近旧版 Switch（默认青绿与全局配色不符）
-            colors = SwitchDefaults.colors(checkedTrackColor = LiveRed),
+            // 禁用时 onCheckedChange 传 null → Switch 不可交互（系统灰显）
+            onCheckedChange = if (enabled) onChange else null,
+            enabled = enabled,
+            colors = SwitchDefaults.colors(checkedTrackColor = MaterialTheme.colorScheme.primary),
         )
     }
 }
@@ -113,7 +106,7 @@ fun SettingSliderRow(
     modifier: Modifier = Modifier,
     valueRange: ClosedFloatingPointRange<Float> = 0f..1f,
 ) {
-    Column(modifier = modifier.fillMaxWidth().background(Color.White)) {
+    Column(modifier = modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surface)) {
         Row(
             modifier = Modifier.padding(start = 16.dp, top = 12.dp, end = 16.dp, bottom = 4.dp),
             verticalAlignment = Alignment.CenterVertically,
@@ -129,17 +122,34 @@ fun SettingSliderRow(
     }
 }
 
-/** 标题+副标题垂直文本组（对齐旧版 rowTexts）。 */
+/** 标题+副标题垂直文本组（对齐旧版 rowTexts；禁用态用 outline 弱化）。 */
 @Composable
 private fun SettingRowTexts(
     title: String,
     subtitle: String,
     modifier: Modifier = Modifier,
+    enabled: Boolean = true,
 ) {
     Column(modifier = modifier) {
-        Text(text = title, fontSize = 15.sp, color = CardTitle)
+        Text(
+            text = title,
+            fontSize = 15.sp,
+            color = if (enabled) {
+                MaterialTheme.colorScheme.onSurface
+            } else {
+                MaterialTheme.colorScheme.outline
+            },
+        )
         if (subtitle.isNotEmpty()) {
-            Text(text = subtitle, fontSize = 12.sp, color = TextTertiary)
+            Text(
+                text = subtitle,
+                fontSize = 12.sp,
+                color = if (enabled) {
+                    MaterialTheme.colorScheme.onSurfaceVariant
+                } else {
+                    MaterialTheme.colorScheme.outline
+                },
+            )
         }
     }
 }

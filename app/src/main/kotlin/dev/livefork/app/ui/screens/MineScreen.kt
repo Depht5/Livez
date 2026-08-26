@@ -6,15 +6,16 @@ import android.os.Build
 import androidx.activity.ComponentActivity
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -23,7 +24,6 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -33,7 +33,6 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.livefork.app.di.ServiceContainer
 import dev.livefork.app.services.LogCaptureService
 import dev.livefork.app.ui.Router
-import dev.livefork.app.ui.theme.CardTitle
 
 /**
  * 我的页（Compose 版）—— 对应 Dart `mine_page.dart`（账号 + 功能入口列表），
@@ -61,7 +60,7 @@ fun MineScreen(modifier: Modifier = Modifier) {
     val entries = buildMineEntries(biliLogined, douyinHasCookie)
 
     LazyColumn(
-        modifier = modifier.fillMaxSize().background(Color.White),
+        modifier = modifier.fillMaxSize().background(MaterialTheme.colorScheme.surface).statusBarsPadding(),
     ) {
         itemsIndexed(entries) { index, entry ->
             MineMenuRow(
@@ -189,8 +188,8 @@ private fun LogCaptureDialog(onDismiss: () -> Unit) {
 }
 
 /**
- * 单个入口行：白底、左右 16dp 上下 14dp 内边距、15sp #222 文字、去涟漪点击
- * （对齐旧版 RecyclerView item 样式；纯文字行本无涟漪）。
+ * 单个入口行：surface 底、左右 16dp 上下 14dp 内边距、15sp onSurface 文字
+ * （对齐旧版 RecyclerView item 样式；纯文字行本无涟漪，恢复 ripple 后不影响视觉）。
  * 账号行（带副标题）展示「标题　副标题」（全角空格分隔，对齐旧版拼接规则）。
  */
 @Composable
@@ -200,14 +199,10 @@ private fun MineMenuRow(entry: MineEntry, onClick: () -> Unit) {
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .background(Color.White)
-            .clickable(
-                interactionSource = remember { MutableInteractionSource() },
-                indication = null,
-                onClick = onClick,
-            )
+            .background(MaterialTheme.colorScheme.surface)
+            .clickable(onClick = onClick)
             .padding(start = 16.dp, top = 14.dp, end = 16.dp, bottom = 14.dp),
     ) {
-        Text(text = displayText, fontSize = 15.sp, color = CardTitle)
+        Text(text = displayText, fontSize = 15.sp, color = MaterialTheme.colorScheme.onSurface)
     }
 }

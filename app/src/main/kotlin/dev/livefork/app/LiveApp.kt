@@ -8,6 +8,7 @@ import android.os.Build
 import android.os.Bundle
 import android.os.Environment
 import android.provider.MediaStore
+import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import dev.livefork.app.di.ServiceContainer
 import dev.livefork.core.common.CoreLog
@@ -30,16 +31,19 @@ class LiveApp : Application() {
     }
 
     /**
-     * 全局窗口装饰适配（App 页面均为浅色白底）：
-     * - 状态栏图标深色（isAppearanceLightStatusBars），浅色背景下清晰可见；
-     * - 底部导航条白色 + 图标深色（isAppearanceLightNavigationBars），与页面融为一体（沉浸）。
+     * 全局窗口装饰适配（沉浸式，Material 3 任务延续）：
+     * - `setDecorFitsSystemWindows(false)`：全窗口 edge-to-edge，内容可延伸到
+     *   状态栏/导航条区域，由各页面自身的背景色覆盖系统栏区域（状态栏+底部导航条
+     *   不再显示固定白条，随页面背景统一）；
+     * - 系统栏背景透明 + 图标深色（浅色页面下清晰可见）。
      */
     private fun installWindowDecorAdaptation() {
         registerActivityLifecycleCallbacks(object : Application.ActivityLifecycleCallbacks {
             override fun onActivityCreated(activity: Activity, savedInstanceState: Bundle?) {
                 val window = activity.window
+                WindowCompat.setDecorFitsSystemWindows(window, false)
                 window.statusBarColor = Color.TRANSPARENT
-                window.navigationBarColor = Color.WHITE
+                window.navigationBarColor = Color.TRANSPARENT
                 val controller = WindowInsetsControllerCompat(window, window.decorView)
                 controller.isAppearanceLightStatusBars = true
                 controller.isAppearanceLightNavigationBars = true

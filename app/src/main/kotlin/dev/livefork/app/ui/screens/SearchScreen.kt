@@ -2,18 +2,19 @@ package dev.livefork.app.ui.screens
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.grid.LazyGridState
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ScrollableTabRow
 import androidx.compose.material3.Tab
 import androidx.compose.material3.TabRowDefaults.SecondaryIndicator
@@ -31,7 +32,6 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
@@ -44,16 +44,10 @@ import dev.livefork.app.modules.search.AppSearchController
 import dev.livefork.app.ui.Router
 import dev.livefork.app.ui.components.LiveRoomCard
 import dev.livefork.app.ui.components.PagedRoomGridCore
-import dev.livefork.app.ui.theme.CardTitle
 import dev.livefork.app.ui.theme.ImageError
-import dev.livefork.app.ui.theme.LiveRed
-import dev.livefork.app.ui.theme.TextSecondary
-import dev.livefork.app.ui.theme.TextTertiary
+import dev.livefork.app.ui.theme.LiveIndicatorRed
 import dev.livefork.core.model.LiveAnchorItem
 import dev.livefork.core.model.LiveRoomItem
-
-/** 页面底色（对应现版 SearchActivity 根布局的 #F5F5F5，仅本页使用）。 */
-private val SearchBackground = Color(0xFFF5F5F5)
 
 /**
  * 搜索页（Compose 版）—— 对应 Dart `search_page.dart`，
@@ -115,12 +109,12 @@ fun SearchScreen(modifier: Modifier = Modifier) {
         }
     }
 
-    Column(modifier = modifier.fillMaxSize().background(SearchBackground)) {
+    Column(modifier = modifier.fillMaxSize().background(MaterialTheme.colorScheme.surfaceContainerLow).statusBarsPadding()) {
         // ===== 顶部搜索栏 =====
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .background(Color.White)
+                .background(MaterialTheme.colorScheme.surface)
                 .padding(start = 12.dp, top = 8.dp, end = 12.dp, bottom = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
@@ -128,16 +122,16 @@ fun SearchScreen(modifier: Modifier = Modifier) {
                 value = keyword,
                 onValueChange = { keyword = it },
                 placeholder = {
-                    Text(text = "输入关键词搜索", fontSize = 14.sp, color = TextTertiary)
+                    Text(text = "输入关键词搜索", fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 },
-                textStyle = TextStyle(fontSize = 14.sp, color = CardTitle),
+                textStyle = TextStyle(fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurface),
                 singleLine = true,
                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
                 keyboardActions = KeyboardActions(onSearch = { doSearch() }),
                 colors = TextFieldDefaults.colors(
-                    focusedContainerColor = Color.White,
-                    unfocusedContainerColor = Color.White,
-                    focusedIndicatorColor = LiveRed,
+                    focusedContainerColor = MaterialTheme.colorScheme.surface,
+                    unfocusedContainerColor = MaterialTheme.colorScheme.surface,
+                    focusedIndicatorColor = MaterialTheme.colorScheme.primary,
                     unfocusedIndicatorColor = ImageError,
                 ),
                 modifier = Modifier.weight(1f),
@@ -147,12 +141,9 @@ fun SearchScreen(modifier: Modifier = Modifier) {
             Text(
                 text = if (searchMode == 0) "直播间" else "主播",
                 fontSize = 13.sp,
-                color = LiveRed,
+                color = MaterialTheme.colorScheme.primary,
                 modifier = Modifier
-                    .clickable(
-                        interactionSource = remember { MutableInteractionSource() },
-                        indication = null,
-                    ) { controller.setSearchMode(if (searchMode == 0) 1 else 0) }
+                    .clickable { controller.setSearchMode(if (searchMode == 0) 1 else 0) }
                     .padding(start = 10.dp, top = 6.dp, end = 2.dp, bottom = 6.dp),
             )
         }
@@ -198,7 +189,7 @@ fun SearchScreen(modifier: Modifier = Modifier) {
                         }
                         else -> {
                             // 兜底（对齐现版 adapter 的 else 分支：仅 toString 展示）
-                            Text(text = item.toString(), fontSize = 15.sp, color = CardTitle)
+                            Text(text = item.toString(), fontSize = 15.sp, color = MaterialTheme.colorScheme.onSurface)
                         }
                     }
                 },
@@ -227,12 +218,12 @@ private fun SiteTextTabRow(
 ) {
     ScrollableTabRow(
         selectedTabIndex = selectedIndex,
-        containerColor = Color.White,
+        containerColor = MaterialTheme.colorScheme.surface,
         edgePadding = 12.dp,
         indicator = { tabPositions ->
             SecondaryIndicator(
                 modifier = Modifier.tabIndicatorOffset(tabPositions[selectedIndex]),
-                color = LiveRed,
+                color = MaterialTheme.colorScheme.primary,
             )
         },
         divider = { },
@@ -242,15 +233,15 @@ private fun SiteTextTabRow(
             Tab(
                 selected = selected,
                 onClick = { onSelect(index) },
-                selectedContentColor = LiveRed,
-                unselectedContentColor = TextSecondary,
+                selectedContentColor = MaterialTheme.colorScheme.primary,
+                unselectedContentColor = MaterialTheme.colorScheme.onSurfaceVariant,
                 text = {
                     Text(
                         text = site.name,
                         fontSize = 14.sp,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
-                        color = if (selected) LiveRed else TextSecondary,
+                        color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 },
             )
@@ -273,7 +264,7 @@ private fun AnchorResultRow(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .background(Color.White)
+                .background(MaterialTheme.colorScheme.surface)
                 .padding(start = 16.dp, top = 12.dp, end = 16.dp, bottom = 12.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
@@ -281,16 +272,16 @@ private fun AnchorResultRow(
                 Text(
                     text = item.userName,
                     fontSize = 15.sp,
-                    color = CardTitle,
+                    color = MaterialTheme.colorScheme.onSurface,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
-                Text(text = "主播", fontSize = 12.sp, color = TextTertiary)
+                Text(text = "主播", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
             Text(
                 text = if (item.liveStatus) "直播中" else "未开播",
                 fontSize = 12.sp,
-                color = LiveRed,
+                color = LiveIndicatorRed,
             )
         }
         if (showDivider) {

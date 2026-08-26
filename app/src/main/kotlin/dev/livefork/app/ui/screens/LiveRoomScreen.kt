@@ -28,6 +28,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
@@ -35,6 +36,7 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material3.Tab
 import androidx.compose.material3.TabRow
 import androidx.compose.material3.TabRowDefaults.tabIndicatorOffset
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -63,7 +65,6 @@ import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
-import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -88,12 +89,8 @@ import dev.livefork.app.ui.components.PlayerControlsOverlay
 import dev.livefork.app.ui.components.QualityDialog
 import dev.livefork.app.ui.components.RoomMenuDialog
 import dev.livefork.app.ui.components.RoomSheet
-import dev.livefork.app.ui.theme.CardTitle
-import dev.livefork.app.ui.theme.CategoryBlue
-import dev.livefork.app.ui.theme.LiveRed
-import dev.livefork.app.ui.theme.TextDisabled
-import dev.livefork.app.ui.theme.TextPrimary
-import dev.livefork.app.ui.theme.TextTertiary
+import dev.livefork.app.ui.theme.LiveIndicatorRed
+import dev.livefork.app.ui.theme.LiveOrange
 import dev.livefork.core.model.LiveContributionRankItem
 import dev.livefork.core.model.LiveMessage
 import dev.livefork.core.model.LiveMessageType
@@ -140,7 +137,7 @@ fun LiveRoomScreen(
     }
     if (site == null) {
         // 空白帧等待返回动画（下一帧即 popBackStack）
-        Box(modifier = modifier.fillMaxSize().background(Color.White))
+        Box(modifier = modifier.fillMaxSize().background(MaterialTheme.colorScheme.surface))
         return
     }
 
@@ -186,35 +183,34 @@ fun LiveRoomScreen(
     // 在部分 OEM（实测荣耀）不生效，故不做运行时切换，主题常开对竖屏无副作用。
     // 全屏延伸说明（真机实证：全屏横屏刘海侧 135px 空白）：主题 values-v30 已声明
     // LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS，但 ContentView 仍可能被系统在刘海侧避让
-    // （Android 15+ / 荣耀实测 mAppBounds=Rect(135, 0 - 2800, 1194)）——这里用官方
-    // edge-to-edge 手段作为第二层：全屏时 setDecorFitsSystemWindows(false) 让内容
-    // 延伸到所有 insets（含刘海区），退出全屏恢复 true 保持竖屏页面原布局。
+    // （Android 15+ / 荣耀实测 mAppBounds=Rect(135, 0 - 2800, 1194)）。
+    // 沉浸改造（用户反馈：状态栏/底部小白条区域纯白不统一）：LiveApp 全局已
+    // setDecorFitsSystemWindows(false)（edge-to-edge），本页不再切换 decorFits；
+    // 竖屏页面背景（根 Column）延伸覆盖状态栏区，靠根容器的 statusBarsPadding 避让内容
+    //（全屏隐藏系统栏后该 insets 为 0，padding 自动归零，视频铺满无影响）。
     LaunchedEffect(isFullScreen) {
         val activity = context as? Activity ?: return@LaunchedEffect
         val window = activity.window
         if (isFullScreen) {
             // 运行时方向覆盖 Manifest portrait（configChanges 已声明 → 不 recreate）
             activity.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
-            WindowCompat.setDecorFitsSystemWindows(window, false)
             val insetsController = WindowInsetsControllerCompat(window, window.decorView)
             insetsController.hide(WindowInsetsCompat.Type.systemBars())
             insetsController.systemBarsBehavior =
                 WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
         } else {
-            WindowCompat.setDecorFitsSystemWindows(window, true)
             activity.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
             WindowInsetsControllerCompat(window, window.decorView)
                 .show(WindowInsetsCompat.Type.systemBars())
         }
     }
     // 离开直播间时若仍处于全屏：恢复竖屏方向与系统栏
-    //（避免 MainActivity 宿主窗口残留横屏沉浸/edge-to-edge；刘海模式由主题常开，无需恢复）
+    //（避免 MainActivity 宿主窗口残留横屏沉浸；刘海/edge-to-edge 由全局主题与 LiveApp 常开，无需恢复）
     DisposableEffect(context) {
         onDispose {
             val activity = context as? Activity
             if (activity != null) {
                 runCatching {
-                    WindowCompat.setDecorFitsSystemWindows(activity.window, true)
                     activity.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
                     WindowInsetsControllerCompat(activity.window, activity.window.decorView)
                         .show(WindowInsetsCompat.Type.systemBars())
@@ -567,7 +563,11 @@ fun LiveRoomScreen(
     Column(
         modifier = modifier
             .fillMaxSize()
-            .background(if (isFullScreen) Color.Black else Color.White)
+            // 沉浸（M3 任务）：根容器背景延伸覆盖状态栏区（背景先应用铺满，再收缩内容）；
+            // statusBarsPadding 让标题栏等内容避开状态栏；全屏时系统栏隐藏 insets=0，
+            // padding 自动归零，视频铺满无影响。
+            .background(if (isFullScreen) Color.Black else MaterialTheme.colorScheme.surface)
+            .statusBarsPadding(),
     ) {
 
         // 标题栏：返回箭头 / 标题（16sp medium 单行省略）/ 「⋮」菜单 —— 全屏时隐藏。
@@ -582,7 +582,7 @@ fun LiveRoomScreen(
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(48.dp)
-                    .background(Color.White),
+                    .background(MaterialTheme.colorScheme.surface),
             ) {
                 Box(
                     modifier = Modifier
@@ -595,13 +595,13 @@ fun LiveRoomScreen(
                         ),
                     contentAlignment = Alignment.Center,
                 ) {
-                    Text(text = "←", fontSize = 22.sp, color = TextPrimary)
+                    Text(text = "←", fontSize = 22.sp, color = MaterialTheme.colorScheme.onSurface)
                 }
                 Text(
                     text = detail?.title?.ifEmpty { null } ?: "直播间",
                     fontSize = 16.sp,
                     fontWeight = FontWeight.Medium,
-                    color = TextPrimary,
+                    color = MaterialTheme.colorScheme.onSurface,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                     textAlign = TextAlign.Center,
@@ -621,7 +621,7 @@ fun LiveRoomScreen(
                         ),
                     contentAlignment = Alignment.Center,
                 ) {
-                    Text(text = "⋮", fontSize = 22.sp, color = TextPrimary)
+                    Text(text = "⋮", fontSize = 22.sp, color = MaterialTheme.colorScheme.onSurface)
                 }
             }
         }
@@ -715,7 +715,7 @@ fun LiveRoomScreen(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .background(Color.White)
+                    .background(MaterialTheme.colorScheme.surface)
                     .padding(horizontal = 12.dp, vertical = 8.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
@@ -728,7 +728,7 @@ fun LiveRoomScreen(
                     Text(
                         text = detail?.userName ?: "",
                         fontSize = 14.sp,
-                        color = TextPrimary,
+                        color = MaterialTheme.colorScheme.onSurface,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
@@ -740,14 +740,14 @@ fun LiveRoomScreen(
                             modifier = Modifier.size(16.dp),
                         )
                         Spacer(modifier = Modifier.size(4.dp))
-                        Text(text = site.name, fontSize = 12.sp, color = TextTertiary)
+                        Text(text = site.name, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 }
                 Text(
                     text = "🔥 ${Utils.onlineToString(online)}",
                     fontSize = 14.sp,
                     // 人气橙色（现版 #FF9800，主题常量暂无此色值）
-                    color = Color(0xFFFF9800),
+                    color = LiveOrange,
                 )
             }
         }
@@ -756,14 +756,14 @@ fun LiveRoomScreen(
         if (!isFullScreen) {
             TabRow(
                 selectedTabIndex = selectedTabIndex,
-                containerColor = Color.White,
-                contentColor = CategoryBlue,
+                containerColor = MaterialTheme.colorScheme.surface,
+                contentColor = MaterialTheme.colorScheme.secondary,
                 indicator = { tabPositions ->
                     Box(
                         modifier = Modifier
                             .tabIndicatorOffset(tabPositions[selectedTabIndex])
                             .height(2.dp)
-                            .background(CategoryBlue),
+                            .background(MaterialTheme.colorScheme.secondary),
                     )
                 },
             ) {
@@ -776,7 +776,7 @@ fun LiveRoomScreen(
                                 text = tab.label,
                                 fontSize = 14.sp,
                                 // 选中蓝 / 未选中灰（对齐原 setTabTextColors）
-                                color = if (selectedTabIndex == index) CategoryBlue else TextTertiary,
+                                color = if (selectedTabIndex == index) MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.onSurfaceVariant,
                             )
                         },
                     )
@@ -994,20 +994,22 @@ private fun ChatTabContent(messages: List<LiveMessage>, listState: LazyListState
 
 /**
  * 弹幕消息富文本 —— 对应原 SpannableStringBuilder 两段式语义改用 AnnotatedString：
- * 用户名灰（#888888）+ 正文深色（#333333）；系统消息整行灰色；
+ * 用户名灰（onSurfaceVariant）+ 正文（onSurface）；系统消息整行灰；
  * SC 类消息前缀加「【醒目】」（对齐原 MessagesAdapter.buildMessageText）。
+ * @Composable：读取 MaterialTheme.colorScheme（调用方 ChatTabContent 为 @Composable）。
  */
+@Composable
 private fun buildMessageText(item: LiveMessage) = buildAnnotatedString {
     if (item.userName == "LiveSysMessage") {
-        withStyle(SpanStyle(color = TextTertiary)) { append(item.message) }
+        withStyle(SpanStyle(color = MaterialTheme.colorScheme.onSurfaceVariant)) { append(item.message) }
     } else {
         val prefix = if (item.type == LiveMessageType.superChat) {
             "【醒目】${item.userName}"
         } else {
             item.userName
         }
-        withStyle(SpanStyle(color = TextTertiary)) { append("$prefix：") }
-        withStyle(SpanStyle(color = TextPrimary)) { append(item.message) }
+        withStyle(SpanStyle(color = MaterialTheme.colorScheme.onSurfaceVariant)) { append("$prefix：") }
+        withStyle(SpanStyle(color = MaterialTheme.colorScheme.onSurface)) { append(item.message) }
     }
 }
 
@@ -1022,16 +1024,16 @@ private fun SuperChatTabContent(items: List<LiveSuperChatMessage>) {
                 Text(
                     text = "💬 ${item.userName}（醒目留言）",
                     fontSize = 13.sp,
-                    color = LiveRed,
+                    color = LiveIndicatorRed,
                 )
                 Spacer(modifier = Modifier.size(4.dp))
-                Text(text = item.message, fontSize = 14.sp, color = TextPrimary)
+                Text(text = item.message, fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurface)
                 Spacer(modifier = Modifier.size(4.dp))
                 Text(
                     text = "¥${item.price}",
                     fontSize = 12.sp,
                     // 价格橙色（现版 #FF9800）
-                    color = Color(0xFFFF9800),
+                    color = LiveOrange,
                 )
             }
         }
@@ -1054,16 +1056,16 @@ private fun ContributionRankTabContent(items: List<LiveContributionRankItem>) {
                 Text(
                     text = "${item.rank}",
                     fontSize = 14.sp,
-                    color = Color(0xFFFF9800),
+                    color = LiveOrange,
                     modifier = Modifier.padding(end = 12.dp),
                 )
                 Text(
                     text = item.userName,
                     fontSize = 14.sp,
-                    color = TextPrimary,
+                    color = MaterialTheme.colorScheme.onSurface,
                     modifier = Modifier.weight(1f),
                 )
-                Text(text = item.scoreText, fontSize = 13.sp, color = TextTertiary)
+                Text(text = item.scoreText, fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
     }
@@ -1095,11 +1097,11 @@ private fun FollowTabContent(
                     Text(
                         text = item.userName,
                         fontSize = 15.sp,
-                        color = CardTitle,
+                        color = MaterialTheme.colorScheme.onSurface,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
-                    Text(text = sub, fontSize = 12.sp, color = TextTertiary)
+                    Text(text = sub, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
                 Text(
                     text = when (item.liveStatus) {
@@ -1108,7 +1110,7 @@ private fun FollowTabContent(
                         else -> "未开播"
                     },
                     fontSize = 12.sp,
-                    color = if (item.liveStatus == 2) LiveRed else TextDisabled,
+                    color = if (item.liveStatus == 2) LiveIndicatorRed else MaterialTheme.colorScheme.outline,
                 )
             }
         }
@@ -1124,7 +1126,7 @@ private fun SettingsTabPlaceholder(onOpenSettings: () -> Unit) {
         Text(
             text = "直播间设置请使用顶部⋮菜单",
             fontSize = 13.sp,
-            color = TextTertiary,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
             textAlign = TextAlign.Center,
             modifier = Modifier
                 .clickable(

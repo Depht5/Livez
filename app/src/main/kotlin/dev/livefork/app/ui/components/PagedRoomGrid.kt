@@ -2,7 +2,6 @@ package dev.livefork.app.ui.components
 
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -19,6 +18,7 @@ import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.itemsIndexed
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.material3.pulltorefresh.PullToRefreshDefaults
@@ -36,8 +36,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.livefork.app.app.controller.BasePageController
-import dev.livefork.app.ui.theme.LiveRed
-import dev.livefork.app.ui.theme.TextSecondary
 import dev.livefork.core.model.LiveRoomItem
 
 /** 触底加载阈值：最后可见条目距列表末尾不足该数量时预加载下一页（对应 Dart EasyRefresh footer）。 */
@@ -64,7 +62,7 @@ private const val LOAD_MORE_THRESHOLD_ITEMS = 6
  * @param listController 分页列表控制器（list/pageLoading/pageEmpty/pageError 等状态源）
  * @param gridState 网格滚动状态（由调用方持有以跨重组存活）
  * @param onOpenRoom 点击卡片回调（参数为 roomId）
- * @param indicatorColor 刷新指示器颜色（现版两处均为 #3498DB，故调用方显式传 CategoryBlue）
+ * @param indicatorColor 刷新指示器颜色（M3 化后调用方传 colorScheme.secondary；默认旧红兜底）
  * @param errorTextBuilder 错误态文案（默认 = HomeScreen 原文案；分类详情传入自己的文案）
  * @param emptyText 空态文案（默认 = HomeScreen 原文案；分类详情传入自己的文案）
  */
@@ -75,7 +73,7 @@ fun PagedRoomGrid(
     gridState: LazyGridState,
     onOpenRoom: (roomId: String) -> Unit,
     modifier: Modifier = Modifier,
-    indicatorColor: Color = LiveRed,
+    indicatorColor: Color = Color(0xFFFF3F4B),
     errorTextBuilder: (errorMsg: String) -> String =
         { msg -> msg.trim().ifEmpty { "加载失败" } + "\n点击刷新" },
     emptyText: String = "这里什么都没有\n点击刷新",
@@ -117,7 +115,7 @@ fun <T> PagedRoomGridCore(
     listController: BasePageController<T>,
     gridState: LazyGridState,
     modifier: Modifier = Modifier,
-    indicatorColor: Color = LiveRed,
+    indicatorColor: Color = Color(0xFFFF3F4B),
     errorTextBuilder: (errorMsg: String) -> String =
         { msg -> msg.trim().ifEmpty { "加载失败" } + "\n点击刷新" },
     emptyText: String = "这里什么都没有\n点击刷新",
@@ -217,7 +215,7 @@ fun <T> PagedRoomGridCore(
                             Text(
                                 text = errorTextBuilder(errorMsg),
                                 fontSize = 12.sp,
-                                color = TextSecondary,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 textAlign = TextAlign.Center,
                             )
                         }
@@ -228,7 +226,7 @@ fun <T> PagedRoomGridCore(
                             Text(
                                 text = emptyText,
                                 fontSize = 12.sp,
-                                color = TextSecondary,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 textAlign = TextAlign.Center,
                             )
                         }
@@ -248,7 +246,7 @@ fun <T> PagedRoomGridCore(
     }
 }
 
-/** 居中状态覆盖层：整面可点击触发刷新（去涟漪），内容由调用方给定。 */
+/** 居中状态覆盖层：整面可点击触发刷新（默认 ripple），内容由调用方给定。 */
 @Composable
 private fun StatusOverlay(
     onClick: () -> Unit,
@@ -257,11 +255,7 @@ private fun StatusOverlay(
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .clickable(
-                interactionSource = remember { MutableInteractionSource() },
-                indication = null,
-                onClick = onClick,
-            )
+            .clickable(onClick = onClick)
             .padding(12.dp),
         contentAlignment = Alignment.Center,
     ) {

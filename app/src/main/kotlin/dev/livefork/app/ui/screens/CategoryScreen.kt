@@ -3,7 +3,6 @@ package dev.livefork.app.ui.screens
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -13,6 +12,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
@@ -29,6 +29,7 @@ import androidx.compose.foundation.pager.PagerState
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ScrollableTabRow
 import androidx.compose.material3.Text
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
@@ -39,14 +40,12 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
-import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.shadow
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -60,9 +59,6 @@ import dev.livefork.app.modules.category.AppLiveCategory
 import dev.livefork.app.modules.category.CategoryController
 import dev.livefork.app.modules.category.CategoryListController
 import dev.livefork.app.ui.components.NetImage
-import dev.livefork.app.ui.theme.CardTitle
-import dev.livefork.app.ui.theme.CategoryBlue
-import dev.livefork.app.ui.theme.TextSecondary
 import dev.livefork.core.model.LiveSubCategory
 import kotlin.math.floor
 import kotlinx.coroutines.launch
@@ -144,7 +140,7 @@ fun CategoryScreen(
         onDispose { job.cancel() }
     }
 
-    Column(modifier = modifier.fillMaxSize().background(Color.White)) {
+    Column(modifier = modifier.fillMaxSize().background(MaterialTheme.colorScheme.surface).statusBarsPadding()) {
         SiteTabRow(
             sites = sites,
             selectedIndex = siteIndex,
@@ -182,7 +178,7 @@ fun CategoryScreen(
 /**
  * 站点 Tab 行 —— 对应 Dart category_page.dart 的 TabBar（logo + 文字）与现版 View 的
  * TabLayout MODE_SCROLLABLE 自定义 tab。配色对齐现版 CategoryView：
- * 指示条 #3498DB、选中 #3498DB / 未选中 #666666（custom tab 内容需手动切色）。
+ * 指示条/选中 secondary、未选中 onSurfaceVariant（custom tab 内容需手动切色）。
  *
  * 指示条逐帧跟随（范式同 HomeScreen）：不用 tabIndicatorOffset（按 selectedTabIndex
  * 定位 + 自带过渡动画，页面跨中线才更新）。改为读取 pager 连续位置
@@ -199,10 +195,10 @@ private fun SiteTabRow(
 ) {
     ScrollableTabRow(
         selectedTabIndex = selectedIndex,
-        containerColor = Color.White,
+        containerColor = MaterialTheme.colorScheme.surface,
         // Tab 内容左右留白（对应 Dart labelPadding H20）；起始边距取小值贴近左缘（对齐 GRAVITY_START）
         edgePadding = 12.dp,
-        // 指示条颜色对齐现版 setSelectedTabIndicatorColor(#3498DB)，宽度随标签内容
+        // 指示条颜色对齐现版 setSelectedTabIndicatorColor(#3498DB，现映射 secondary)，宽度随标签内容
         // （对齐 isTabIndicatorFullWidth = false）
         indicator = { tabPositions ->
             // 连续页位置：整数部分 = 当前页，小数部分 = 滑动进度（可为负——往回滑时
@@ -221,7 +217,7 @@ private fun SiteTabRow(
                     .offset(x = lerp(leftRect.left.value, rightRect.left.value, fraction).dp)
                     .width(lerp(leftRect.width.value, rightRect.width.value, fraction).dp)
                     .height(3.dp)
-                    .background(CategoryBlue),
+                    .background(MaterialTheme.colorScheme.secondary),
             )
         },
         // 现版 TabLayout 无底部分隔线，去掉 M3 默认 divider
@@ -231,10 +227,7 @@ private fun SiteTabRow(
             val selected = index == selectedIndex
             Row(
                 modifier = Modifier
-                    .clickable(
-                        interactionSource = remember { MutableInteractionSource() },
-                        indication = null, // 移除点击涟漪（对齐 tabRippleColor = TRANSPARENT）
-                    ) { onSelect(index) }
+                    .clickable { onSelect(index) }
                     .padding(horizontal = 20.dp, vertical = 12.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
@@ -247,8 +240,8 @@ private fun SiteTabRow(
                 Text(
                     text = site.name,
                     fontSize = 16.sp,
-                    // 手动切色：选中 #3498DB / 未选中 #666666（对齐 setTabTextColors）
-                    color = if (selected) CategoryBlue else TextSecondary,
+                    // 手动切色：选中 secondary / 未选中 onSurfaceVariant（对齐 setTabTextColors）
+                    color = if (selected) MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
         }
@@ -330,13 +323,13 @@ private fun CategorySiteGrid(
             onRefresh = { listController.refreshData() },
             state = pullState,
             modifier = Modifier.fillMaxSize(),
-            // 刷新指示器颜色对齐现版 setColorSchemeColors(#3498DB)
+            // 刷新指示器颜色对齐现版 setColorSchemeColors(#3498DB，现映射 secondary)
             indicator = {
                 PullToRefreshDefaults.Indicator(
                     isRefreshing = pageLoading,
                     state = pullState,
                     modifier = Modifier.align(Alignment.TopCenter),
-                    color = CategoryBlue,
+                    color = MaterialTheme.colorScheme.secondary,
                 )
             },
         ) {
@@ -394,7 +387,7 @@ private fun CategorySiteGrid(
                             Text(
                                 text = errorMsg.trim().ifEmpty { "加载失败" } + "\n点击刷新",
                                 fontSize = 12.sp,
-                                color = TextSecondary,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 textAlign = TextAlign.Center,
                             )
                         }
@@ -404,7 +397,7 @@ private fun CategorySiteGrid(
                             Text(
                                 text = "这里什么都没有\n点击刷新",
                                 fontSize = 12.sp,
-                                color = TextSecondary,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 textAlign = TextAlign.Center,
                             )
                         }
@@ -418,16 +411,16 @@ private fun CategorySiteGrid(
     }
 }
 
-/** 分组标题：18sp 加粗、#222、白底不透明、左缩进 4dp + 上下 8dp（对齐现版 buildHeader）。 */
+/** 分组标题：18sp 加粗、onSurface、surface 底不透明、左缩进 4dp + 上下 8dp（对齐现版 buildHeader）。 */
 @Composable
 private fun HeaderText(name: String) {
     Text(
         text = name,
         fontSize = 18.sp,
         fontWeight = FontWeight.Bold,
-        color = CardTitle,
+        color = MaterialTheme.colorScheme.onSurface,
         modifier = Modifier
-            .background(Color.White)
+            .background(MaterialTheme.colorScheme.surface)
             .padding(start = 4.dp, top = 8.dp, bottom = 8.dp),
     )
 }
@@ -435,7 +428,7 @@ private fun HeaderText(name: String) {
 /**
  * 子分类卡片 —— 对齐现版 buildSubCard 视觉：白底圆角 8dp、elevation 2dp、
  * 统一固定高 84dp、内边距 8/10、图 40dp 圆角 8dp（等价 NetImage.loadRound）、
- * 名称 12sp #666 单行居中；[hideImage]=true 时为「显示全部」卡片（隐藏图片槽位）。
+ * 名称 12sp onSurfaceVariant 单行居中；[hideImage]=true 时为「显示全部」卡片（隐藏图片槽位）。
  */
 @Composable
 private fun SubCategoryCard(
@@ -448,7 +441,7 @@ private fun SubCategoryCard(
         modifier = Modifier
             .height(84.dp)
             .shadow(elevation = 2.dp, shape = RoundedCornerShape(8.dp))
-            .background(Color.White, RoundedCornerShape(8.dp))
+            .background(MaterialTheme.colorScheme.surface, RoundedCornerShape(8.dp))
             .clickable(onClick = onClick)
             .padding(start = 8.dp, top = 10.dp, end = 8.dp, bottom = 10.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -466,25 +459,25 @@ private fun SubCategoryCard(
         Text(
             text = name,
             fontSize = 12.sp,
-            color = TextSecondary,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
             maxLines = 1,
             textAlign = TextAlign.Center,
         )
     }
 }
 
-/** 居中加载圈（颜色对齐分类蓝）。 */
+/** 居中加载圈（secondary，对应原分类蓝）。 */
 @Composable
 private fun LoadingOverlay() {
     Box(
         modifier = Modifier.fillMaxSize(),
         contentAlignment = Alignment.Center,
     ) {
-        CircularProgressIndicator(color = CategoryBlue)
+        CircularProgressIndicator(color = MaterialTheme.colorScheme.secondary)
     }
 }
 
-/** 居中状态覆盖层：整面可点击触发刷新（去涟漪），内容由调用方给定（范式同 HomeScreen）。 */
+/** 居中状态覆盖层：整面可点击触发刷新，内容由调用方给定（范式同 HomeScreen）。 */
 @Composable
 private fun StatusOverlay(
     onClick: () -> Unit,
@@ -493,11 +486,7 @@ private fun StatusOverlay(
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .clickable(
-                interactionSource = remember { MutableInteractionSource() },
-                indication = null,
-                onClick = onClick,
-            )
+            .clickable(onClick = onClick)
             .padding(12.dp),
         contentAlignment = Alignment.Center,
     ) {
