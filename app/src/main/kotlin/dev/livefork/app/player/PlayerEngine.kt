@@ -41,6 +41,9 @@ class PlayerEngine private constructor() {
 
     private var created = false
 
+    /** 初始化时实际使用的 vo（clamp 后）；attachSurface 恢复用（见 attachSurface 根因说明）。 */
+    private var voOption: String? = null
+
     /**
      * 引擎就绪守卫：未初始化（尚未 create）或已销毁（destroy 后 created=false）时
      * 拒绝所有 set_property/command 调用。
@@ -208,6 +211,7 @@ class PlayerEngine private constructor() {
         MPVLib.setOptionString("opengl-es", "yes")
         val vo = (config.vo ?: "mediacodec_embed")
             .let { if (it == "gpu-next") "gpu" else it }
+        voOption = vo
         MPVLib.setOptionString("vo", vo)
         MPVLib.setOptionString("hwdec", config.hwdec ?: "mediacodec")
         MPVLib.setOptionString("hwdec-codecs", "h264,hevc,mpeg4,mpeg2video,vp8,vp9,av1")
@@ -233,7 +237,12 @@ class PlayerEngine private constructor() {
         MPVLib.init()
 
         MPVLib.setOptionString("force-window", "no")
-        MPVLib.setOptionString("idle", "once")
+        // idle=yes（根因说明：真机「退出直播间后立刻重进无画面/无声」）：
+        // 原为 idle=once，播放结束（退出直播间时 player.stop()）后 mpv 核心自动进入
+        // shutdown 退出流程；本引擎为全局单例（destroy 不再随页面销毁），重进时
+        // loadfile 发到已退出的 core 被静默丢弃 → 无任何加载日志、无画面无声。
+        // idle=yes 使 core 在无文件时保持待命，可反复 loadfile。
+        MPVLib.setOptionString("idle", "yes")
     }
 
     private fun observeProperties() {
@@ -266,15 +275,40 @@ class PlayerEngine private constructor() {
     fun attachSurface(surface: android.view.Surface) {
         if (!ensureReady("attachSurface")) return
         runCatching {
+            // 根因说明（真机「重进直播间无画面」第二因素）：detachSurface 会把 vo 置为
+            // "null" 以停渲染；重进后新 surfaceCreated 若只 force-window=yes + attachSurface，
+            // vo 残留 null → 即使流加载成功也没有视频输出。这里恢复初始化时记录的 vo。
+            voOption?.let { MPVLib.setPropertyString("vo", it) }
             MPVLib.setOptionString("force-window", "yes")
+            // 先解绑旧 surface 再 attach 新的（根因说明见下）
+            MPVLib.detachSurface()
             MPVLib.attachSurface(surface)
         }
+    }
+
+    /**
+     * 上报 SurfaceView 尺寸（对应 mpv `android-surface-size`）。
+     *
+     * 根因说明（真机闪退：重进直播间后全屏旋转崩溃）：原实现由 `MpvVideoView.surfaceChanged`
+     * 直接裸调 `MPVLib.setPropertyString`——该入口没有 `ensureReady` 守卫，一旦引擎已被
+     * `PlayerEngine.destroy()` 销毁（旧页面 onDispose 晚于新页面组合的转场时序），旋转触发的
+     * size 变化会对已释放的 mpv 实例发起 JNI 调用，native use-after-free 直接 SIGSEGV。
+     * 统一收口到本方法：先过 `ensureReady`（未初始化安全返回），`runCatching` 仅兜 Java 异常。
+     */
+    fun setSurfaceSize(width: Int, height: Int) {
+        if (!ensureReady("setSurfaceSize")) return
+        runCatching { MPVLib.setPropertyString("android-surface-size", "${width}x$height") }
     }
 
     fun detachSurface() {
         if (!ensureReady("detachSurface")) return
         runCatching {
-            MPVLib.setPropertyString("vo", "null")
+            // 根因说明（真机「退出立即重进无画面/无画面无声」）：
+            // 原实现在这里 `setPropertyString("vo", "null")`——vo 是引擎全局属性，
+            // detachSurface 由 surfaceDestroyed 或页面 onDispose 驱动；若恰好晚于新页面
+            // attachSurface 的 vo 恢复，会把 vo 改回 null，新页面 loadfile 时 hwdec 无法
+            // 创建 mediacodec surface → `VO: [null]`（只有声音无画面）。surface 解绑
+            // 本身由 `MPVLib.detachSurface()` 完成，不再额外改 vo。
             MPVLib.setOptionString("force-window", "no")
             MPVLib.detachSurface()
         }

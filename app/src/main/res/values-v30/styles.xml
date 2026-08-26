@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- API 30+：刘海屏适配升级为 always。
+     根因说明（真机实证：全屏横屏刘海侧 135px 空白、播放器无法铺满）：
+     设备（荣耀 AAP-AN00，顶部居中水滴刘海）横屏 ROTATION_90 后刘海位于长边方向，
+     `shortEdges`（values-v28 声明）只允许窗口延伸到**短边**刘海区，系统遂对
+     content 区域在刘海侧强制避让 135px（uiautomator：content=[135,0]-[2800,1272]），
+     Compose 内容含 mpv SurfaceView 全部从 x=135 开始 → 刘海侧露出窗口背景白条。
+     `always` 允许窗口延伸到所有方向 cutout（含长边）；本机 compileSdk=34、设备 SDK 36，
+     该值于 API 35 起 deprecated 但功能保留（本 app targetSdk=34，不受强制 edge-to-edge 影响）。
+     竖屏时状态栏仍占位（非全屏），content 依旧从状态栏下沿开始，无视觉回归（实测确认）。 -->
+<resources>
+    <style name="Theme.LiveApp" parent="Theme.MaterialComponents.DayNight.NoActionBar">
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:windowLayoutInDisplayCutoutMode">always</item>
+    </style>
+</resources>

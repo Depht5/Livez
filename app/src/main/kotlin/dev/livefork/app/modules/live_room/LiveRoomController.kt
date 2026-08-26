@@ -1240,9 +1240,12 @@ class LiveRoomController(
         mediaEventSubJobs.forEach { it.cancel() }
         mediaEventSubJobs.clear()
         reopenPendingFuture()
-        if (_liveStatus.value) {
-            player.stop()
-        }
+        // 不再调 player.stop()。
+        // 根因说明（真机「退出后立即重进无画面」）：本方法由 Compose 页面 onDispose 驱动，
+        // 导航转场动画结束后才执行，晚于新页面组合（新页面可能已开始 open 新流）；
+        // PlayerEngine 是全局单例，stop() 全局生效，会把新页面正在加载的流打断
+        // （日志：start-file 后旧页面 dispose → Opening failed → end-file，无声无画）。
+        // 停流责任在离开直播间的 UI 路径（leaveRoom 已在 pop 前调用 player.stop()）。
         scope.launch { liveDanmaku?.stop() }
         scope.coroutineContext[Job]?.cancel()
     }

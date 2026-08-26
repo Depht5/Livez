@@ -63,6 +63,7 @@ import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -183,29 +184,37 @@ fun LiveRoomScreen(
     // 刘海模式说明：SHORT_EDGES 由主题 values-v28/styles.xml 声明（对比原项目
     // dart_simple_live NormalTheme）——运行时对已附加窗口改 layoutInDisplayCutoutMode
     // 在部分 OEM（实测荣耀）不生效，故不做运行时切换，主题常开对竖屏无副作用。
+    // 全屏延伸说明（真机实证：全屏横屏刘海侧 135px 空白）：主题 values-v30 已声明
+    // LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS，但 ContentView 仍可能被系统在刘海侧避让
+    // （Android 15+ / 荣耀实测 mAppBounds=Rect(135, 0 - 2800, 1194)）——这里用官方
+    // edge-to-edge 手段作为第二层：全屏时 setDecorFitsSystemWindows(false) 让内容
+    // 延伸到所有 insets（含刘海区），退出全屏恢复 true 保持竖屏页面原布局。
     LaunchedEffect(isFullScreen) {
         val activity = context as? Activity ?: return@LaunchedEffect
         val window = activity.window
         if (isFullScreen) {
             // 运行时方向覆盖 Manifest portrait（configChanges 已声明 → 不 recreate）
             activity.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+            WindowCompat.setDecorFitsSystemWindows(window, false)
             val insetsController = WindowInsetsControllerCompat(window, window.decorView)
             insetsController.hide(WindowInsetsCompat.Type.systemBars())
             insetsController.systemBarsBehavior =
                 WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
         } else {
+            WindowCompat.setDecorFitsSystemWindows(window, true)
             activity.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
             WindowInsetsControllerCompat(window, window.decorView)
                 .show(WindowInsetsCompat.Type.systemBars())
         }
     }
     // 离开直播间时若仍处于全屏：恢复竖屏方向与系统栏
-    //（避免 MainActivity 宿主窗口残留横屏沉浸；刘海模式由主题常开，无需恢复）
+    //（避免 MainActivity 宿主窗口残留横屏沉浸/edge-to-edge；刘海模式由主题常开，无需恢复）
     DisposableEffect(context) {
         onDispose {
             val activity = context as? Activity
             if (activity != null) {
                 runCatching {
+                    WindowCompat.setDecorFitsSystemWindows(activity.window, true)
                     activity.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
                     WindowInsetsControllerCompat(activity.window, activity.window.decorView)
                         .show(WindowInsetsCompat.Type.systemBars())
