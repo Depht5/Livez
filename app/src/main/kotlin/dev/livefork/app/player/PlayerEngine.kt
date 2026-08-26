@@ -41,6 +41,15 @@ class PlayerEngine private constructor() {
 
     private var created = false
 
+    /**
+     * MPVLib 0.4.x 是进程级静态单例，而 Compose 转场可能让旧、新页面短暂共存。
+     * 会话号保证迟到的旧页面回调不能释放或改绑新页面正在使用的播放器。
+     */
+    private val lifecycleLock = Any()
+    private var nextSessionId = 0L
+    private var activeSessionId: Long? = null
+    private var surfaceAttached = false
+
     /** 初始化时实际使用的 vo（clamp 后）；attachSurface 恢复用（见 attachSurface 根因说明）。 */
     private var voOption: String? = null
 
@@ -49,10 +58,8 @@ class PlayerEngine private constructor() {
      * 拒绝所有 set_property/command 调用。
      *
      * 根因说明（真机闪退：反复进出直播间偶现 "set_property called but mpv is not initialized"
-     * 后 native 崩溃）：PlayerEngine 为全局单例，而 destroy 由直播间页面的 onDispose 驱动；
-     * 页面切换转场期间「新页面组合/旧页面销毁」交错，异步加载链路（loadPlayUrl → open →
-     * set_property）可能在引擎被另一路 destroy 之后才执行到 JNI 调用点。此守卫把该场景从
-     * native 崩溃降级为 Log.w 安全返回（UI 层最多表现为无声画，不闪退）。
+     * 后 native 崩溃）：异步加载链路可能在页面释放会话后才执行到 JNI 调用点。此守卫把
+     * 该场景从 native 崩溃降级为 Log.w 安全返回（UI 层最多表现为无声画，不闪退）。
      */
     private fun ensureReady(op: String): Boolean {
         if (!created) {
@@ -150,14 +157,27 @@ class PlayerEngine private constructor() {
 
         override fun event(eventId: Int) {
             when (eventId) {
+                MPVLib.MPV_EVENT_SHUTDOWN ->
+                    dev.livefork.app.app.Log.w("[mpv-event] shutdown")
                 MPVLib.MPV_EVENT_END_FILE -> {
                     _state.value = _state.value.copy(completed = true, playing = false)
                     _completedEvents.tryEmit(true)
+                    dev.livefork.app.app.Log.i("[mpv-event] end-file")
                 }
                 MPVLib.MPV_EVENT_START_FILE -> {
-                    _state.value = _state.value.copy(completed = false)
+                    _state.value = _state.value.copy(
+                        completed = false,
+                        width = null,
+                        height = null,
+                        aspect = null,
+                    )
                     _completedEvents.tryEmit(false)
+                    dev.livefork.app.app.Log.i("[mpv-event] start-file")
                 }
+                MPVLib.MPV_EVENT_FILE_LOADED ->
+                    dev.livefork.app.app.Log.i("[mpv-event] file-loaded")
+                MPVLib.MPV_EVENT_VIDEO_RECONFIG ->
+                    dev.livefork.app.app.Log.i("[mpv-event] video-reconfig")
             }
         }
     }
@@ -165,6 +185,20 @@ class PlayerEngine private constructor() {
     private val logObserver = object : MPVLib.LogObserver {
         override fun logMessage(prefix: String, level: Int, text: String) {
             _logEvents.tryEmit("$prefix: $text")
+            val message = text.trim()
+            // mpv 级别 30 及以下为 warn/error/fatal；Surface/MediaCodec 关键词额外保留。
+            if (message.isNotEmpty() && level <= 30) {
+                dev.livefork.app.app.Log.w("[mpv][$prefix][$level] $message")
+            } else if (message.isNotEmpty() && (
+                    message.contains("surface", ignoreCase = true) ||
+                        message.contains("mediacodec", ignoreCase = true) ||
+                        message.contains("Opening failed", ignoreCase = true) ||
+                        message.contains("Video: no video", ignoreCase = true)
+                    )
+            ) {
+                // 高频 native 诊断仅进 Logcat，避免持续扩张应用内 debugLogs 列表。
+                android.util.Log.d(TAG, "[mpv][$prefix][$level] $message")
+            }
         }
     }
 
@@ -173,14 +207,27 @@ class PlayerEngine private constructor() {
         configDir: String,
         cacheDir: String,
         config: MpvInitConfig,
-    ) {
-        if (created) return
+    ): Long {
+        val sessionId = synchronized(lifecycleLock) {
+            val id = ++nextSessionId
+            val previous = activeSessionId
+            activeSessionId = id
+            if (previous != null) {
+                dev.livefork.app.app.Log.w("播放器会话被接管：old=$previous new=$id")
+            }
+            id
+        }
+        if (created) return sessionId
         created = true
+        _initError.value = null
         try {
             doInitialize(context, configDir, cacheDir, config)
+            dev.livefork.app.app.Log.i("播放器初始化完成：session=$sessionId")
         } catch (e: Throwable) {
             // Java 层异常（如 UnsatisfiedLinkError 缺 so）→ 记录而不是让进程闪退
             created = false
+            runCatching { MPVLib.removeObserver(observer) }
+            runCatching { MPVLib.removeLogObserver(logObserver) }
             val message = "播放器初始化失败：${e.message ?: e.javaClass.simpleName}"
             _initError.value = message
             try {
@@ -189,6 +236,7 @@ class PlayerEngine private constructor() {
             }
             dev.livefork.app.app.Log.logPrint(e)
         }
+        return sessionId
     }
 
     private fun doInitialize(
@@ -239,9 +287,8 @@ class PlayerEngine private constructor() {
         MPVLib.setOptionString("force-window", "no")
         // idle=yes（根因说明：真机「退出直播间后立刻重进无画面/无声」）：
         // 原为 idle=once，播放结束（退出直播间时 player.stop()）后 mpv 核心自动进入
-        // shutdown 退出流程；本引擎为全局单例（destroy 不再随页面销毁），重进时
-        // loadfile 发到已退出的 core 被静默丢弃 → 无任何加载日志、无画面无声。
-        // idle=yes 使 core 在无文件时保持待命，可反复 loadfile。
+        // shutdown 退出流程；在同一页面内切线/重试时，后续 loadfile 会发到已退出的
+        // core 并被静默丢弃。idle=yes 使会话在无文件时保持待命，可反复 loadfile。
         MPVLib.setOptionString("idle", "yes")
     }
 
@@ -272,51 +319,72 @@ class PlayerEngine private constructor() {
         }
     }
 
-    fun attachSurface(surface: android.view.Surface) {
-        if (!ensureReady("attachSurface")) return
-        runCatching {
-            // 根因说明（真机「重进直播间无画面」第二因素）：detachSurface 会把 vo 置为
-            // "null" 以停渲染；重进后新 surfaceCreated 若只 force-window=yes + attachSurface，
-            // vo 残留 null → 即使流加载成功也没有视频输出。这里恢复初始化时记录的 vo。
-            voOption?.let { MPVLib.setPropertyString("vo", it) }
-            MPVLib.setOptionString("force-window", "yes")
-            // 先解绑旧 surface 再 attach 新的（根因说明见下）
-            MPVLib.detachSurface()
-            MPVLib.attachSurface(surface)
+    fun attachSurface(sessionId: Long, surface: android.view.Surface): Boolean {
+        if (!isActiveSession(sessionId, "attachSurface")) return false
+        if (!ensureReady("attachSurface")) return false
+        if (!surface.isValid) {
+            dev.livefork.app.app.Log.w(
+                "拒绝绑定无效 Surface：session=$sessionId surface=${System.identityHashCode(surface)}",
+            )
+            return false
         }
+        return runCatching {
+            // MPVLib 的 Surface 绑定不是 swap。若存在旧绑定，先关闭 VO 再解绑，避免
+            // MediaCodec 继续持有已经销毁的旧 Surface。随后必须先 attach 新 Surface，
+            // 再恢复 VO；原实现的相反顺序会让解码器在重进时仍关联旧 Surface。
+            if (surfaceAttached) {
+                MPVLib.setPropertyString("vo", "null")
+                MPVLib.setOptionString("force-window", "no")
+                MPVLib.detachSurface()
+                surfaceAttached = false
+            }
+            MPVLib.attachSurface(surface)
+            surfaceAttached = true
+            MPVLib.setOptionString("force-window", "yes")
+            voOption?.let { MPVLib.setPropertyString("vo", it) }
+            dev.livefork.app.app.Log.i(
+                "Surface 已绑定：session=$sessionId surface=${System.identityHashCode(surface)}",
+            )
+            true
+        }.onFailure { error ->
+            dev.livefork.app.app.Log.e("Surface 绑定失败：session=$sessionId", error)
+        }.getOrDefault(false)
     }
 
     /**
      * 上报 SurfaceView 尺寸（对应 mpv `android-surface-size`）。
      *
      * 根因说明（真机闪退：重进直播间后全屏旋转崩溃）：原实现由 `MpvVideoView.surfaceChanged`
-     * 直接裸调 `MPVLib.setPropertyString`——该入口没有 `ensureReady` 守卫，一旦引擎已被
-     * `PlayerEngine.destroy()` 销毁（旧页面 onDispose 晚于新页面组合的转场时序），旋转触发的
-     * size 变化会对已释放的 mpv 实例发起 JNI 调用，native use-after-free 直接 SIGSEGV。
+     * 直接裸调 `MPVLib.setPropertyString`——该入口没有 `ensureReady` 守卫。页面会话已经
+     * 释放时，旋转触发的 size 变化会对已释放的 mpv 实例发起 JNI 调用，
+     * native use-after-free 直接 SIGSEGV。
      * 统一收口到本方法：先过 `ensureReady`（未初始化安全返回），`runCatching` 仅兜 Java 异常。
      */
-    fun setSurfaceSize(width: Int, height: Int) {
+    fun setSurfaceSize(sessionId: Long, width: Int, height: Int) {
+        if (!isActiveSession(sessionId, "setSurfaceSize")) return
         if (!ensureReady("setSurfaceSize")) return
         runCatching { MPVLib.setPropertyString("android-surface-size", "${width}x$height") }
     }
 
-    fun detachSurface() {
-        if (!ensureReady("detachSurface")) return
-        runCatching {
-            // 根因说明（真机「退出立即重进无画面/无画面无声」）：
-            // 原实现在这里 `setPropertyString("vo", "null")`——vo 是引擎全局属性，
-            // detachSurface 由 surfaceDestroyed 或页面 onDispose 驱动；若恰好晚于新页面
-            // attachSurface 的 vo 恢复，会把 vo 改回 null，新页面 loadfile 时 hwdec 无法
-            // 创建 mediacodec surface → `VO: [null]`（只有声音无画面）。surface 解绑
-            // 本身由 `MPVLib.detachSurface()` 完成，不再额外改 vo。
-            MPVLib.setOptionString("force-window", "no")
-            MPVLib.detachSurface()
-        }
+    /** SurfaceView 已销毁；真正释放由当前页面的 [releaseSession] 完成。 */
+    fun surfaceDestroyed(sessionId: Long, surface: android.view.Surface) {
+        if (!isActiveSession(sessionId, "surfaceDestroyed")) return
+        dev.livefork.app.app.Log.i(
+            "Surface 已销毁：session=$sessionId surface=${System.identityHashCode(surface)}",
+        )
+    }
+
+    private fun isActiveSession(sessionId: Long, op: String): Boolean {
+        val active = synchronized(lifecycleLock) { activeSessionId }
+        if (active == sessionId) return true
+        dev.livefork.app.app.Log.w("忽略过期播放器会话调用：op=$op session=$sessionId active=$active")
+        return false
     }
 
     /** 打开媒体（对应 Dart player.open(Media)。httpHeaders 转 http-header-fields）。 */
     fun open(url: String, httpHeaders: Map<String, String> = emptyMap()) {
         if (!ensureReady("open")) return
+        dev.livefork.app.app.Log.i("提交 loadfile：surfaceAttached=$surfaceAttached")
         if (httpHeaders.isNotEmpty()) {
             val joined = httpHeaders.entries.joinToString(",") { "${it.key}: ${it.value}" }
             runCatching { MPVLib.setPropertyString("http-header-fields", joined) }
@@ -410,11 +478,26 @@ class PlayerEngine private constructor() {
         if (!ensureReady("getPropertyBoolean/$name")) null
         else runCatching { MPVLib.getPropertyBoolean(name) }.getOrNull()
 
-    fun destroy() {
+    fun releaseSession(sessionId: Long) {
+        synchronized(lifecycleLock) {
+            if (activeSessionId != sessionId) {
+                dev.livefork.app.app.Log.w(
+                    "忽略过期播放器会话释放：session=$sessionId active=$activeSessionId",
+                )
+                return
+            }
+            activeSessionId = null
+        }
+        if (!created) return
+        // 先置 false，让并发迟到调用在进入 JNI 前被 ensureReady 拒绝。
+        created = false
+        surfaceAttached = false
         MPVLib.removeObserver(observer)
         MPVLib.removeLogObserver(logObserver)
         runCatching { MPVLib.destroy() }
-        created = false
+            .onFailure { dev.livefork.app.app.Log.e("播放器销毁失败：session=$sessionId", it) }
+        _state.value = PlayerState()
+        dev.livefork.app.app.Log.i("播放器会话已释放：session=$sessionId")
     }
 }
 

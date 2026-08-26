@@ -1228,6 +1228,7 @@ class LiveRoomController(
     /* ---------- 清理 ---------- */
 
     fun dispose() {
+        if (_roomDisposed) return
         _roomDisposed = true
         _loadGeneration += 1
         currentRoom.clearRoom()
@@ -1240,12 +1241,8 @@ class LiveRoomController(
         mediaEventSubJobs.forEach { it.cancel() }
         mediaEventSubJobs.clear()
         reopenPendingFuture()
-        // 不再调 player.stop()。
-        // 根因说明（真机「退出后立即重进无画面」）：本方法由 Compose 页面 onDispose 驱动，
-        // 导航转场动画结束后才执行，晚于新页面组合（新页面可能已开始 open 新流）；
-        // PlayerEngine 是全局单例，stop() 全局生效，会把新页面正在加载的流打断
-        // （日志：start-file 后旧页面 dispose → Opening failed → end-file，无声无画）。
-        // 停流责任在离开直播间的 UI 路径（leaveRoom 已在 pop 前调用 player.stop()）。
+        // 不在控制器清理中调用全局 player.stop()：正常退出由 leaveRoom 在 pop 前先停流；
+        // 非常规 onDispose 则紧接着按会话号释放引擎。这样迟到的旧控制器不会停止新页面。
         scope.launch { liveDanmaku?.stop() }
         scope.coroutineContext[Job]?.cancel()
     }

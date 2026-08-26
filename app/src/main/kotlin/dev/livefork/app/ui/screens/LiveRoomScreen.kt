@@ -265,20 +265,22 @@ fun LiveRoomScreen(
     // MpvVideoView 是 SurfaceView（独立 Z 层，由系统合成器直接上屏，不参与 View 层级绘制）。
     // 导航 pop 的转场动画期间，Compose 页面整体退出，但 Surface 图层不受该动画影响，
     // 会一直显示到视图脱离窗口为止 → 视频画面浮在目标页之上残留数百毫秒。
-    // 修复：返回前先把两个互操作 View 置 GONE——SurfaceView GONE 会立即触发
-    // surfaceDestroyed → detachSurface，Surface 随之销毁；等待两帧确保合成器
-    // 移除图层后再 popBackStack。AndroidView 未提供 update 回调，重组不会重置 visibility。
+    // 修复：返回前先停止控制器并释放本页面拥有的播放器会话，再把两个互操作 View 置
+    // GONE；这样不会把仍绑定旧 Surface 的全局 MPVLib 留给下一次进入。等待两帧确保
+    // Surface 图层从合成器移除后再 popBackStack。
     var leaving by remember { mutableStateOf(false) }
     fun leaveRoom() {
         if (leaving) return
         leaving = true
-        // 先停播放器：onDispose 的 destroy 要等滑出转场结束才执行，期间 mpv 音频仍在播
-        //（真机症状：退出后声音残留零点几秒）。stop 立即停音视频，销毁顺序不变。
+        // 退出发生在 pop 之前，此处可以确定性地完整释放当前会话；onDispose 仍作为
+        // 非常规出栈路径的兜底，且 controller/videoView 的 dispose 均已幂等。
         runCatching { PlayerEngine.instance.stop() }
+        controller.dispose()
+        videoView.destroy()
         videoView.visibility = View.GONE
         danmakuOverlay.visibility = View.GONE
         coroutineScope.launch {
-            // 第一帧应用 GONE 触发 surfaceDestroyed，第二帧确保 Surface 图层从合成器移除
+            // 第一帧应用 GONE，第二帧确保 Surface 图层从合成器移除
             repeat(2) { withFrameNanos { } }
             onBack()
         }
@@ -296,7 +298,8 @@ fun LiveRoomScreen(
 
     /* ---------- 播放器接线 + 控制器生命周期 ---------- */
 
-    // 放在同一个 DisposableEffect 里保证销毁顺序确定：先停控制器再毁播放器内核。
+    // 放在同一个 DisposableEffect 里保证销毁顺序确定；正常返回已在 leaveRoom 提前执行，
+    // 此处负责非常规出栈兜底，两个释放入口均为幂等操作。
     DisposableEffect(controller, videoView) {
         val videoConfig =
             MpvOptionsService.videoControllerConfiguration(ServiceContainer.appSettings)
