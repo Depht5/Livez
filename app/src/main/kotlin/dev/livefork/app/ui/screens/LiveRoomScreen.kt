@@ -7,6 +7,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.ActivityInfo
 import android.media.AudioManager
+import android.os.Build
 import android.view.View
 import android.view.WindowManager
 import androidx.activity.compose.BackHandler
@@ -112,7 +113,8 @@ import kotlinx.coroutines.withContext
  * 标签栏（聊天/SC(bilibili)/头条(huya)/关注/贡献榜(douyu 为亲密榜)/设置）→ 内容区。
  *
  * 全屏切换：isFullScreen 为 UI 层状态（rememberSaveable 持久，等价原 onSaveInstanceState），
- * 全屏时隐藏竖屏布局区、视频区 fillMaxSize、系统栏隐藏 + SENSOR_LANDSCAPE 方向；
+ * 全屏时隐藏竖屏布局区、系统栏隐藏 + SENSOR_LANDSCAPE 方向 + 刘海模式 SHORT_EDGES；
+ * 视频按源宽高比 letterbox 居中（不拉伸，黑边留白；无尺寸信息回退铺满）。
  * MainActivity 已声明 configChanges 含 orientation|screenSize|screenLayout|keyboardHidden
  * → 旋转不重建，布局重算由约束驱动（aspectRatio 随宽度变化自动重算 16:9 高度，
  * 等价原 onConfigurationChanged 手动重算语义，无需显式读取 LocalConfiguration）。
@@ -175,8 +177,11 @@ fun LiveRoomScreen(
     // 恢复为 true 时下面的窗口副作用 LaunchedEffect 自动重新进入全屏
     var isFullScreen by rememberSaveable { mutableStateOf(false) }
 
-    // 全屏系统栏/方向副作用：进入全屏 → SENSOR_LANDSCAPE + 隐藏 systemBars（滑动临时呼出）；
-    // 退出全屏 → PORTRAIT + 显示 systemBars。等价原 enterFullScreen/exitFull 的窗口操作。
+    // 全屏系统栏/方向副作用：进入全屏 → SENSOR_LANDSCAPE + 隐藏 systemBars（滑动临时呼出）+
+    // 刘海模式 SHORT_EDGES（画面延伸进刘海区，消除刘海侧黑边）；
+    // 退出全屏 → PORTRAIT + 显示 systemBars + 恢复刘海模式 DEFAULT。
+    // 等价原 enterFullScreen/exitFull 的窗口操作。控制层顶栏不做刘海避让（用户决策：
+    // 刘海区不压关键控件，接受视觉覆盖，不加 statusBarsPadding）。
     LaunchedEffect(isFullScreen) {
         val activity = context as? Activity ?: return@LaunchedEffect
         val window = activity.window
@@ -187,13 +192,28 @@ fun LiveRoomScreen(
             insetsController.hide(WindowInsetsCompat.Type.systemBars())
             insetsController.systemBarsBehavior =
                 WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+            // 刘海屏适配（API 28+）：允许内容延伸进短边刘海区
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                window.attributes = window.attributes.apply {
+                    layoutInDisplayCutoutMode =
+                        WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+                }
+            }
         } else {
             activity.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
             WindowInsetsControllerCompat(window, window.decorView)
                 .show(WindowInsetsCompat.Type.systemBars())
+            // 退出全屏恢复默认刘海模式（竖屏显示不受影响）
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                window.attributes = window.attributes.apply {
+                    layoutInDisplayCutoutMode =
+                        WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_DEFAULT
+                }
+            }
         }
     }
-    // 离开直播间时若仍处于全屏：恢复竖屏方向与系统栏（避免 MainActivity 宿主窗口残留横屏沉浸）
+    // 离开直播间时若仍处于全屏：恢复竖屏方向、系统栏与刘海模式
+    //（避免 MainActivity 宿主窗口残留横屏沉浸/刘海延伸）
     DisposableEffect(context) {
         onDispose {
             val activity = context as? Activity
@@ -202,6 +222,14 @@ fun LiveRoomScreen(
                     activity.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
                     WindowInsetsControllerCompat(activity.window, activity.window.decorView)
                         .show(WindowInsetsCompat.Type.systemBars())
+                    // 刘海模式兜底恢复（与 LaunchedEffect(isFullScreen) 退出分支同语义）
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                        val win = activity.window
+                        win.attributes = win.attributes.apply {
+                            layoutInDisplayCutoutMode =
+                                WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_DEFAULT
+                        }
+                    }
                 }
             }
         }
@@ -322,6 +350,14 @@ fun LiveRoomScreen(
     val followNotLive by ServiceContainer.followService.notLiveList.collectAsStateWithLifecycle()
     // 播放状态（▶/⏸ 图标）
     val playerState by PlayerEngine.instance.state.collectAsStateWithLifecycle()
+
+    // 视频源宽高比（width/height 由 mpv video-params 属性监听维护）：
+    // 任一维度缺失或非正时为 null，全屏布局据此决定 letterbox 还是回退铺满
+    // （未开播/未取到尺寸的场景）
+    val videoAspect: Float? =
+        playerState.width?.takeIf { it > 0 }?.let { w ->
+            playerState.height?.takeIf { it > 0 }?.let { h -> w.toFloat() / h }
+        }
 
     // 未开播期间自动隐藏控制层（等价旧 updateLiveStatus(!live) → hide()）
     LaunchedEffect(liveStatus) {
@@ -588,6 +624,7 @@ fun LiveRoomScreen(
         // 进入直播间「先黑底、后出画面」属 mpv 异步初始化的正常表现
         // （initialize/create/surface attach 均异步完成），不做伪加载动画，
         // 黑底占位由本 Box 的 background(Color.Black) 承担。
+        // 手势层挂在外层（含 letterbox 黑边区域，全屏任意位置可点/滑）。
         Box(
             modifier = (if (isFullScreen) {
                 Modifier.fillMaxSize()
@@ -597,17 +634,31 @@ fun LiveRoomScreen(
                 .then(videoGestureModifier)
                 .background(Color.Black),
         ) {
-            // mpv 渲染内核（互操作白名单）：Surface 附加由 MpvVideoView 的
-            // SurfaceHolder.Callback 自动处理（surfaceCreated → attachSurface）
-            AndroidView(
-                factory = { videoView },
-                modifier = Modifier.fillMaxSize(),
-            )
-            // 浮层弹幕：叠加在视频之上、未开播提示之下；非交互层不拦截点击
-            AndroidView(
-                factory = { danmakuOverlay },
-                modifier = Modifier.fillMaxSize(),
-            )
+            // 全屏且已取到源尺寸：内层按源宽高比约束出与视频同比的区域并居中
+            //（letterbox：黑边由外层黑底留白，mpv Surface 不再被拉伸）；
+            // videoAspect 为 null（未开播/未取到尺寸）时回退铺满（维持原行为）。
+            // 弹幕浮层与 Surface 同区域，轨道宽度随视频区对齐。
+            Box(
+                modifier = if (isFullScreen && videoAspect != null) {
+                    Modifier
+                        .align(Alignment.Center)
+                        .aspectRatio(videoAspect)
+                } else {
+                    Modifier.fillMaxSize()
+                },
+            ) {
+                // mpv 渲染内核（互操作白名单）：Surface 附加由 MpvVideoView 的
+                // SurfaceHolder.Callback 自动处理（surfaceCreated → attachSurface）
+                AndroidView(
+                    factory = { videoView },
+                    modifier = Modifier.fillMaxSize(),
+                )
+                // 浮层弹幕：叠加在视频之上、未开播提示之下；非交互层不拦截点击
+                AndroidView(
+                    factory = { danmakuOverlay },
+                    modifier = Modifier.fillMaxSize(),
+                )
+            }
             // 未开播覆盖层：白字居中（对应原 unliveOverlay）
             if (!liveStatus) {
                 Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {

@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -21,6 +22,8 @@ import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyGridState
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ScrollableTabRow
@@ -66,9 +69,9 @@ import kotlinx.coroutines.launch
  * `category_list_view.dart`（分类列表），替换现版 View 体系 `ui/CategoryView.kt`。
  *
  * 结构镜像：顶部可滑动站点 Tab（logo 24dp + 8dp 间距 + 文字 16sp，选中分类蓝 #3498DB /
- * 未选中 #666666 手动切色，指示条 #3498DB），下方为当前站点的分类网格：
- * 主分类标题为 full-span item 随滚动（**不做吸顶**，用户已决策，视觉取舍记入设计文档），
- * 子分类卡片 +「显示全部」展开。
+ * 未选中 #666666 手动切色，指示条 #3498DB），下方为站点横向翻页器（HorizontalPager），
+ * 每页一个分类网格：主分类标题为 full-span item 随滚动（**不做吸顶**，用户已决策，
+ * 视觉取舍记入设计文档），子分类卡片 +「显示全部」展开；Tab 点击与滑动手势双向同步。
  *
  * 各站点列表控制器由 [CategoryController] 壳层持有（跨底栏 Tab 切换存活）；
  * 滚动状态按站点各持一个 [LazyGridState]，由壳层传入（跨底栏切换与路由导航均不丢位置）。
@@ -89,10 +92,23 @@ fun CategoryScreen(
     val sites = controller.sites
     val coroutineScope = rememberCoroutineScope()
 
-    // 当前站点 Tab（rememberSaveable：进程重建后恢复选中态，对齐壳层 currentIndex 的取舍）
+    // 当前站点 Tab（rememberSaveable：进程重建后恢复选中态，作 pager 的 initialPage 兜底；
+    // 之后以 pager 的 settledPage 为准回写——点击与滑动两条路径统一收敛到这一处写回）
     var selectedSiteIndex by rememberSaveable { mutableIntStateOf(0) }
     // 越界保护：设置里站点排序变化导致索引失效时回落到第一个站点
     val siteIndex = selectedSiteIndex.coerceIn(0, sites.lastIndex.coerceAtLeast(0))
+
+    // 横向翻页器（foundation 1.7 stable API）：站点分类网格页左右滑动切换；
+    // 默认不预组合邻页（beyondViewportPageCount=0），滑动中邻页被组合时其内部
+    // 「仅首次加载」守卫触发邻站首载，等价旧 View attach 即加载语义，可接受。
+    val pagerState = rememberPagerState(initialPage = siteIndex, pageCount = { sites.size })
+
+    // 滑动稳定后回写选中索引，驱动 Tab 切色/指示条跟随；
+    // 点击 Tab 走 animateScrollToPage，settle 后同样经此路径写回（幂等赋值，无循环风险）。
+    // 用 settledPage 而非 currentPage：避免滑动中途越过中线时 Tab 提前抖动切色。
+    LaunchedEffect(pagerState.settledPage) {
+        selectedSiteIndex = pagerState.settledPage
+    }
 
     // ===== 底栏重复点击事件（对齐 Dart indexed_controller.setIndex 的发射语义）=====
     // Dart 行为（lib/modules/category/category_controller.dart onInit/refreshOrScrollTop +
@@ -103,9 +119,9 @@ fun CategoryScreen(
     DisposableEffect(Unit) {
         val job = EventBus.listen<Int>(EventBus.kBottomNavigationBarClicked) { index ->
             if (index == 2) {
-                // 注意读最新的选中索引：此处闭包只创建一次，必须经 rememberSaveable 的
-                // 委托属性读取当前值（不能用每次重组重算的局部变量）
-                val current = selectedSiteIndex.coerceIn(0, sites.lastIndex.coerceAtLeast(0))
+                // 注意读最新的可见页索引：闭包只创建一次，必须经 pagerState（remember 持有的
+                // 稳定实例）读取当前 settledPage，不能用每次重组重算的局部变量
+                val current = pagerState.settledPage.coerceIn(0, sites.lastIndex.coerceAtLeast(0))
                 val listController = controller.categoryListControllers[sites[current].id]
                 val gridState = gridStates[sites[current].id]
                 if (listController != null && gridState != null) {
@@ -127,18 +143,33 @@ fun CategoryScreen(
         SiteTabRow(
             sites = sites,
             selectedIndex = siteIndex,
-            onSelect = { index -> selectedSiteIndex = index },
+            onSelect = { index ->
+                // 点击 Tab → 动画翻页；选中态由上方 settledPage 回写统一驱动
+                //（指示条随 selectedSiteIndex 跳变，不做逐帧跟随——简单方案，可接受）
+                coroutineScope.launch { pagerState.animateScrollToPage(index) }
+            },
         )
 
-        val currentListController = controller.categoryListControllers[sites[siteIndex].id]
-        val currentGridState = gridStates[sites[siteIndex].id]
-        if (currentListController != null && currentGridState != null) {
-            CategorySiteGrid(
-                listController = currentListController,
-                gridState = currentGridState,
-                onOpenSub = { sub -> onOpenCategory(sites[siteIndex], sub) },
-                modifier = Modifier.weight(1f),
-            )
+        // 各站点一页：网格滚动状态仍由壳层 gridStates Map 持有（键 = 站点 id），
+        // pager 页销毁重建不影响位置；首屏加载守卫在 CategorySiteGrid 内部，行为不变。
+        // pager 横滑与网格纵向滚动/下拉刷新方向正交，无手势冲突。
+        HorizontalPager(state = pagerState, modifier = Modifier.weight(1f).fillMaxWidth()) { page ->
+            // 越界保护：sites 尺寸变化瞬间 pageCount 已更新但页面索引可能短暂越界
+            val pageIdx = page.coerceIn(0, sites.lastIndex.coerceAtLeast(0))
+            val pageSite = sites[pageIdx]
+            val listController = controller.categoryListControllers[pageSite.id]
+            val gridState = gridStates[pageSite.id]
+            if (listController != null && gridState != null) {
+                CategorySiteGrid(
+                    listController = listController,
+                    gridState = gridState,
+                    onOpenSub = { sub -> onOpenCategory(pageSite, sub) },
+                    modifier = Modifier.fillMaxSize(),
+                )
+            } else {
+                // 控制器尚未就绪的兜底空页（正常流程不会出现）
+                Box(modifier = Modifier.fillMaxSize())
+            }
         }
     }
 }
