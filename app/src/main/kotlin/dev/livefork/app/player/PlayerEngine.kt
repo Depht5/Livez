@@ -18,6 +18,8 @@ data class PlayerState(
     val durationMs: Long = 0,
     val width: Int? = null,
     val height: Int? = null,
+    /** mpv `video-params/aspect`：显示宽高比（DAR，已含变形源像素比折算），未知/未取到为 0 或 null */
+    val aspect: Double? = null,
     val volume: Double = 100.0,
     val rate: Double = 1.0,
     val mediaTitle: String? = null,
@@ -38,6 +40,24 @@ class PlayerEngine private constructor() {
     }
 
     private var created = false
+
+    /**
+     * 引擎就绪守卫：未初始化（尚未 create）或已销毁（destroy 后 created=false）时
+     * 拒绝所有 set_property/command 调用。
+     *
+     * 根因说明（真机闪退：反复进出直播间偶现 "set_property called but mpv is not initialized"
+     * 后 native 崩溃）：PlayerEngine 为全局单例，而 destroy 由直播间页面的 onDispose 驱动；
+     * 页面切换转场期间「新页面组合/旧页面销毁」交错，异步加载链路（loadPlayUrl → open →
+     * set_property）可能在引擎被另一路 destroy 之后才执行到 JNI 调用点。此守卫把该场景从
+     * native 崩溃降级为 Log.w 安全返回（UI 层最多表现为无声画，不闪退）。
+     */
+    private fun ensureReady(op: String): Boolean {
+        if (!created) {
+            dev.livefork.app.app.Log.w("播放器未初始化，忽略 $op 调用（已销毁或尚未 initialize）")
+            return false
+        }
+        return true
+    }
 
     /** 初始化失败原因（native/Java 异常时设置；UI 层据此提示而不是崩溃）。 */
     private val _initError = MutableStateFlow<String?>(null)
@@ -118,7 +138,10 @@ class PlayerEngine private constructor() {
                     val ms = (value * 1000).toLong()
                     _state.value = _state.value.copy(durationMs = ms)
                 }
-                "video-params/aspect" -> emitVideoParams()
+                "video-params/aspect" -> {
+                    _state.value = _state.value.copy(aspect = value)
+                    emitVideoParams()
+                }
             }
         }
 
@@ -241,6 +264,7 @@ class PlayerEngine private constructor() {
     }
 
     fun attachSurface(surface: android.view.Surface) {
+        if (!ensureReady("attachSurface")) return
         runCatching {
             MPVLib.setOptionString("force-window", "yes")
             MPVLib.attachSurface(surface)
@@ -248,6 +272,7 @@ class PlayerEngine private constructor() {
     }
 
     fun detachSurface() {
+        if (!ensureReady("detachSurface")) return
         runCatching {
             MPVLib.setPropertyString("vo", "null")
             MPVLib.setOptionString("force-window", "no")
@@ -257,6 +282,7 @@ class PlayerEngine private constructor() {
 
     /** 打开媒体（对应 Dart player.open(Media)。httpHeaders 转 http-header-fields）。 */
     fun open(url: String, httpHeaders: Map<String, String> = emptyMap()) {
+        if (!ensureReady("open")) return
         if (httpHeaders.isNotEmpty()) {
             val joined = httpHeaders.entries.joinToString(",") { "${it.key}: ${it.value}" }
             runCatching { MPVLib.setPropertyString("http-header-fields", joined) }
@@ -265,49 +291,59 @@ class PlayerEngine private constructor() {
     }
 
     fun play() {
+        if (!ensureReady("play")) return
         _state.value = _state.value.copy(playing = true)
         MPVLib.setPropertyBoolean("pause", false)
     }
 
     fun pause() {
+        if (!ensureReady("pause")) return
         _state.value = _state.value.copy(playing = false)
         MPVLib.setPropertyBoolean("pause", true)
     }
 
     fun stop() {
+        if (!ensureReady("stop")) return
         MPVLib.command(arrayOf("stop"))
     }
 
     fun seek(positionMs: Long) {
+        if (!ensureReady("seek")) return
         MPVLib.setPropertyDouble("time-pos", positionMs / 1000.0)
     }
 
     fun setVolume(volume: Double) {
+        if (!ensureReady("setVolume")) return
         val clamped = volume.coerceIn(0.0, 100.0)
         _state.value = _state.value.copy(volume = clamped)
         MPVLib.setPropertyDouble("volume", clamped)
     }
 
     fun setRate(rate: Double) {
+        if (!ensureReady("setRate")) return
         _state.value = _state.value.copy(rate = rate)
         MPVLib.setPropertyDouble("speed", rate)
     }
 
     fun setMuted(muted: Boolean) {
+        if (!ensureReady("setMuted")) return
         MPVLib.setPropertyBoolean("mute", muted)
     }
 
     /** 设置 mpv 原生属性（对应 Dart nativePlayer.setProperty）。 */
     fun setProperty(name: String, value: String) {
+        if (!ensureReady("setProperty/$name")) return
         runCatching { MPVLib.setPropertyString(name, value) }
     }
 
     fun setPropertyBoolean(name: String, value: Boolean) {
+        if (!ensureReady("setPropertyBoolean/$name")) return
         runCatching { MPVLib.setPropertyBoolean(name, value) }
     }
 
     /** 截图（对应 Dart player.screenshot()，经 mpv screenshot-to-file 落盘后读取）。 */
     fun screenshot(cacheDir: String): Bitmap? {
+        if (!ensureReady("screenshot")) return null
         val file = java.io.File(cacheDir, "sl_screenshot_${System.currentTimeMillis()}.png")
         return try {
             MPVLib.command(arrayOf("screenshot-to-file", file.absolutePath, "video"))
@@ -323,11 +359,22 @@ class PlayerEngine private constructor() {
         }
     }
 
-    /** 读取属性。 */
-    fun getPropertyString(name: String): String? = runCatching { MPVLib.getPropertyString(name) }.getOrNull()
-    fun getPropertyInt(name: String): Int? = runCatching { MPVLib.getPropertyInt(name) }.getOrNull()
-    fun getPropertyDouble(name: String): Double? = runCatching { MPVLib.getPropertyDouble(name) }.getOrNull()
-    fun getPropertyBoolean(name: String): Boolean? = runCatching { MPVLib.getPropertyBoolean(name) }.getOrNull()
+    /** 读取属性（未初始化时安全返回 null，见 [ensureReady] 根因说明）。 */
+    fun getPropertyString(name: String): String? =
+        if (!ensureReady("getPropertyString/$name")) null
+        else runCatching { MPVLib.getPropertyString(name) }.getOrNull()
+
+    fun getPropertyInt(name: String): Int? =
+        if (!ensureReady("getPropertyInt/$name")) null
+        else runCatching { MPVLib.getPropertyInt(name) }.getOrNull()
+
+    fun getPropertyDouble(name: String): Double? =
+        if (!ensureReady("getPropertyDouble/$name")) null
+        else runCatching { MPVLib.getPropertyDouble(name) }.getOrNull()
+
+    fun getPropertyBoolean(name: String): Boolean? =
+        if (!ensureReady("getPropertyBoolean/$name")) null
+        else runCatching { MPVLib.getPropertyBoolean(name) }.getOrNull()
 
     fun destroy() {
         MPVLib.removeObserver(observer)

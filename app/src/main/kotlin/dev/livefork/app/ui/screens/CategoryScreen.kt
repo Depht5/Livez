@@ -14,21 +14,22 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.wrapContentSize
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyGridState
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.PagerState
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ScrollableTabRow
-import androidx.compose.material3.TabRowDefaults.SecondaryIndicator
-import androidx.compose.material3.TabRowDefaults.tabIndicatorOffset
 import androidx.compose.material3.Text
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.material3.pulltorefresh.PullToRefreshDefaults
@@ -51,6 +52,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.util.lerp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.livefork.app.app.EventBus
 import dev.livefork.app.app.Site
@@ -62,6 +64,7 @@ import dev.livefork.app.ui.theme.CardTitle
 import dev.livefork.app.ui.theme.CategoryBlue
 import dev.livefork.app.ui.theme.TextSecondary
 import dev.livefork.core.model.LiveSubCategory
+import kotlin.math.floor
 import kotlinx.coroutines.launch
 
 /**
@@ -93,7 +96,7 @@ fun CategoryScreen(
     val coroutineScope = rememberCoroutineScope()
 
     // 当前站点 Tab（rememberSaveable：进程重建后恢复选中态，作 pager 的 initialPage 兜底；
-    // 之后以 pager 的 settledPage 为准回写——点击与滑动两条路径统一收敛到这一处写回）
+    // 之后以 pager 的 currentPage 为准回写——点击与滑动两条路径统一收敛到这一处写回）
     var selectedSiteIndex by rememberSaveable { mutableIntStateOf(0) }
     // 越界保护：设置里站点排序变化导致索引失效时回落到第一个站点
     val siteIndex = selectedSiteIndex.coerceIn(0, sites.lastIndex.coerceAtLeast(0))
@@ -103,11 +106,13 @@ fun CategoryScreen(
     // 「仅首次加载」守卫触发邻站首载，等价旧 View attach 即加载语义，可接受。
     val pagerState = rememberPagerState(initialPage = siteIndex, pageCount = { sites.size })
 
-    // 滑动稳定后回写选中索引，驱动 Tab 切色/指示条跟随；
-    // 点击 Tab 走 animateScrollToPage，settle 后同样经此路径写回（幂等赋值，无循环风险）。
-    // 用 settledPage 而非 currentPage：避免滑动中途越过中线时 Tab 提前抖动切色。
-    LaunchedEffect(pagerState.settledPage) {
-        selectedSiteIndex = pagerState.settledPage
+    // 滑动过程中回写选中索引，驱动 Tab 切色/指示条跟随；
+    // 点击 Tab 走 animateScrollToPage，落页后同样经此路径写回（幂等赋值，无循环风险）。
+    // 根因说明（真机反馈：左右滑动时顶部 Tab 变化慢一拍）：settledPage 要等翻页动画
+    // 完全 settle 才更新；改用 currentPage——跨过页面中线立即切换，指示器实时跟手
+    //（tabIndicatorOffset 自带过渡动画，不会生硬跳变）。
+    LaunchedEffect(pagerState.currentPage) {
+        selectedSiteIndex = pagerState.currentPage
     }
 
     // ===== 底栏重复点击事件（对齐 Dart indexed_controller.setIndex 的发射语义）=====
@@ -120,8 +125,8 @@ fun CategoryScreen(
         val job = EventBus.listen<Int>(EventBus.kBottomNavigationBarClicked) { index ->
             if (index == 2) {
                 // 注意读最新的可见页索引：闭包只创建一次，必须经 pagerState（remember 持有的
-                // 稳定实例）读取当前 settledPage，不能用每次重组重算的局部变量
-                val current = pagerState.settledPage.coerceIn(0, sites.lastIndex.coerceAtLeast(0))
+                // 稳定实例）读取当前 currentPage（与 Tab 选中态同一来源），不能用每次重组重算的局部变量
+                val current = pagerState.currentPage.coerceIn(0, sites.lastIndex.coerceAtLeast(0))
                 val listController = controller.categoryListControllers[sites[current].id]
                 val gridState = gridStates[sites[current].id]
                 if (listController != null && gridState != null) {
@@ -143,9 +148,9 @@ fun CategoryScreen(
         SiteTabRow(
             sites = sites,
             selectedIndex = siteIndex,
+            pagerState = pagerState,
             onSelect = { index ->
-                // 点击 Tab → 动画翻页；选中态由上方 settledPage 回写统一驱动
-                //（指示条随 selectedSiteIndex 跳变，不做逐帧跟随——简单方案，可接受）
+                // 点击 Tab → 动画翻页；选中态由上方 currentPage 回写统一驱动
                 coroutineScope.launch { pagerState.animateScrollToPage(index) }
             },
         )
@@ -178,11 +183,18 @@ fun CategoryScreen(
  * 站点 Tab 行 —— 对应 Dart category_page.dart 的 TabBar（logo + 文字）与现版 View 的
  * TabLayout MODE_SCROLLABLE 自定义 tab。配色对齐现版 CategoryView：
  * 指示条 #3498DB、选中 #3498DB / 未选中 #666666（custom tab 内容需手动切色）。
+ *
+ * 指示条逐帧跟随（范式同 HomeScreen）：不用 tabIndicatorOffset（按 selectedTabIndex
+ * 定位 + 自带过渡动画，页面跨中线才更新）。改为读取 pager 连续位置
+ * （currentPage + currentPageOffsetFraction，组合期订阅 → 滑动中本组件每帧重组），
+ * 在相邻两个 TabPosition 之间线性插值出偏移与宽度，实现「页面滑多少、指示条动多少」。
+ * 选中文字色仍按 currentPage 切换（简单起见不做逐帧渐变，视觉差异可忽略）。
  */
 @Composable
 private fun SiteTabRow(
     sites: List<Site>,
     selectedIndex: Int,
+    pagerState: PagerState,
     onSelect: (Int) -> Unit,
 ) {
     ScrollableTabRow(
@@ -193,9 +205,23 @@ private fun SiteTabRow(
         // 指示条颜色对齐现版 setSelectedTabIndicatorColor(#3498DB)，宽度随标签内容
         // （对齐 isTabIndicatorFullWidth = false）
         indicator = { tabPositions ->
-            SecondaryIndicator(
-                modifier = Modifier.tabIndicatorOffset(tabPositions[selectedIndex]),
-                color = CategoryBlue,
+            // 连续页位置：整数部分 = 当前页，小数部分 = 滑动进度（可为负——往回滑时
+            // currentPage 已进位而 offset 为负，floor 后仍落在正确的相邻区间）
+            val pos = pagerState.currentPage + pagerState.currentPageOffsetFraction
+            val leftIndex = floor(pos).toInt().coerceIn(0, tabPositions.lastIndex)
+            val rightIndex = (leftIndex + 1).coerceIn(0, tabPositions.lastIndex)
+            val fraction = (pos - leftIndex).coerceIn(0f, 1f)
+            val leftRect = tabPositions[leftIndex]
+            val rightRect = tabPositions[rightIndex]
+            // 手写等价 SecondaryIndicator + tabIndicatorOffset：偏移/宽度随连续位置插值；
+            // 高度 3dp 对齐 M3 SecondaryIndicator 默认粗细
+            Box(
+                Modifier
+                    .wrapContentSize(Alignment.BottomStart)
+                    .offset(x = lerp(leftRect.left.value, rightRect.left.value, fraction).dp)
+                    .width(lerp(leftRect.width.value, rightRect.width.value, fraction).dp)
+                    .height(3.dp)
+                    .background(CategoryBlue),
             )
         },
         // 现版 TabLayout 无底部分隔线，去掉 M3 默认 divider

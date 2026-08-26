@@ -483,6 +483,16 @@ class LiveRoomController(
         val deferred = CompletableDeferred<Unit>()
         openingDeferred = deferred
         try {
+            // 根因说明（真机闪退：反复进出直播间 "set_property called but mpv is not initialized"）：
+            // 本加载链路虽跑在 controller 自己的 scope（dispose 会 cancel），但协程只在挂起点
+            // 响应取消——从 IO 线程恢复到 Main 后直到 player.open 之间若已越过最后一个挂起点，
+            // dispose 无法中断已 inline 执行的续体；且 PlayerEngine 是全局单例，转场期间新页面
+            // 的 initialize / 旧页面的 destroy 可能交错。此处紧贴 player.open 再查一次 disposed，
+            // 与 PlayerEngine.ensureReady（引擎侧守卫）构成两层防御。
+            if (_roomDisposed) {
+                Log.w("直播间已销毁，放弃打开播放器：$url")
+                return
+            }
             player.open(url, headers)
             _followed.value = _followed.value
         } finally {

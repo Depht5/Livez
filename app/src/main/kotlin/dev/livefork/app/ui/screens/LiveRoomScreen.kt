@@ -177,11 +177,12 @@ fun LiveRoomScreen(
     // 恢复为 true 时下面的窗口副作用 LaunchedEffect 自动重新进入全屏
     var isFullScreen by rememberSaveable { mutableStateOf(false) }
 
-    // 全屏系统栏/方向副作用：进入全屏 → SENSOR_LANDSCAPE + 隐藏 systemBars（滑动临时呼出）+
-    // 刘海模式 SHORT_EDGES（画面延伸进刘海区，消除刘海侧黑边）；
-    // 退出全屏 → PORTRAIT + 显示 systemBars + 恢复刘海模式 DEFAULT。
+    // 全屏系统栏/方向副作用：进入全屏 → SENSOR_LANDSCAPE + 隐藏 systemBars（滑动临时呼出）。
     // 等价原 enterFullScreen/exitFull 的窗口操作。控制层顶栏不做刘海避让（用户决策：
     // 刘海区不压关键控件，接受视觉覆盖，不加 statusBarsPadding）。
+    // 刘海模式说明：SHORT_EDGES 由主题 values-v28/styles.xml 声明（对比原项目
+    // dart_simple_live NormalTheme）——运行时对已附加窗口改 layoutInDisplayCutoutMode
+    // 在部分 OEM（实测荣耀）不生效，故不做运行时切换，主题常开对竖屏无副作用。
     LaunchedEffect(isFullScreen) {
         val activity = context as? Activity ?: return@LaunchedEffect
         val window = activity.window
@@ -192,28 +193,14 @@ fun LiveRoomScreen(
             insetsController.hide(WindowInsetsCompat.Type.systemBars())
             insetsController.systemBarsBehavior =
                 WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
-            // 刘海屏适配（API 28+）：允许内容延伸进短边刘海区
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-                window.attributes = window.attributes.apply {
-                    layoutInDisplayCutoutMode =
-                        WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
-                }
-            }
         } else {
             activity.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
             WindowInsetsControllerCompat(window, window.decorView)
                 .show(WindowInsetsCompat.Type.systemBars())
-            // 退出全屏恢复默认刘海模式（竖屏显示不受影响）
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-                window.attributes = window.attributes.apply {
-                    layoutInDisplayCutoutMode =
-                        WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_DEFAULT
-                }
-            }
         }
     }
-    // 离开直播间时若仍处于全屏：恢复竖屏方向、系统栏与刘海模式
-    //（避免 MainActivity 宿主窗口残留横屏沉浸/刘海延伸）
+    // 离开直播间时若仍处于全屏：恢复竖屏方向与系统栏
+    //（避免 MainActivity 宿主窗口残留横屏沉浸；刘海模式由主题常开，无需恢复）
     DisposableEffect(context) {
         onDispose {
             val activity = context as? Activity
@@ -222,14 +209,6 @@ fun LiveRoomScreen(
                     activity.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
                     WindowInsetsControllerCompat(activity.window, activity.window.decorView)
                         .show(WindowInsetsCompat.Type.systemBars())
-                    // 刘海模式兜底恢复（与 LaunchedEffect(isFullScreen) 退出分支同语义）
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-                        val win = activity.window
-                        win.attributes = win.attributes.apply {
-                            layoutInDisplayCutoutMode =
-                                WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_DEFAULT
-                        }
-                    }
                 }
             }
         }
@@ -351,13 +330,21 @@ fun LiveRoomScreen(
     // 播放状态（▶/⏸ 图标）
     val playerState by PlayerEngine.instance.state.collectAsStateWithLifecycle()
 
-    // 视频源宽高比（width/height 由 mpv video-params 属性监听维护）：
+    // 视频源宽高比（width/height/aspect 均由 mpv video-params 属性监听维护）：
+    // 优先采用 aspect（video-params/aspect = DAR 显示宽高比）——变形分辨率（anamorphic）
+    // 源的存储分辨率 w/h 不等于真实显示比例，mpv 已把像素比折算进该值，非 0 时直接使用
+    //（注意：不能再乘回 w/h，否则 16:9 源会算成 ~3.16）；DAR 缺失或为 0 时回退 w/h。
     // 任一维度缺失或非正时为 null，全屏布局据此决定 letterbox 还是回退铺满
     // （未开播/未取到尺寸的场景）
-    val videoAspect: Float? =
-        playerState.width?.takeIf { it > 0 }?.let { w ->
-            playerState.height?.takeIf { it > 0 }?.let { h -> w.toFloat() / h }
-        }
+    val videoAspect: Float? = run {
+        val w = playerState.width
+        val h = playerState.height
+        if (w == null || h == null || w <= 0 || h <= 0) return@run null
+        val dar = playerState.aspect
+        val ratio =
+            if (dar != null && dar > 0.0 && dar.isFinite()) dar.toFloat() else w.toFloat() / h
+        ratio.takeIf { it > 0f && it.isFinite() }
+    }
 
     // 未开播期间自动隐藏控制层（等价旧 updateLiveStatus(!live) → hide()）
     LaunchedEffect(liveStatus) {
@@ -561,7 +548,15 @@ fun LiveRoomScreen(
 
     /* ---------- 布局：LinearLayout(VERTICAL) 等价 Column ---------- */
 
-    Column(modifier = modifier.fillMaxSize().background(Color.White)) {
+    // 根因说明（真机反馈：横屏全屏刘海处显示白色边界）：窗口经 SHORT_EDGES 延伸进刘海区后，
+    // 根容器的背景色直接决定刘海区域的观感——原根容器固定白色，主题白底从视频黑底之外
+    // （含刘海延伸区）穿透出来。修复：全屏时根容器改黑色（与视频外层黑底一致），
+    // 竖屏维持白色不变。
+    Column(
+        modifier = modifier
+            .fillMaxSize()
+            .background(if (isFullScreen) Color.Black else Color.White)
+    ) {
 
         // 标题栏：返回箭头 / 标题（16sp medium 单行省略）/ 「⋮」菜单 —— 全屏时隐藏。
         // 根因说明（真机症状 4：标题不居中、返回按钮左侧缺几个像素）：
@@ -634,12 +629,14 @@ fun LiveRoomScreen(
                 .then(videoGestureModifier)
                 .background(Color.Black),
         ) {
-            // 全屏且已取到源尺寸：内层按源宽高比约束出与视频同比的区域并居中
-            //（letterbox：黑边由外层黑底留白，mpv Surface 不再被拉伸）；
-            // videoAspect 为 null（未开播/未取到尺寸）时回退铺满（维持原行为）。
+            // 内层按源宽高比约束出与视频同比的区域并居中（letterbox：黑边由外层黑底留白，
+            // mpv Surface 不再被拉伸）；videoAspect 为 null（未开播/未取到尺寸）时回退铺满。
+            // 根因说明（真机反馈：竖屏模式画面依然拉伸）：竖屏外层是固定 16:9 框，原实现只在
+            // 全屏分支做 letterbox，竖屏对非 16:9 源仍被铺满拉伸——修复后两个分支共用同一
+            // 写法：竖屏布局尺寸不变（仍 16:9 黑底框），内层按源比例居中、上下留黑边。
             // 弹幕浮层与 Surface 同区域，轨道宽度随视频区对齐。
             Box(
-                modifier = if (isFullScreen && videoAspect != null) {
+                modifier = if (videoAspect != null) {
                     Modifier
                         .align(Alignment.Center)
                         .aspectRatio(videoAspect)
