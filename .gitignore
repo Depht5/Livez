@@ -17,3 +17,7 @@ captures/
 
 # Local downloaded libs (reproducible from Maven Central, e.g. libmpv aar)
 .libs/
+
+# Release signing keystore (never commit)
+*.jks
+*.keystore

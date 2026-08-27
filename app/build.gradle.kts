@@ -1,3 +1,5 @@
+import java.util.Properties
+
 // 对应 dart_simple_live/simple_live_app —— Android 原生应用。
 plugins {
     id("com.android.application")
@@ -8,8 +10,14 @@ plugins {
     id("org.jetbrains.kotlin.plugin.compose")
 }
 
+// 发布签名材料读取自 local.properties（已 gitignore，不入库）；缺失时 release 退化为未签名构建。
+val signingProps = Properties().apply {
+    val f = rootProject.file("local.properties")
+    if (f.exists()) f.inputStream().use { load(it) }
+}
+
 android {
-    namespace = "dev.livefork.app"
+    namespace = "com.kotlin_livez.app"
     compileSdk = 34
 
     buildFeatures {
@@ -19,7 +27,7 @@ android {
     }
 
     defaultConfig {
-        applicationId = "dev.livefork.app"
+        applicationId = "com.kotlin_livez.app"
         // minSdk 26（Android 8.0+）：libmpv（dev.jdtech.mpv:libmpv）AAR 强制要求；
         // mpv 播放内核在旧系统上不可用。
         minSdk = 26
@@ -33,8 +41,20 @@ android {
         targetCompatibility = JavaVersion.VERSION_11
     }
 
+    signingConfigs {
+        create("release") {
+            storeFile = rootProject.file(signingProps.getProperty("storeFile", ""))
+            storePassword = signingProps.getProperty("storePassword", "")
+            keyAlias = signingProps.getProperty("keyAlias", "")
+            keyPassword = signingProps.getProperty("keyPassword", "")
+        }
+    }
+
     buildTypes {
         release {
+            if (signingProps.getProperty("storeFile", "").isNotEmpty()) {
+                signingConfig = signingConfigs.getByName("release")
+            }
             isMinifyEnabled = false
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),

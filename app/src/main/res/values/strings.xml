@@ -2,5 +2,5 @@
 <!-- app_name：AndroidManifest android:label 在用，不可删（UI 文案仍为中文硬编码，
      不引入其他字符串资源）。 -->
 <resources>
-    <string name="app_name">Livez Kotlin</string>
+    <string name="app_name">Livez</string>
 </resources>

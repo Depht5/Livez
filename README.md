@@ -12,7 +12,7 @@
 | `dart_simple_live/simple_live_core` | `core/` | `interfaces/`（Dart `interface/`；Kotlin 保留字，用复数）、`site/`、`danmaku/`、`model/`、`common/` |
 | `dart_simple_live/simple_live_app` | `app/` | `app/`、`di/`、`models/`、`modules/`、`services/`、`widgets/`、`routes/` |
 
-包名：`dev.livefork.core` / `dev.livefork.app`。
+包名：`com.kotlin_livez.core` / `com.kotlin_livez.app`。
 
 ## 技术栈
 
