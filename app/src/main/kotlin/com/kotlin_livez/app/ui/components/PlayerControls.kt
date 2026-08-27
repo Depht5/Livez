@@ -227,12 +227,14 @@ private fun OverlayIconButton(
         // 必须显式白以在深色控制栏上可见
         tint = Color.White,
         modifier = Modifier
-            .size(size)
+            // 顺序关键：padding 在外层撑开点击区，size 在最内层决定图标本体渲染尺寸；
+            // 反序（size 外、padding 内）会使内容区 = size − padding ≤ 0，图标不渲染
             .clickable(
                 interactionSource = remember { MutableInteractionSource() },
                 indication = null,
                 onClick = onClick,
             )
-            .padding(horizontal = paddingH, vertical = paddingV),
+            .padding(horizontal = paddingH, vertical = paddingV)
+            .size(size),
     )
 }

@@ -878,7 +878,8 @@ fun LiveRoomScreen(
                     // LocalContentColor 染黑）：此处显式按状态上色（红 #FF0000 / 灰 #808080）
                     tint = if (followed) Color(0xFFFF0000) else Color(0xFF808080),
                     modifier = Modifier
-                        .size(24.dp)
+                        // 顺序关键：padding 外层撑点击区、size 最内层决定爱心本体尺寸
+                        //（反序会让 padding 挤压渲染区，爱心实际只显示 size−padding）
                         .clickable {
                             if (followed) {
                                 controller.removeFollowUser()
@@ -886,7 +887,8 @@ fun LiveRoomScreen(
                                 controller.followUser()
                             }
                         }
-                        .padding(horizontal = 4.dp, vertical = 4.dp),
+                        .padding(horizontal = 4.dp, vertical = 4.dp)
+                        .size(24.dp),
                 )
                 Text(
                     text = "🔥 ${Utils.onlineToString(online)}",
