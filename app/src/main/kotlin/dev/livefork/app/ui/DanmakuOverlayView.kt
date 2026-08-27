@@ -51,18 +51,19 @@ import kotlin.math.floor
  *    而不是等前一条完全走出左边界。这是旧实现"轨道永不空闲"的根因差异。
  * 3. 追及校验：原版速度 ∝ 弹幕宽度（px/s = (viewWidth+width)/duration，宽者快），
  *    若前一条比新弹幕窄（更慢），还需校验新弹幕不会在旧弹幕出界前追上它。
+ *    本实现已对齐变速模型 + 追及校验（见 canEnterTrack）。（等速模型时期此校验
+ *    恒通过曾被省略，变速后恢复。）
  * 4. 全部轨道均不可入轨时：**静默丢弃新弹幕**（selfSend 强制插首轨 / massiveMode
  *    随机插轨仅用于用户自发消息，直播间聊天不走这两条路径）→ 绝不顶掉在飞弹幕。
  * 5. 轨道数 = floor(可视高 × area / (fontSize×lineHeight))；Dart 层由
  *    `resolveDanmuTargetLineCount` 等把 danmuLineCount 设置折算成 area/lineHeight 传入；
- *    本重写直接以 danmuLineCount 作为轨道行数（视觉等效，不改传参）。
+ *    本重写以「设置行数 clamp(1, floor(层高×area/行高))」作为轨道行数（对齐 Dart，
+ *    行数随视口高度变化，横竖屏自动不同）。
  *
  * 与原版的已知行为差异（有意保留）：
- * 1. 速度模型：原版宽弹幕更快；本实现所有弹幕等速（viewWidth/danmuSpeed）。
- *    等速下一旦前一条右边缘进入屏幕，两条弹幕间距单调不减，永不重叠，
- *    故原版第 3 条追及校验在本实现中恒通过，予以省略。
- * 2. 无 selfSend / massiveMode 特性（无自发送弹幕浮层回显需求），全满一律丢弃。
- * 3. 表情图为独立 bitmap 片段绘制（非原版 Paragraph 内联占位），观感一致。
+ * 1. 无 selfSend / massiveMode 特性（无自发送弹幕浮层回显需求），全满一律丢弃。
+ * 2. 表情图为独立 bitmap 片段绘制（非原版 Paragraph 内联占位），观感一致。
+ * 3. 视口尺寸变化（全屏切换）时清空重来（原版不清空继续滚动）。
  */
 class DanmakuOverlayView @JvmOverloads constructor(
     context: Context,
@@ -266,11 +267,12 @@ class DanmakuOverlayView @JvmOverloads constructor(
         // 轨道选择 —— 对齐 canvas_danmaku `_scrollCanAddToTrack`（根因修复）：
         // 按行号顺序找第一条可入轨的轨道。可入轨 = 该轨道上**每一条**在飞弹幕的右边缘
         // (x+width) 已进入屏幕内（前一条已左移到为新弹幕让出整个入口宽度），
-        // 而非旧实现的"等前一条完全走出左边界才释放轨道"——后者导致高弹幕量下
-        // 轨道恒满，新弹幕被"全满选 x 最小"策略顶掉刚出发的在飞弹幕。
+        // 且（变速模型下）不会在旧弹幕出界前追上它，而非旧实现的"等前一条完全走出
+        // 左边界才释放轨道"——后者导致高弹幕量下轨道恒满，新弹幕被"全满选 x 最小"
+        // 策略顶掉刚出发的在飞弹幕。
         var target = -1
         for (track in 0 until lineCount) {
-            if (canEnterTrack(track)) {
+            if (canEnterTrack(track, itemWidth)) {
                 target = track
                 break
             }
@@ -293,7 +295,7 @@ class DanmakuOverlayView @JvmOverloads constructor(
             font = font,
             track = target,
             x = startX,
-            speed = speedPxPerSec(appSettings.danmuSpeed.value),
+            speed = speedPxPerSec(itemWidth, appSettings.danmuSpeed.value),
             imageHeightPx = imageHeightPx,
         )
         item.measuredWidth = itemWidth
@@ -305,20 +307,28 @@ class DanmakuOverlayView @JvmOverloads constructor(
     }
 
     /**
-     * 轨道可入轨判定 —— 对齐 canvas_danmaku `_scrollCanAddToTrack` 的主条件：
-     * 候选轨道上每一条在飞弹幕都满足「右边缘(x+width) ≤ 视口宽度」才允许入轨
-     * （新弹幕起点 x=视口宽度，恰好接在前一条尾部之后，入场瞬间不重叠）。
-     *
-     * 原版的第二条追及校验（前一条更窄→更慢，可能被更宽更快的新弹幕在出界前追上）
-     * 在本实现中省略：本实现所有弹幕等速（见类 KDoc 差异 1），同轨前后两条的间距
-     * 单调不减，追及重叠不可能发生。
+     * 轨道可入轨判定 —— 对齐 canvas_danmaku `_scrollCanAddToTrack` 两条条件：
+     * 1. 候选轨道上每一条在飞弹幕都满足「右边缘(x+width) ≤ 视口宽度」才允许入轨
+     *    （新弹幕起点 x=视口宽度，恰好接在前一条尾部之后，入场瞬间不重叠）；
+     * 2. 追及校验：速度 ∝ 弹幕宽（px/s = (viewWidth+width)/duration，宽弹幕更快），
+     *    若前一条比新弹幕窄（更慢），新弹幕可能在旧弹幕出界前追上它 → 拒绝入轨。
+     *    （等速模型时期此校验恒通过被省略；对齐原版变速模型后必须恢复。）
      */
-    private fun canEnterTrack(track: Int): Boolean {
-        val viewW = this.width.toFloat()
+    private fun canEnterTrack(track: Int, newDanmakuWidth: Float): Boolean {
+        val viewW = width.toFloat()
         for (item in items) {
             if (item.track != track) continue
             if (viewW - (item.x + item.measuredWidth) < 0f) {
                 return false
+            }
+            // 追及校验（Dart 原式移植）：
+            // 前一条更窄 → 更慢；检查新弹幕是否会在其出界前追上
+            if (item.measuredWidth < newDanmakuWidth) {
+                val prevPassed = 1f - ((viewW - item.x) / (item.measuredWidth + viewW))
+                val newThreshold = viewW / (viewW + newDanmakuWidth)
+                if (prevPassed > newThreshold) {
+                    return false
+                }
             }
         }
         return true
@@ -457,11 +467,11 @@ class DanmakuOverlayView @JvmOverloads constructor(
         }
     }
 
-    private fun speedPxPerSec(speed: Float): Float {
-        // 量纲换算：danmuSpeed（秒数 4–20）→ px/秒 ≈ 屏幕宽 / 秒数
-        // 对齐 Dart duration 语义：越小越快（4 秒穿屏）
-        return if (this.width > 0) {
-            this.width / speed.coerceAtLeast(1f)
+    /** px/秒 —— 对齐 Dart：速度 = (视口宽 + 弹幕宽) / 时长秒（宽弹幕更快、全程含出屏在时长内走完）。 */
+    private fun speedPxPerSec(itemWidth: Float, speed: Float): Float {
+        val viewW = width.toFloat()
+        return if (viewW > 0f) {
+            (viewW + itemWidth) / speed.coerceAtLeast(1f)
         } else {
             200f
         }
