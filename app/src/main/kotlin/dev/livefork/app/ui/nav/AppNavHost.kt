@@ -32,7 +32,9 @@ import androidx.navigation.compose.composable
 import androidx.navigation.navArgument
 import dev.livefork.app.app.EventBus
 import dev.livefork.app.app.Sites
+import dev.livefork.app.di.ServiceContainer
 import dev.livefork.app.modules.category.CategoryController
+import dev.livefork.app.modules.follow_user.FollowUserController
 import dev.livefork.app.modules.home.HomeController
 import dev.livefork.app.ui.Router
 import dev.livefork.app.ui.screens.AccountScreen
@@ -183,9 +185,17 @@ fun AppNavHost(navController: NavHostController, modifier: Modifier = Modifier) 
  * 进程重建后整体重建并重新首屏加载（与原版「Activity 重建即全量重建」一致）。
  */
 private class ShellState {
-    /** 首页/分类控制器（等价现版 homeView/categoryView 字段复用语义）。 */
+    /** 首页/分类/关注控制器（等价现版 homeView/categoryView 字段复用语义）。 */
     val homeController = HomeController()
     val categoryController = CategoryController()
+
+    /** 关注用户控制器（task follow-tab-and-room-follow：关注为底栏 Tab，随壳层存活）。 */
+    val followController = FollowUserController(
+        appSettings = ServiceContainer.appSettings,
+        followService = ServiceContainer.followService,
+        dbService = ServiceContainer.dbService,
+        currentRoom = ServiceContainer.currentRoom,
+    )
 
     /** 分类页各站点网格滚动状态（键 = 站点 id）：随壳层存活，跨 Tab 切换/路由导航不丢位置。 */
     val categoryGridStates: Map<String, LazyGridState> =
@@ -199,12 +209,14 @@ private class ShellState {
     fun dispose() {
         homeController.dispose()
         categoryController.dispose()
+        followController.dispose()
     }
 }
 
 /**
- * 主界面三 Tab 壳 —— 对应 Flutter `home_page.dart` 的底部导航结构。
- * 内容区 + 底栏；三个 Tab 均已迁移为 Compose Screen。
+ * 主界面四 Tab 壳 —— 对应 Flutter `home_page.dart` 的底部导航结构
+ * （task follow-tab-and-room-follow：加入「关注」Tab，替代原 Mine 页入口）。
+ * 内容区 + 底栏；四个 Tab 均已迁移为 Compose Screen。
  *
  * @param shell 壳层状态（由 AppNavHost 持有，跨路由导航存活）
  */
@@ -238,6 +250,7 @@ private fun MainShell(shell: ShellState) {
                         Router.navigate(route)
                     },
                 )
+                2 -> FollowScreen(controller = shell.followController)
                 else -> MineScreen()
             }
         }
@@ -247,12 +260,13 @@ private fun MainShell(shell: ShellState) {
                 // 且发射值为「页面标识」而非底栏槽位——Dart 发射 items[i].index
                 // （Constant.allHomePages：首页 0 / 关注 1 / 分类 2 / 我的 3），
                 // 订阅方按页面标识过滤：HomeController/首页 Screen 收 index==0、
-                // CategoryScreen 收 index==2、FollowUserController 收 index==1。
-                // 本 fork 底栏为 首页(槽0)/分类(槽1)/我的(槽2)，需做槽位→页面标识映射；
-                // 若直接发射槽位，重按「分类」发 1 会静默失效、重按「我的」发 2 会误触发分类刷新。
+                // FollowUserController 收 index==1（回顶/刷新）、CategoryScreen 收 index==2。
+                // 本 fork 底栏为 首页(槽0)/分类(槽1)/关注(槽2)/我的(槽3)，
+                // 需做槽位→页面标识映射：0→0、1→2、2→1、3→3。
                 val pageIndex = when (index) {
                     0 -> 0   // 首页
                     1 -> 2   // 分类
+                    2 -> 1   // 关注
                     else -> 3 // 我的
                 }
                 EventBus.emit(EventBus.kBottomNavigationBarClicked, pageIndex)
@@ -274,7 +288,7 @@ private fun MainShell(shell: ShellState) {
  */
 @Composable
 private fun MainBottomBar(currentIndex: Int, onSelect: (Int) -> Unit) {
-    val titles = listOf("首页", "分类", "我的")
+    val titles = listOf("首页", "分类", "关注", "我的")
 
     NavigationBar(modifier = Modifier.height(60.dp)) {
         titles.forEachIndexed { index, title ->

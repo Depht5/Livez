@@ -69,17 +69,22 @@ import dev.livefork.core.model.FollowRefreshProgress
  * 无关注底栏入口（产品差异），壳层槽位→页面标识映射不发 1，控制器内 index==1
  * 订阅当前为死代码；保留以对齐 Dart 契约，后续若底栏加入关注入口即自动生效。
  *
- * 控制器路由级生命周期：remember 创建 + DisposableEffect 销毁
- * （对齐原 Activity onDestroy 的 scope cancel；controller.dispose 即此语义，
- * 含 EventBus 订阅与 FollowService 流收集的清理）。
+ * 控制器生命周期（task follow-tab-and-room-follow：关注改为底栏 Tab）：
+ * - 独立路由（follow）场景：controller 为 null，本页 remember 创建 + DisposableEffect 销毁
+ *   （对齐原 Activity onDestroy 的 scope cancel）；
+ * - 底栏 Tab 场景：由壳层 ShellState 持有 controller 注入（随壳层存活，底栏切换不重建、
+ *   不丢数据/滚动），本页不再自建。
  *
  * 取消关注后的刷新语义以控制器现状为准：removeItem 内部删库后调 refreshData()
  * 整体重载列表（非局部移除）。
  */
 @Composable
-fun FollowScreen(modifier: Modifier = Modifier) {
-    // 控制器路由级生命周期（等价原 Activity onCreate/onDestroy）
-    val controller = remember {
+fun FollowScreen(
+    modifier: Modifier = Modifier,
+    controller: FollowUserController? = null,
+) {
+    // 路由场景自建（remember 缓存）；底栏场景用注入的壳层控制器
+    val effectiveController = controller ?: remember {
         FollowUserController(
             appSettings = ServiceContainer.appSettings,
             followService = ServiceContainer.followService,
@@ -87,13 +92,18 @@ fun FollowScreen(modifier: Modifier = Modifier) {
             currentRoom = ServiceContainer.currentRoom,
         )
     }
-    DisposableEffect(controller) {
-        onDispose { controller.dispose() }
+    // 自建控制器（路由场景）随本页销毁；壳层注入的控制器由壳层管理生命周期
+    DisposableEffect(effectiveController, controller != null) {
+        if (controller != null) {
+            onDispose { }
+        } else {
+            onDispose { effectiveController.dispose() }
+        }
     }
 
-    val list by controller.list.collectAsStateWithLifecycle()
-    val groupMode by controller.groupMode.collectAsStateWithLifecycle()
-    val selectedGroupId by controller.selectedGroupId.collectAsStateWithLifecycle()
+    val list by effectiveController.list.collectAsStateWithLifecycle()
+    val groupMode by effectiveController.groupMode.collectAsStateWithLifecycle()
+    val selectedGroupId by effectiveController.selectedGroupId.collectAsStateWithLifecycle()
     // followList 参与组合读取（groupOptions 依赖它推导平台分组项），需订阅触发重组
     val followList by ServiceContainer.followService.followList.collectAsStateWithLifecycle()
     val refreshProgress by ServiceContainer.followService.refreshProgress.collectAsStateWithLifecycle()
@@ -105,7 +115,7 @@ fun FollowScreen(modifier: Modifier = Modifier) {
 
     // 分组选项为控制器计算属性：其依赖的 groupMode / followList 均已在上方订阅，
     // 任一变化驱动本组合重组，此处随重组重算（平台分组的站点项随之增减）。
-    val groupOptions = controller.groupOptions
+    val groupOptions = effectiveController.groupOptions
 
     Column(modifier = modifier.fillMaxSize().background(MaterialTheme.colorScheme.surfaceContainerLow).statusBarsPadding()) {
         FollowTopBar(
@@ -116,20 +126,20 @@ fun FollowScreen(modifier: Modifier = Modifier) {
                 } else {
                     FollowGroupMode.liveStatus
                 }
-                controller.setGroupMode(newMode)
+                effectiveController.setGroupMode(newMode)
             },
             keyword = keyword,
             onKeywordChange = { value ->
                 keyword = value
-                controller.setSearchKeyword(value)
+                effectiveController.setSearchKeyword(value)
             },
-            onRefreshAll = { controller.refreshAllStatus() },
+            onRefreshAll = { effectiveController.refreshAllStatus() },
         )
 
         TagChipBar(
             options = groupOptions,
             selectedGroupId = selectedGroupId,
-            onSelect = { option -> controller.setGroupOption(option) },
+            onSelect = { option -> effectiveController.setGroupOption(option) },
         )
 
         RefreshProgressCard(progress = refreshProgress)
@@ -162,7 +172,7 @@ fun FollowScreen(modifier: Modifier = Modifier) {
                 TextButton(
                     onClick = {
                         pendingUnfollow = null
-                        controller.removeItem(target)
+                        effectiveController.removeItem(target)
                     },
                 ) { Text(text = "取消关注", color = MaterialTheme.colorScheme.error) }
             },

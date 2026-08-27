@@ -341,6 +341,8 @@ fun LiveRoomScreen(
     /* ---------- 状态订阅（controller 已赋值后，等价原 bindState）---------- */
 
     val detail by controller.detail.collectAsStateWithLifecycle()
+    // 关注状态（task follow-tab-and-room-follow：信息区关注按钮用）
+    val followed by controller.followed.collectAsStateWithLifecycle()
     // 刷新完成（detail 更新）→ 复位刷新态（refreshing 状态声明在调节区，此处订阅 detail 复位）
     LaunchedEffect(detail) {
         if (refreshing) refreshing = false
@@ -865,6 +867,22 @@ fun LiveRoomScreen(
                         Text(text = site.name, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 }
+                // 关注按钮（task follow-tab-and-room-follow）：未关注 = 描边空心爱心 ♡
+                //（灰），已关注 = 红心 ♥；点击切换关注状态
+                Text(
+                    text = if (followed) "♥" else "♡",
+                    fontSize = 22.sp,
+                    color = if (followed) LiveIndicatorRed else MaterialTheme.colorScheme.outline,
+                    modifier = Modifier
+                        .clickable {
+                            if (followed) {
+                                controller.removeFollowUser()
+                            } else {
+                                controller.followUser()
+                            }
+                        }
+                        .padding(horizontal = 4.dp, vertical = 4.dp),
+                )
                 Text(
                     text = "🔥 ${Utils.onlineToString(online)}",
                     fontSize = 14.sp,

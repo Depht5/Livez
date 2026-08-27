@@ -92,7 +92,6 @@ private fun buildMineEntries(biliLogined: Boolean, douyinHasCookie: Boolean): Li
     MineEntry("account", "B 站账号", if (biliLogined) "已登录" else "未登录"),
     MineEntry("account_douyin", "抖音账号", if (douyinHasCookie) "已配置 Cookie" else "未配置"),
     MineEntry("history", "观看历史"),
-    MineEntry("follow", "关注用户"),
     MineEntry("favorite", "我的收藏"),
     MineEntry("search", "搜索"),
     MineEntry("settings", "设置"),
@@ -112,7 +111,6 @@ private fun handleEntryClick(
     when (entry.key) {
         "account", "account_douyin" -> Router.openFeature("account", "账号管理")
         "history" -> Router.openFeature("history", "观看历史")
-        "follow" -> Router.openFeature("follow", "关注用户")
         "favorite" -> Router.openFeature("favorite", "我的收藏")
         "search" -> Router.openFeature("search", "搜索")
         "settings" -> Router.openFeature("settings", "设置")
