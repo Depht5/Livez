@@ -646,7 +646,6 @@ fun LiveRoomScreen(
             // 根因说明（真机反馈：竖屏模式画面依然拉伸）：竖屏外层是固定 16:9 框，原实现只在
             // 全屏分支做 letterbox，竖屏对非 16:9 源仍被铺满拉伸——修复后两个分支共用同一
             // 写法：竖屏布局尺寸不变（仍 16:9 黑底框），内层按源比例居中、上下留黑边。
-            // 弹幕浮层与 Surface 同区域，轨道宽度随视频区对齐。
             Box(
                 modifier = if (videoAspect != null) {
                     Modifier
@@ -662,12 +661,18 @@ fun LiveRoomScreen(
                     factory = { videoView },
                     modifier = Modifier.fillMaxSize(),
                 )
-                // 浮层弹幕：叠加在视频之上、未开播提示之下；非交互层不拦截点击
-                AndroidView(
-                    factory = { danmakuOverlay },
-                    modifier = Modifier.fillMaxSize(),
-                )
             }
+            // 浮层弹幕：铺满整个视频区（**外层**，全屏时含 letterbox 黑边）。
+            // 根因说明（task danmaku-overlay-fix：全屏弹幕从右侧直接出现/靠近左侧直接消失）：
+            // 原实现把弹幕层放在上方 letterbox（aspectRatio(videoAspect)）内层——全屏横屏时
+            // 弹幕层窄于屏幕（左右黑边），弹幕从 letterbox 右缘滑入、出左缘即越界消失，
+            // 观感为「未从屏幕外移入/未移出屏幕」。对齐原项目：canvas_danmaku 弹幕层 =
+            // 整个播放器区域（Positioned.fill，全屏含黑边），弹幕从物理屏右缘外滑入、
+            // 完全走出左缘才消失。非交互层不拦截点击。
+            AndroidView(
+                factory = { danmakuOverlay },
+                modifier = Modifier.fillMaxSize(),
+            )
             // 未开播覆盖层：白字居中（对应原 unliveOverlay）
             if (!liveStatus) {
                 Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
