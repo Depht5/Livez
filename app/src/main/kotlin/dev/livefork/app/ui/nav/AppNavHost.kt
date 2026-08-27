@@ -215,7 +215,7 @@ private class ShellState {
 
 /**
  * 主界面四 Tab 壳 —— 对应 Flutter `home_page.dart` 的底部导航结构
- * （task follow-tab-and-room-follow：加入「关注」Tab，替代原 Mine 页入口）。
+ * （task follow-tab-and-room-follow：加入「关注」Tab；Tab 顺序 首页/关注/分类/我的）。
  * 内容区 + 底栏；四个 Tab 均已迁移为 Compose Screen。
  *
  * @param shell 壳层状态（由 AppNavHost 持有，跨路由导航存活）
@@ -238,7 +238,8 @@ private fun MainShell(shell: ShellState) {
                         Router.openLiveRoom(site, roomId)
                     },
                 )
-                1 -> CategoryScreen(
+                1 -> FollowScreen(controller = shell.followController)
+                2 -> CategoryScreen(
                     controller = shell.categoryController,
                     gridStates = shell.categoryGridStates,
                     onOpenCategory = { site, sub ->
@@ -250,7 +251,6 @@ private fun MainShell(shell: ShellState) {
                         Router.navigate(route)
                     },
                 )
-                2 -> FollowScreen(controller = shell.followController)
                 else -> MineScreen()
             }
         }
@@ -261,14 +261,9 @@ private fun MainShell(shell: ShellState) {
                 // （Constant.allHomePages：首页 0 / 关注 1 / 分类 2 / 我的 3），
                 // 订阅方按页面标识过滤：HomeController/首页 Screen 收 index==0、
                 // FollowUserController 收 index==1（回顶/刷新）、CategoryScreen 收 index==2。
-                // 本 fork 底栏为 首页(槽0)/分类(槽1)/关注(槽2)/我的(槽3)，
-                // 需做槽位→页面标识映射：0→0、1→2、2→1、3→3。
-                val pageIndex = when (index) {
-                    0 -> 0   // 首页
-                    1 -> 2   // 分类
-                    2 -> 1   // 关注
-                    else -> 3 // 我的
-                }
+                // 本 fork 底栏为 首页(槽0)/关注(槽1)/分类(槽2)/我的(槽3)——
+                // 对调后槽位与 Dart 页面标识（首页0/关注1/分类2/我的3）恰好一致，直接透传。
+                val pageIndex = index
                 EventBus.emit(EventBus.kBottomNavigationBarClicked, pageIndex)
             } else {
                 currentIndex = index
@@ -288,7 +283,7 @@ private fun MainShell(shell: ShellState) {
  */
 @Composable
 private fun MainBottomBar(currentIndex: Int, onSelect: (Int) -> Unit) {
-    val titles = listOf("首页", "分类", "关注", "我的")
+    val titles = listOf("首页", "关注", "分类", "我的")
 
     NavigationBar(modifier = Modifier.height(60.dp)) {
         titles.forEachIndexed { index, title ->
