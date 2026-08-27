@@ -962,19 +962,23 @@ private fun adjustBrightness(activity: Activity?, delta: Float, showHint: (Strin
 
 /**
  * 调节媒体音量（右半屏上滑增大）—— 100 级语义（task player-ui-polish）：
- * 当前系统音量映射到 0..100，每次滑动 ±1 级，再换算回系统档位；
- * 提示条「音量 N/100」。范围 0–100。
+ * 系统档位通常只有十几级（如 15），若每次滑动仅 ±1/100，换算回系统档后常落回同一档
+ * （round 量化），表现为「卡在相邻两档、无法连续调节」。修复：**一步 = 一个系统档
+ * 对应的 100 级跨度（100/max 级）**，保证每次滑动系统音量实际变化一档，显示的
+ * 0..100 级随之平滑增减；提示条「音量 N」（不带 /100）。
  */
 private fun adjustVolume(context: Context, delta: Float, showHint: (String) -> Unit) {
     val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
     val max = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
+    if (max <= 0) return
     val current = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC)
-    // 当前音量 → 0..100 级（系统档位通常 15~30，归一化便于 ±1 级步进）
-    val level100 = if (max > 0) (current.toFloat() / max * 100).roundToInt() else 0
-    val nextLevel = (level100 + if (delta > 0) 1 else -1).coerceIn(0, 100)
-    val sysVol = if (max > 0) (nextLevel / 100f * max).roundToInt().coerceIn(0, max) else 0
+    val step100 = 100f / max
+    val level100 = current.toFloat() / max * 100f
+    val nextLevel = (level100 + if (delta > 0) step100 else -step100)
+        .roundToInt().coerceIn(0, 100)
+    val sysVol = (nextLevel / 100f * max).roundToInt().coerceIn(0, max)
     audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, sysVol, 0)
-    showHint("音量 $nextLevel/100")
+    showHint("音量 $nextLevel")
 }
 
 /* ---------- 标签集合（对应 Dart 默认标签顺序 + 条件过滤）---------- */
