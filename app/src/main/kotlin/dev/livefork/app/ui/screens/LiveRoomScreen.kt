@@ -45,6 +45,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -516,12 +517,20 @@ fun LiveRoomScreen(
     // 本次拖动起点是否在左半屏（决定调亮度还是音量）；snapshot state 保证跨重组可见
     var dragStartLeftHalf by remember { mutableStateOf(false) }
 
+    // 音量手势状态（对齐 Dart onVerticalDragStart/onVerticalDragUpdate）：
+    // 起点 y 与满量程（半屏高）在手势开始时快照；5 级量化值用于去重（level 不变不重复调系统）
+    var volumeStartY by remember { mutableFloatStateOf(0f) }
+    var gestureVolumeExtent by remember { mutableFloatStateOf(1f) }
+    var volumeLastLevel by remember { mutableIntStateOf(-1) }
+
     /**
      * 手势判定（替代已删除的手写 GestureRouter，改用 Compose 内建检测器）：
      * - 单击：显隐控制层；双击：切换全屏（playerGestureControlEnable 总控，每次触摸直读
      *   StateFlow.value —— 单例对象被闭包捕获无过期快照问题，等价旧「监听器内检查总开关」）；
-     * - 垂直滑动：按 down 点 x 分左右半屏 → 左亮度（window.screenBrightness 0.05 步进、
-     *   跟随系统从 0.5 起）/ 右音量（STREAM_MUSIC 步进 1），步进/范围对齐现版。
+     * - 垂直滑动：按 down 点 x 分左右半屏 → 左亮度 / 右音量。
+     *   音量对齐 Dart（task player-ui-polish）：位移比例映射（满量程 = 半屏高，
+     *   `_verticalDragExtent = max(height*0.5, 1)`）+ 5 级量化（`(v/5).round()*5`）+
+     *   去重后再调系统音量，提示「音量 N%」。
      */
     val videoGestureModifier = Modifier
         .pointerInput(context) {
@@ -530,6 +539,10 @@ fun LiveRoomScreen(
                     // 每次触摸重置自动隐藏计时（等价旧 onUserTouch）
                     controlsTouchTick++
                     dragStartLeftHalf = offset.x < size.width / 2f
+                    // 对齐 Dart onVerticalDragStart：快照起点与满量程（半屏高）
+                    volumeStartY = offset.y
+                    gestureVolumeExtent = maxOf(size.height * 0.5f, 1f)
+                    volumeLastLevel = -1
                 },
                 onDragEnd = { controlsTouchTick++ },
                 onDragCancel = { controlsTouchTick++ },
@@ -537,12 +550,32 @@ fun LiveRoomScreen(
                 change.consume()
                 // 手势总开关每次拖动帧读取最新值（对齐旧 onScroll 内逐次检查）
                 if (ServiceContainer.appSettings.playerGestureControlEnable.value) {
-                    // 上滑为正增量（等价旧 adjustXxx(-distanceY)）
-                    val delta = -dragAmount
                     if (dragStartLeftHalf) {
-                        adjustBrightness(context as? Activity, delta) { showAdjustHint(it) }
+                        // 上滑为正增量（等价旧 adjustXxx(-distanceY)），亮度沿用
+                        adjustBrightness(context as? Activity, -dragAmount) { showAdjustHint(it) }
                     } else {
-                        adjustVolume(context, delta) { showAdjustHint(it) }
+                        // 音量：位移比例映射（对齐 Dart setGestureVolume）
+                        val am = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+                        val max = am.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
+                        if (max > 0 && gestureVolumeExtent > 0f) {
+                            val current = am.getStreamVolume(AudioManager.STREAM_MUSIC)
+                            val cur01 = current.toFloat() / max
+                            // 下滑（dy 增大）增音量、上滑减音量；|位移|/半屏高 = 变化比例
+                            val dy = change.position.y
+                            val moveRatio = kotlin.math.abs(dy - volumeStartY) / gestureVolumeExtent
+                            val seek = if (dy > volumeStartY) {
+                                (cur01 + moveRatio).coerceIn(0f, 1f)
+                            } else {
+                                (cur01 - moveRatio).coerceIn(0f, 1f)
+                            }
+                            // 5 级量化（对齐 Dart _convertVolume：(v/5).round()*5）
+                            val level = (((seek * 100) / 5f).roundToInt() * 5).coerceIn(0, 100)
+                            if (level == volumeLastLevel) return@detectVerticalDragGestures
+                            volumeLastLevel = level
+                            val sysVol = (level / 100f * max).roundToInt().coerceIn(0, max)
+                            am.setStreamVolume(AudioManager.STREAM_MUSIC, sysVol, 0)
+                            showAdjustHint("音量 $level%")
+                        }
                     }
                 }
             }
@@ -958,27 +991,6 @@ private fun adjustBrightness(activity: Activity?, delta: Float, showHint: (Strin
     attributes.screenBrightness = brightness
     activity.window.attributes = attributes
     showHint("亮度 ${(brightness * 100).toInt()}")
-}
-
-/**
- * 调节媒体音量（右半屏上滑增大）—— 100 级语义（task player-ui-polish）：
- * 系统档位通常只有十几级（如 15），若每次滑动仅 ±1/100，换算回系统档后常落回同一档
- * （round 量化），表现为「卡在相邻两档、无法连续调节」。修复：**一步 = 一个系统档
- * 对应的 100 级跨度（100/max 级）**，保证每次滑动系统音量实际变化一档，显示的
- * 0..100 级随之平滑增减；提示条「音量 N」（不带 /100）。
- */
-private fun adjustVolume(context: Context, delta: Float, showHint: (String) -> Unit) {
-    val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
-    val max = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
-    if (max <= 0) return
-    val current = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC)
-    val step100 = 100f / max
-    val level100 = current.toFloat() / max * 100f
-    val nextLevel = (level100 + if (delta > 0) step100 else -step100)
-        .roundToInt().coerceIn(0, 100)
-    val sysVol = (nextLevel / 100f * max).roundToInt().coerceIn(0, max)
-    audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, sysVol, 0)
-    showHint("音量 $nextLevel")
 }
 
 /* ---------- 标签集合（对应 Dart 默认标签顺序 + 条件过滤）---------- */
