@@ -699,9 +699,9 @@ fun LiveRoomScreen(
                     Text(text = "未开播", fontSize = 16.sp, color = Color.White)
                 }
             }
-            // 直播间加载中：居中转圈（task player-ui-polish：加载动画）。
-            // detail 未就绪且无加载错误 → 转圈；加载完成 detail 出现即消失。
-            if (detail == null && !loadError) {
+            // 直播间加载/刷新中：居中转圈（task player-ui-polish：刷新与加载使用同样的动画；
+            // detail 未就绪或刷新中且无加载错误 → 转圈；完成后即消失）
+            if ((detail == null || refreshing) && !loadError) {
                 Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     CircularProgressIndicator(color = Color.White)
                 }
@@ -726,7 +726,6 @@ fun LiveRoomScreen(
                 fullScreen = isFullScreen,
                 playing = playerState.playing,
                 liveStatus = liveStatus,
-                refreshing = refreshing,
                 danmakuEnabled = overlayDanmakuOn,
                 durationText = liveDuration,
                 qualityName = qualityName,

@@ -165,8 +165,14 @@ class PlayerEngine private constructor() {
                     dev.livefork.app.app.Log.i("[mpv-event] end-file")
                 }
                 MPVLib.MPV_EVENT_START_FILE -> {
+                    // playing 同步（task player-ui-polish：刷新/重开流后按钮与播放状态一致）：
+                    // 旧实现只复位 completed，playing 依赖 mpv pause 属性事件——刷新时 stop()
+                    // 触发 END_FILE 已把 playing 置 false，新流 start-file 后若无 pause 属性
+                    // 变化事件，按钮会停在「暂停态」而实际在播放。新文件开始即视为播放中，
+                    // 后续 pause 事件仍可纠正。
                     _state.value = _state.value.copy(
                         completed = false,
+                        playing = true,
                         width = null,
                         height = null,
                         aspect = null,

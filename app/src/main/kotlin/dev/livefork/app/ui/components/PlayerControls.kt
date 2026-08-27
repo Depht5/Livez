@@ -9,8 +9,6 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
@@ -20,6 +18,8 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
@@ -53,7 +53,6 @@ fun PlayerControlsOverlay(
     fullScreen: Boolean,
     playing: Boolean,
     liveStatus: Boolean,
-    refreshing: Boolean,
     danmakuEnabled: Boolean,
     durationText: String,
     qualityName: String,
@@ -115,16 +114,14 @@ fun PlayerControlsOverlay(
                 .padding(horizontal = 12.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            // 刷新（refreshRoom）：刷新中显示转圈（加载动画，task player-ui-polish）
-            if (refreshing) {
-                CircularProgressIndicator(
-                    modifier = Modifier.size(22.dp).padding(0.dp),
-                    strokeWidth = 2.dp,
-                    color = Color.White,
-                )
-            } else {
-                OverlayButton(text = "⟳", onClick = onRefreshClick)
-            }
+            // 刷新（refreshRoom）：动画由宿主在视频区显示「与加载相同的居中转圈」，
+            // 控制层按钮保持常显（task player-ui-polish）；竖屏时收窄三键间距。
+            val compactH = if (!fullScreen) 6.dp else 12.dp
+            OverlayButton(
+                text = "⟳",
+                onClick = onRefreshClick,
+                paddingH = compactH,
+            )
             // 播放/暂停：仅全屏且开播时显示（refreshButtons 规则）
             if (fullScreen && liveStatus) {
                 OverlayButton(
@@ -137,9 +134,14 @@ fun PlayerControlsOverlay(
                 text = "弹",
                 tint = if (danmakuEnabled) Color(0xFFFFD857) else Color.White,
                 onClick = onDanmakuToggle,
+                paddingH = compactH,
             )
             // 弹幕设置（对齐 Dart 弹幕开关旁的设置图标按钮）
-            OverlayButton(text = "设置", onClick = onDanmakuSettingsClick)
+            OverlayButton(
+                text = "设置",
+                onClick = onDanmakuSettingsClick,
+                paddingH = compactH,
+            )
             // 直播时长
             Text(
                 text = durationText,
@@ -148,16 +150,22 @@ fun PlayerControlsOverlay(
                 modifier = Modifier.padding(start = 8.dp),
             )
             Spacer(modifier = Modifier.weight(1f))
-            // 清晰度入口（空名回退占位文案）
+            // 清晰度入口（空名回退占位文案；回滚为原小号按钮）
             OverlayButton(
                 text = qualityName.ifEmpty { "清晰度" },
                 onClick = onQualityClick,
+                fontSize = 13.sp,
+                paddingH = 8.dp,
+                paddingV = 6.dp,
             )
-            // 线路入口：仅全屏显示（refreshButtons 规则）
+            // 线路入口：仅全屏显示（refreshButtons 规则；回滚为原小号按钮）
             if (fullScreen) {
                 OverlayButton(
                     text = lineName.ifEmpty { "线路" },
                     onClick = onLineClick,
+                    fontSize = 13.sp,
+                    paddingH = 8.dp,
+                    paddingV = 6.dp,
                 )
             }
             // 全屏切换（文字固定 ⛶，点击切换逻辑由宿主处理）
@@ -166,16 +174,22 @@ fun PlayerControlsOverlay(
     }
 }
 
-/** 控制层图标/文字按钮：白字 15sp、去涟漪（task player-ui-polish：放大点击区与字号）。 */
+/**
+ * 控制层图标/文字按钮：白字、去涟漪（对齐旧 iconButton 规格与整体简洁风格）。
+ * 默认放大（15sp / 12×8dp，task player-ui-polish）；清晰度/线路等次要按钮可按参数回缩。
+ */
 @Composable
 private fun OverlayButton(
     text: String,
     onClick: () -> Unit,
     tint: Color = Color.White,
+    fontSize: TextUnit = 15.sp,
+    paddingH: Dp = 12.dp,
+    paddingV: Dp = 8.dp,
 ) {
     Text(
         text = text,
-        fontSize = 15.sp,
+        fontSize = fontSize,
         color = tint,
         modifier = Modifier
             .clickable(
@@ -183,6 +197,6 @@ private fun OverlayButton(
                 indication = null,
                 onClick = onClick,
             )
-            .padding(horizontal = 12.dp, vertical = 8.dp),
+            .padding(horizontal = paddingH, vertical = paddingV),
     )
 }

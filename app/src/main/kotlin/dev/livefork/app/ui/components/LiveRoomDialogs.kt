@@ -214,8 +214,7 @@ fun DanmuSettingsSheet(
             ).coerceAtLeast(1)
         }
     }
-    // 显示区域单选弹层显隐（4 档）
-    var showAreaDialog by remember { mutableStateOf(false) }
+    // 显示区域单选弹层显隐（已改为 4 档滑条，不再需要弹层）
     // 应用显示区域档位并保持「行数自动收紧」（对齐原项目 onChanged 逻辑）
     fun applyDanmuArea(nextArea: Float) {
         val prevArea = danmuArea
@@ -246,15 +245,21 @@ fun DanmuSettingsSheet(
             SheetSwitchRow(label = "显示弹幕表情", checked = danmuRenderEmoji) {
                 settings.setDanmuRenderEmoji(it)
             }
-            // 显示区域（4 档：全屏/3/4屏/半屏/1/4屏，task player-ui-polish）
-            //（对齐原项目显示区域 Slider 改成离散档位；改档后保持「行数自动收紧」联动）
-            val currentAreaLabel = DANMU_AREA_OPTIONS.firstOrNull {
+            // 显示区域（4 档滑条：全屏/3/4屏/半屏/1/4屏，task player-ui-polish；
+            // 对齐原项目「显示区域」滑条语义，仅 4 个刻度；改档后保持「行数自动收紧」联动）
+            val areaIndex = (DANMU_AREA_OPTIONS.indexOfFirst {
                 kotlin.math.abs(it.first - danmuArea) < 0.01f
-            }?.second ?: "${(danmuArea * 100).roundToInt()}%"
-            SheetClickRow(
+            } + 1).coerceIn(1, 4)
+            SheetSliderRow(
                 label = "显示区域",
-                value = currentAreaLabel,
-                onClick = { showAreaDialog = true },
+                value = areaIndex,
+                min = 1,
+                max = 4,
+                steps = 2, // 共 4 档（全屏/3/4屏/半屏/1/4屏）
+                valueLabel = { idx -> DANMU_AREA_OPTIONS[(idx - 1).coerceIn(0, 3)].second },
+                onChange = { idx ->
+                    applyDanmuArea(DANMU_AREA_OPTIONS[(idx - 1).coerceIn(0, 3)].first)
+                },
             )
             // 显示几行（0=不显示，对齐 Dart lineCount=0 语义）；
             // 上限随弹幕层高度×显示区域×字号动态（对齐原项目 _buildDanmuLineValueMap），
@@ -313,40 +318,6 @@ fun DanmuSettingsSheet(
                 onChange = { settings.setDanmuSpeed(it.toFloat()) },
             )
         }
-    }
-
-    // 显示区域 4 档单选弹层（全屏/3/4屏/半屏/1/4屏）
-    if (showAreaDialog) {
-        AlertDialog(
-            onDismissRequest = { showAreaDialog = false },
-            title = { Text(text = "显示区域", fontSize = 17.sp, color = MaterialTheme.colorScheme.onSurface) },
-            confirmButton = {},
-            text = {
-                Column {
-                    DANMU_AREA_OPTIONS.forEach { (area, label) ->
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clickable {
-                                    applyDanmuArea(area)
-                                    showAreaDialog = false
-                                }
-                                .padding(vertical = 8.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            RadioButton(
-                                selected = kotlin.math.abs(area - danmuArea) < 0.01f,
-                                onClick = {
-                                    applyDanmuArea(area)
-                                    showAreaDialog = false
-                                },
-                            )
-                            Text(text = label, fontSize = 15.sp, color = MaterialTheme.colorScheme.onSurface)
-                        }
-                    }
-                }
-            },
-        )
     }
 }
 
@@ -555,6 +526,7 @@ private fun SheetSliderRow(
     max: Int,
     unit: String = "",
     valueLabel: ((Int) -> String)? = null,
+    steps: Int? = null,
     onChange: (Int) -> Unit,
 ) {
     val display = valueLabel?.invoke(value) ?: "$value$unit"
@@ -574,8 +546,9 @@ private fun SheetSliderRow(
         value = value.toFloat().coerceIn(min.toFloat(), max.toFloat()),
         onValueChange = { v -> onChange(v.roundToInt().coerceIn(min, max)) },
         valueRange = min.toFloat()..max.toFloat(),
-        // 整数步进：中间刻度数 = 区间长度 - 1（区间为 0 时不能传负数）
-        steps = (max - min - 1).coerceAtLeast(0),
+        // 整数步进：显式 steps 优先（如显示区域 4 档传 2 → 1..4 四刻度）；
+        // 未传时默认「区间长度 - 1」全整数刻度（其余行沿用原行为）
+        steps = (steps ?: (max - min - 1)).coerceAtLeast(0),
         modifier = Modifier.fillMaxWidth(),
     )
 }
