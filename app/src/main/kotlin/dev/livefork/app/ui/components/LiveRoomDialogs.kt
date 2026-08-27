@@ -19,12 +19,15 @@ import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextField
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -172,7 +175,10 @@ private val FONT_WEIGHT_LABELS = listOf("极细", "很细", "细", "正常", "�
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun DanmuSettingsSheet(onDismiss: () -> Unit) {
+fun DanmuSettingsSheet(
+    onDismiss: () -> Unit,
+    viewportHeight: Float = 0f,
+) {
     val settings = ServiceContainer.appSettings
     val danmuEnable by settings.danmuEnable.collectAsStateWithLifecycle()
     val danmuRenderEmoji by settings.danmuRenderEmoji.collectAsStateWithLifecycle()
@@ -182,6 +188,32 @@ fun DanmuSettingsSheet(onDismiss: () -> Unit) {
     val danmuSize by settings.danmuSize.collectAsStateWithLifecycle()
     val danmuFontWeight by settings.danmuFontWeight.collectAsStateWithLifecycle()
     val danmuSpeed by settings.danmuSpeed.collectAsStateWithLifecycle()
+
+    // 弹幕层视口高度（px）：优先取直播间实际弹幕层高度；否则按原项目回退
+    // `min(屏宽,屏高)×9/16` clamp(180dp..屏高)（_resolvePreviewViewportHeight）。
+    // 字体/行数评估统一 px 口径（与渲染一致）。
+    val density = LocalDensity.current.density
+    val context = LocalContext.current
+    val effectiveViewportH: Float = remember(viewportHeight, density) {
+        if (viewportHeight > 0f) {
+            viewportHeight
+        } else {
+            val w = context.resources.displayMetrics.widthPixels.toFloat()
+            val h = context.resources.displayMetrics.heightPixels.toFloat()
+            val shortest = minOf(w, h)
+            (shortest * 9f / 16f).coerceIn(180f * density, h)
+        }
+    }
+    // 当前字体下的可视行数上限（随弹幕层高度/显示区域/字号动态，对齐 estimateDanmuMaxVisibleLineCount）
+    val maxVisibleLines by remember(effectiveViewportH, danmuArea, danmuSize, density) {
+        derivedStateOf {
+            settings.estimateDanmuMaxVisibleLineCount(
+                viewportHeight = effectiveViewportH,
+                area = danmuArea,
+                fontSize = danmuSize * density,
+            ).coerceAtLeast(1)
+        }
+    }
 
     ModalBottomSheet(onDismissRequest = onDismiss) {
         Column(
@@ -198,21 +230,35 @@ fun DanmuSettingsSheet(onDismiss: () -> Unit) {
             SheetSwitchRow(label = "显示弹幕表情", checked = danmuRenderEmoji) {
                 settings.setDanmuRenderEmoji(it)
             }
-            // 显示区域（%）：10–100 步进 10
+            // 显示区域（%）：10–100 步进 10；改面积后若当前行数超新上限则自动收紧（对齐原项目）
             SheetSliderRow(
                 label = "显示区域",
                 value = (danmuArea * 100).roundToInt().coerceIn(10, 100),
                 min = 10,
                 max = 100,
                 unit = "%",
-                onChange = { settings.setDanmuArea(it / 100f) },
+                onChange = { v ->
+                    val nextArea = v / 100f
+                    val nextMax = settings.estimateDanmuMaxVisibleLineCount(
+                        viewportHeight = effectiveViewportH,
+                        area = nextArea,
+                        fontSize = danmuSize * density,
+                    )
+                    if (settings.danmuLineCount.value > nextMax && nextMax >= 1) {
+                        settings.setDanmuLineCount(nextMax)
+                    }
+                    settings.setDanmuArea(nextArea)
+                },
             )
-            // 显示几行（0=不显示，对齐 Dart lineCount=0 语义）
+            // 显示几行（0=不显示，对齐 Dart lineCount=0 语义）；
+            // 上限随弹幕层高度×显示区域×字号动态（对齐原项目 _buildDanmuLineValueMap），
+            // 右侧数值显示「当前/上限」便于观察动态范围。
             SheetSliderRow(
                 label = "显示几行",
-                value = danmuLineCount,
+                value = danmuLineCount.coerceIn(0, maxVisibleLines),
                 min = 0,
-                max = 12,
+                max = maxVisibleLines,
+                valueLabel = { v -> "$v/$maxVisibleLines" },
                 onChange = { settings.setDanmuLineCount(it) },
             )
             // 不透明度（%）
@@ -224,13 +270,23 @@ fun DanmuSettingsSheet(onDismiss: () -> Unit) {
                 unit = "%",
                 onChange = { settings.setDanmuOpacity(it / 100f) },
             )
-            // 字体大小
+            // 字体大小：改字号后若当前行数超新上限则自动收紧（对齐原项目）
             SheetSliderRow(
                 label = "字体大小",
                 value = danmuSize.roundToInt(),
                 min = 8,
                 max = 72,
-                onChange = { settings.setDanmuSize(it.toFloat()) },
+                onChange = { v ->
+                    val nextSize = v.toFloat()
+                    val nextMax = settings.estimateDanmuMaxVisibleLineCount(
+                        viewportHeight = effectiveViewportH,
+                        fontSize = nextSize * density,
+                    )
+                    if (settings.danmuLineCount.value > nextMax && nextMax >= 1) {
+                        settings.setDanmuLineCount(nextMax)
+                    }
+                    settings.setDanmuSize(nextSize)
+                },
             )
             // 字体粗细（1–9，极细..极粗）
             SheetSliderRow(

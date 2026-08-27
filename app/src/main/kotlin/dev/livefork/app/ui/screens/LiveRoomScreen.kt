@@ -885,7 +885,12 @@ fun LiveRoomScreen(
             onDismiss = { activeSheet = RoomSheet.None },
         )
 
-        RoomSheet.DanmuSettings -> DanmuSettingsSheet(onDismiss = { activeSheet = RoomSheet.None })
+        RoomSheet.DanmuSettings -> DanmuSettingsSheet(
+            // 传入当前弹幕层高度（px）：弹层据此计算「显示几行」动态上限；
+            // 全屏/竖屏状态不同 → 打开弹层时的上限不同（对齐原项目传 previewViewportHeight）
+            viewportHeight = danmakuOverlay.height.toFloat(),
+            onDismiss = { activeSheet = RoomSheet.None },
+        )
 
         RoomSheet.LiveSettings -> LiveSettingsSheet(
             controller = controller,

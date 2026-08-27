@@ -26,7 +26,6 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
-import kotlin.math.floor
 
 /**
  * 视频浮层滚动弹幕 —— 对标 Flutter `canvas_danmaku` 的浮层渲染
@@ -199,31 +198,23 @@ class DanmakuOverlayView @JvmOverloads constructor(
     /* ---------- 弹幕入轨 ---------- */
 
     /**
-     * 目标行数 —— 对齐 Dart `resolveDanmuTargetLineCount`：
-     * 设置行数 `danmuLineCount` 被**视口高度**钳制：先算视口能容纳的最大行数
-     * `floor(层高 × area / 弹幕行高)`（clamp 1..40），再 `设置值 clamp(1, maxVisible)`。
-     * 竖屏视口高 → 行数多；全屏横屏视口矮 → 行数自动变少（「横竖屏不同行数」的实现）。
-     * 返回 0 = 不显示弹幕（设置行数 ≤ 0）。
+     * 目标行数 —— 复用 [AppSettingsController.resolveDanmuTargetLineCount]
+     * （对齐 Dart resolveDanmuTargetLineCount）：设置行数被**视口高度**钳制到
+     * `floor(层高 × area / 弹幕行高)` 上限。竖屏视口高 → 行数多；全屏横屏视口矮 →
+     * 行数自动变少（「横竖屏不同行数」的实现）。0 = 不显示（设置行数 ≤ 0）。
+     * 单位口径：fontSize/viewportHeight 均以 px 传入（与绘制一致）。
      */
-    private fun resolveDanmuLineCount(): Int {
-        val requested = appSettings.danmuLineCount.value
-        if (requested <= 0) return 0
-        val viewH = height.toFloat()
-        if (viewH <= 0f) return requested.coerceIn(1, 40)
-        val area = appSettings.danmuArea.value.coerceIn(0.1f, 1f)
-        val itemH = danmakuLineHeightPx()
-        val maxVisible = floor(viewH * area / itemH).toInt().coerceIn(1, 40)
-        return requested.coerceIn(1, maxVisible)
-    }
+    private fun resolveDanmuLineCount(): Int =
+        appSettings.resolveDanmuTargetLineCount(
+            viewportHeight = height.toFloat(),
+            fontSize = appSettings.danmuSize.value * resources.displayMetrics.density,
+        )
 
-    /** 弹幕文本行像素高 —— 对齐 Dart `estimateDanmuTextHeight`（字高 + 描边）。 */
-    private fun danmakuLineHeightPx(): Float {
-        // 用当前设置字号测量（幂等，自身设置 textSize，避免依赖调用方已设置）
-        fillPaint.textSize = appSettings.danmuSize.value * resources.displayMetrics.density
-        val metrics = fillPaint.fontMetrics
-        return (metrics.descent - metrics.top) +
-            appSettings.danmuStrokeWidth.value * resources.displayMetrics.density
-    }
+    /** 弹幕文本行像素高 —— 复用 [AppSettingsController.estimateDanmuTextHeight]（px 口径）。 */
+    private fun danmakuLineHeightPx(): Float =
+        appSettings.estimateDanmuTextHeight(
+            fontSize = appSettings.danmuSize.value * resources.displayMetrics.density,
+        )
 
     private fun addToTrack(msg: LiveMessage) {
         if (!danmakuEnabled) return
@@ -533,20 +524,22 @@ class DanmakuOverlayView @JvmOverloads constructor(
         if (items.isEmpty()) return
 
         // 行数/行距对齐 Dart（与 addToTrack 同源，保证入轨与绘制一致）：
-        // - 行数 = resolveDanmuLineCount（设置值按视口钳制）
-        // - 行距 = 弹幕行高 × lineHeight 倍数；lineHeight =
-        //   (可用高 / 弹幕行高) / 目标行数，clamp 1..3（对齐 resolveDanmuLineHeight）
+        // - 行数 = resolveDanmuLineCount（复用 controller，设置值按视口钳制）
+        // - 行距 = 弹幕行高 × lineHeight 倍数；lineHeight 复用
+        //   controller.resolveDanmuLineHeight（clamp 1..3）
         //   ——行数设置得少时行距拉大、弹幕疏朗；行数与视口上限一致时行距≈行高。
         val lineCount = resolveDanmuLineCount().coerceAtLeast(1)
-        val area = appSettings.danmuArea.value.coerceIn(0.1f, 1f)
         val opacity = appSettings.danmuOpacity.value.coerceIn(0f, 1f)
 
         val viewH = height.toFloat()
         val itemH = danmakuLineHeightPx()
-        val lineHeightFactor = if (viewH > 0f && itemH > 0f) {
-            (viewH * area / itemH / lineCount).coerceIn(1f, 3f)
-        } else {
+        val lineHeightFactor = if (viewH <= 0f || itemH <= 0f) {
             1f
+        } else {
+            appSettings.resolveDanmuLineHeight(
+                viewportHeight = viewH,
+                fontSize = appSettings.danmuSize.value * resources.displayMetrics.density,
+            )
         }
         val trackGap = itemH * lineHeightFactor
 
