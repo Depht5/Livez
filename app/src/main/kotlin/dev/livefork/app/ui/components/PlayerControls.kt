@@ -9,7 +9,8 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.layout.size
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
@@ -27,12 +28,14 @@ import androidx.compose.ui.unit.sp
  * `ui/PlayerControlsOverlay.kt`，对应 Flutter `player_controls.dart` 的简化版。
  *
  * 结构：顶部渐隐栏（返回/标题/⋮菜单，仅全屏显示）+ 底部渐隐栏
- * （刷新/播放暂停[仅全屏+开播]/弹幕开关/弹幕设置/直播时长/清晰度/线路[仅全屏]/全屏切换）
- * + 中央提示条（亮度/音量调节提示）。
+ * （刷新[含转圈态]/播放暂停[仅全屏+开播]/弹幕开关/弹幕设置/直播时长/清晰度/线路[仅全屏]/全屏切换）。
  *
  * **文件位置说明**：本组件约 160 行且为纯无状态展示件（所有状态经参数注入、
  * 动作经回调上抛），符合 `ui/components` 目录定位；并入 LiveRoomScreen.kt 会让页面
  * 文件超 900 行不利维护，故独立成文件。
+ *
+ * **提示条已移出**（task player-ui-polish）：亮度/音量调节提示不再随控件显隐，
+ * 由 LiveRoomScreen 在视频区独立渲染（控件隐藏时滑动仍有指示）。
  *
  * 显隐规则严格对照旧 `refreshButtons()`：
  * - 顶栏仅全屏显示；
@@ -41,8 +44,8 @@ import androidx.compose.ui.unit.sp
  * - 弹幕开关选中色 #FFD857 / 未选白色；
  * - 全屏按钮文字固定 ⛶。
  *
- * show/hide/toggle 与 5s 自动隐藏、提示条 1.2s 消失的计时逻辑由宿主
- * （LiveRoomScreen）以 LaunchedEffect 实现；本组件只按参数渲染。
+ * show/hide/toggle 与 5s 自动隐藏的计时逻辑由宿主（LiveRoomScreen）以 LaunchedEffect
+ * 实现；本组件只按参数渲染。
  */
 @Composable
 fun PlayerControlsOverlay(
@@ -50,12 +53,12 @@ fun PlayerControlsOverlay(
     fullScreen: Boolean,
     playing: Boolean,
     liveStatus: Boolean,
+    refreshing: Boolean,
     danmakuEnabled: Boolean,
     durationText: String,
     qualityName: String,
     lineName: String,
     title: String,
-    adjustHint: String?,
     onBackClick: () -> Unit,
     onRefreshClick: () -> Unit,
     onPlayPauseClick: () -> Unit,
@@ -82,7 +85,7 @@ fun PlayerControlsOverlay(
                             listOf(Color(0x99000000), Color.Transparent),
                         ),
                     )
-                    .padding(horizontal = 8.dp, vertical = 8.dp),
+                    .padding(horizontal = 12.dp, vertical = 10.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 OverlayButton(text = "←", onClick = onBackClick)
@@ -109,11 +112,19 @@ fun PlayerControlsOverlay(
                         listOf(Color.Transparent, Color(0xCC000000)),
                     ),
                 )
-                .padding(horizontal = 10.dp, vertical = 6.dp),
+                .padding(horizontal = 12.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            // 刷新（refreshRoom）
-            OverlayButton(text = "⟳", onClick = onRefreshClick)
+            // 刷新（refreshRoom）：刷新中显示转圈（加载动画，task player-ui-polish）
+            if (refreshing) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(22.dp).padding(0.dp),
+                    strokeWidth = 2.dp,
+                    color = Color.White,
+                )
+            } else {
+                OverlayButton(text = "⟳", onClick = onRefreshClick)
+            }
             // 播放/暂停：仅全屏且开播时显示（refreshButtons 规则）
             if (fullScreen && liveStatus) {
                 OverlayButton(
@@ -132,7 +143,7 @@ fun PlayerControlsOverlay(
             // 直播时长
             Text(
                 text = durationText,
-                fontSize = 12.sp,
+                fontSize = 13.sp,
                 color = Color.White,
                 modifier = Modifier.padding(start = 8.dp),
             )
@@ -152,23 +163,10 @@ fun PlayerControlsOverlay(
             // 全屏切换（文字固定 ⛶，点击切换逻辑由宿主处理）
             OverlayButton(text = "⛶", onClick = onFullScreenClick)
         }
-
-        /* ---- 中央提示条（亮度/音量调节，1.2s 自动消失由宿主管计时）---- */
-        if (adjustHint != null) {
-            Text(
-                text = adjustHint,
-                fontSize = 15.sp,
-                color = Color.White,
-                modifier = Modifier
-                    .align(Alignment.Center)
-                    .background(Color(0x66000000), shape = RoundedCornerShape(6.dp))
-                    .padding(horizontal = 16.dp, vertical = 8.dp),
-            )
-        }
     }
 }
 
-/** 控制层图标/文字按钮：白字 13sp、去涟漪（对齐旧 iconButton 规格与整体简洁风格）。 */
+/** 控制层图标/文字按钮：白字 15sp、去涟漪（task player-ui-polish：放大点击区与字号）。 */
 @Composable
 private fun OverlayButton(
     text: String,
@@ -177,7 +175,7 @@ private fun OverlayButton(
 ) {
     Text(
         text = text,
-        fontSize = 13.sp,
+        fontSize = 15.sp,
         color = tint,
         modifier = Modifier
             .clickable(
@@ -185,6 +183,6 @@ private fun OverlayButton(
                 indication = null,
                 onClick = onClick,
             )
-            .padding(horizontal = 8.dp, vertical = 6.dp),
+            .padding(horizontal = 12.dp, vertical = 8.dp),
     )
 }

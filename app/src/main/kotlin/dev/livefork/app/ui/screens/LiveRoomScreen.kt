@@ -29,6 +29,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
@@ -36,6 +37,7 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material3.Tab
 import androidx.compose.material3.TabRow
 import androidx.compose.material3.TabRowDefaults.tabIndicatorOffset
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -100,6 +102,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlin.math.roundToInt
 
 /**
  * 直播间页面（Compose 版）—— 对应 Flutter `live_room_page.dart`，替换旧 View 体系
@@ -246,6 +249,18 @@ fun LiveRoomScreen(
         }
     }
 
+    /* ---------- 刷新中状态（控制层刷新按钮转圈；加载/刷新动画，task player-ui-polish）---------- */
+
+    var refreshing by remember { mutableStateOf(false) }
+    // detail 更新（刷新完成后 loadData 下发新详情）→ 复位刷新态；兜底超时 8s
+    //（复位 LaunchedEffect(detail) 放在 detail 订阅之后，见下方刷新态区）
+    LaunchedEffect(refreshing) {
+        if (refreshing) {
+            delay(8000L)
+            refreshing = false
+        }
+    }
+
     /* ---------- 全屏切换动作 ---------- */
 
     fun toggleFullScreen() {
@@ -323,8 +338,13 @@ fun LiveRoomScreen(
     /* ---------- 状态订阅（controller 已赋值后，等价原 bindState）---------- */
 
     val detail by controller.detail.collectAsStateWithLifecycle()
+    // 刷新完成（detail 更新）→ 复位刷新态（refreshing 状态声明在调节区，此处订阅 detail 复位）
+    LaunchedEffect(detail) {
+        if (refreshing) refreshing = false
+    }
     val online by controller.online.collectAsStateWithLifecycle()
     val liveStatus by controller.liveStatus.collectAsStateWithLifecycle()
+    val loadError by controller.loadError.collectAsStateWithLifecycle()
     val messages by controller.messages.collectAsStateWithLifecycle()
     val superChats by controller.superChats.collectAsStateWithLifecycle()
     val contributionUsers by controller.contributionRankUsers.collectAsStateWithLifecycle()
@@ -679,20 +699,44 @@ fun LiveRoomScreen(
                     Text(text = "未开播", fontSize = 16.sp, color = Color.White)
                 }
             }
+            // 直播间加载中：居中转圈（task player-ui-polish：加载动画）。
+            // detail 未就绪且无加载错误 → 转圈；加载完成 detail 出现即消失。
+            if (detail == null && !loadError) {
+                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    CircularProgressIndicator(color = Color.White)
+                }
+            }
+            // 调节提示条（亮度/音量）：独立于控件显隐（task player-ui-polish）——
+            // 控制层 5s 自动隐藏后滑动调音量/亮度，提示仍显示；1.2s 自动消失由上方 job 管理。
+            val hint = adjustHint
+            if (hint != null) {
+                Text(
+                    text = hint,
+                    fontSize = 15.sp,
+                    color = Color.White,
+                    modifier = Modifier
+                        .align(Alignment.Center)
+                        .background(Color(0x66000000), shape = RoundedCornerShape(6.dp))
+                        .padding(horizontal = 16.dp, vertical = 8.dp),
+                )
+            }
             // 控制层覆盖（Compose 版 PlayerControlsOverlay；显隐/计时由本页面驱动）
             PlayerControlsOverlay(
                 visible = controlsVisible,
                 fullScreen = isFullScreen,
                 playing = playerState.playing,
                 liveStatus = liveStatus,
+                refreshing = refreshing,
                 danmakuEnabled = overlayDanmakuOn,
                 durationText = liveDuration,
                 qualityName = qualityName,
                 lineName = lineName,
                 title = detail?.title.orEmpty(),
-                adjustHint = adjustHint,
                 onBackClick = { toggleFullScreen() }, // 顶栏返回 = 退出全屏（仅全屏显示顶栏）
-                onRefreshClick = { controller.refreshRoom() },
+                onRefreshClick = {
+                    refreshing = true
+                    controller.refreshRoom()
+                },
                 onPlayPauseClick = { togglePlayPause() },
                 onDanmakuToggle = { toggleDanmaku() },
                 onDanmakuSettingsClick = { activeSheet = RoomSheet.DanmuSettings },
@@ -918,17 +962,20 @@ private fun adjustBrightness(activity: Activity?, delta: Float, showHint: (Strin
 }
 
 /**
- * 调节媒体音量（右半屏上滑增大）：AudioManager STREAM_MUSIC 步进 1，范围 0–max；
- * 提示条「音量 x/max」。
+ * 调节媒体音量（右半屏上滑增大）—— 100 级语义（task player-ui-polish）：
+ * 当前系统音量映射到 0..100，每次滑动 ±1 级，再换算回系统档位；
+ * 提示条「音量 N/100」。范围 0–100。
  */
 private fun adjustVolume(context: Context, delta: Float, showHint: (String) -> Unit) {
     val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
     val max = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
-    var volume = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC)
-    volume += if (delta > 0f) 1 else -1
-    volume = volume.coerceIn(0, max)
-    audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, volume, 0)
-    showHint("音量 $volume/$max")
+    val current = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC)
+    // 当前音量 → 0..100 级（系统档位通常 15~30，归一化便于 ±1 级步进）
+    val level100 = if (max > 0) (current.toFloat() / max * 100).roundToInt() else 0
+    val nextLevel = (level100 + if (delta > 0) 1 else -1).coerceIn(0, 100)
+    val sysVol = if (max > 0) (nextLevel / 100f * max).roundToInt().coerceIn(0, max) else 0
+    audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, sysVol, 0)
+    showHint("音量 $nextLevel/100")
 }
 
 /* ---------- 标签集合（对应 Dart 默认标签顺序 + 条件过滤）---------- */

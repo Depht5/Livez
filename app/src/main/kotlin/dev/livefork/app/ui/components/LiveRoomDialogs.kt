@@ -214,6 +214,22 @@ fun DanmuSettingsSheet(
             ).coerceAtLeast(1)
         }
     }
+    // 显示区域单选弹层显隐（4 档）
+    var showAreaDialog by remember { mutableStateOf(false) }
+    // 应用显示区域档位并保持「行数自动收紧」（对齐原项目 onChanged 逻辑）
+    fun applyDanmuArea(nextArea: Float) {
+        val prevArea = danmuArea
+        settings.setDanmuArea(nextArea)
+        if (kotlin.math.abs(nextArea - prevArea) < 0.01f) return
+        val nextMax = settings.estimateDanmuMaxVisibleLineCount(
+            viewportHeight = effectiveViewportH,
+            area = nextArea,
+            fontSize = danmuSize * density,
+        )
+        if (settings.danmuLineCount.value > nextMax && nextMax >= 1) {
+            settings.setDanmuLineCount(nextMax)
+        }
+    }
 
     ModalBottomSheet(onDismissRequest = onDismiss) {
         Column(
@@ -230,25 +246,15 @@ fun DanmuSettingsSheet(
             SheetSwitchRow(label = "显示弹幕表情", checked = danmuRenderEmoji) {
                 settings.setDanmuRenderEmoji(it)
             }
-            // 显示区域（%）：10–100 步进 10；改面积后若当前行数超新上限则自动收紧（对齐原项目）
-            SheetSliderRow(
+            // 显示区域（4 档：全屏/3/4屏/半屏/1/4屏，task player-ui-polish）
+            //（对齐原项目显示区域 Slider 改成离散档位；改档后保持「行数自动收紧」联动）
+            val currentAreaLabel = DANMU_AREA_OPTIONS.firstOrNull {
+                kotlin.math.abs(it.first - danmuArea) < 0.01f
+            }?.second ?: "${(danmuArea * 100).roundToInt()}%"
+            SheetClickRow(
                 label = "显示区域",
-                value = (danmuArea * 100).roundToInt().coerceIn(10, 100),
-                min = 10,
-                max = 100,
-                unit = "%",
-                onChange = { v ->
-                    val nextArea = v / 100f
-                    val nextMax = settings.estimateDanmuMaxVisibleLineCount(
-                        viewportHeight = effectiveViewportH,
-                        area = nextArea,
-                        fontSize = danmuSize * density,
-                    )
-                    if (settings.danmuLineCount.value > nextMax && nextMax >= 1) {
-                        settings.setDanmuLineCount(nextMax)
-                    }
-                    settings.setDanmuArea(nextArea)
-                },
+                value = currentAreaLabel,
+                onClick = { showAreaDialog = true },
             )
             // 显示几行（0=不显示，对齐 Dart lineCount=0 语义）；
             // 上限随弹幕层高度×显示区域×字号动态（对齐原项目 _buildDanmuLineValueMap），
@@ -308,7 +314,49 @@ fun DanmuSettingsSheet(
             )
         }
     }
+
+    // 显示区域 4 档单选弹层（全屏/3/4屏/半屏/1/4屏）
+    if (showAreaDialog) {
+        AlertDialog(
+            onDismissRequest = { showAreaDialog = false },
+            title = { Text(text = "显示区域", fontSize = 17.sp, color = MaterialTheme.colorScheme.onSurface) },
+            confirmButton = {},
+            text = {
+                Column {
+                    DANMU_AREA_OPTIONS.forEach { (area, label) ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable {
+                                    applyDanmuArea(area)
+                                    showAreaDialog = false
+                                }
+                                .padding(vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            RadioButton(
+                                selected = kotlin.math.abs(area - danmuArea) < 0.01f,
+                                onClick = {
+                                    applyDanmuArea(area)
+                                    showAreaDialog = false
+                                },
+                            )
+                            Text(text = label, fontSize = 15.sp, color = MaterialTheme.colorScheme.onSurface)
+                        }
+                    }
+                }
+            },
+        )
+    }
 }
+
+/** 弹幕显示区域 4 档（对齐用户需求：全屏/3/4屏/半屏/1/4屏 → 1.0/0.75/0.5/0.25）。 */
+private val DANMU_AREA_OPTIONS = listOf(
+    1.00f to "全屏",
+    0.75f to "3/4屏",
+    0.50f to "半屏",
+    0.25f to "1/4屏",
+)
 
 /* ---------- 直播设置 ---------- */
 
@@ -350,7 +398,7 @@ fun LiveSettingsSheet(
                 modifier = Modifier.fillMaxWidth(),
             )
             // 刷新
-            SheetClickRow(label = "刷新直播间") { controller.refreshRoom() }
+            SheetClickRow(label = "刷新直播间", onClick = { controller.refreshRoom() })
         }
     }
 }
@@ -410,15 +458,18 @@ fun DanmuShieldSheet(onDismiss: () -> Unit) {
                 shape = RoundedCornerShape(8.dp),
                 modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
             )
-            SheetClickRow(label = "添加屏蔽词") {
-                val word = input.trim()
-                if (word.isEmpty()) {
-                    Router.toast("请输入关键词")
-                } else {
-                    settings.addShieldList(word)
-                    input = ""
-                }
-            }
+            SheetClickRow(
+                label = "添加屏蔽词",
+                onClick = {
+                    val word = input.trim()
+                    if (word.isEmpty()) {
+                        Router.toast("请输入关键词")
+                    } else {
+                        settings.addShieldList(word)
+                        input = ""
+                    }
+                },
+            )
         }
     }
 }
@@ -462,21 +513,34 @@ private fun SheetSwitchRow(
     }
 }
 
-/** 可点击行：文字行（对齐旧 clickRow）。 */
+/** 可点击行：文字行（对齐旧 clickRow）；可选右侧值（如「全屏」「3/4屏」）。 */
 @Composable
 private fun SheetClickRow(
     label: String,
     onClick: () -> Unit,
+    value: String? = null,
 ) {
-    Text(
-        text = label,
-        fontSize = 14.sp,
-        color = MaterialTheme.colorScheme.onSurface,
+    Row(
         modifier = Modifier
             .fillMaxWidth()
             .clickable(onClick = onClick)
             .padding(top = 14.dp, bottom = 2.dp),
-    )
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text = label,
+            fontSize = 14.sp,
+            color = MaterialTheme.colorScheme.onSurface,
+            modifier = Modifier.weight(1f),
+        )
+        if (value != null) {
+            Text(
+                text = value,
+                fontSize = 14.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
 }
 
 /**
