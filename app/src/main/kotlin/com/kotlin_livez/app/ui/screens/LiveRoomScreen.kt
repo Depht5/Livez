@@ -36,6 +36,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.material3.Icon
 import androidx.compose.material3.Tab
 import androidx.compose.material3.TabRow
 import androidx.compose.material3.TabRowDefaults.tabIndicatorOffset
@@ -94,6 +95,7 @@ import com.kotlin_livez.app.ui.components.PlayerControlsOverlay
 import com.kotlin_livez.app.ui.components.QualityDialog
 import com.kotlin_livez.app.ui.components.RoomMenuDialog
 import com.kotlin_livez.app.ui.components.RoomSheet
+import com.kotlin_livez.app.ui.theme.CustomIcons
 import com.kotlin_livez.app.ui.theme.LiveIndicatorRed
 import com.kotlin_livez.app.ui.theme.LiveOrange
 import com.kotlin_livez.core.model.LiveContributionRankItem
@@ -867,13 +869,15 @@ fun LiveRoomScreen(
                         Text(text = site.name, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 }
-                // 关注按钮（task follow-tab-and-room-follow）：未关注 = 描边空心爱心 ♡
-                //（灰），已关注 = 红心 ♥；点击切换关注状态
-                Text(
-                    text = if (followed) "♥" else "♡",
-                    fontSize = 22.sp,
-                    color = if (followed) LiveIndicatorRed else MaterialTheme.colorScheme.outline,
+                // 关注按钮（task follow-tab-and-room-follow）：未关注 = 灰色空心爱心
+                // HeartOutline，已关注 = 红色实心爱心 HeartFilled；点击切换关注状态
+                Icon(
+                    imageVector = if (followed) CustomIcons.HeartFilled else CustomIcons.HeartOutline,
+                    contentDescription = null,
+                    // 颜色由图标自身内建（红心 #FF0000 / 灰心 #808080），不随 Icon tint 覆盖
+                    tint = Color.Unspecified,
                     modifier = Modifier
+                        .size(22.dp)
                         .clickable {
                             if (followed) {
                                 controller.removeFollowUser()

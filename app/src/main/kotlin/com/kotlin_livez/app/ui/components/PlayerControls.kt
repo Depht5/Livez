@@ -9,6 +9,8 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
@@ -16,12 +18,14 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.kotlin_livez.app.ui.theme.CustomIcons
 
 /**
  * 播放器控制层（Compose 版，竖屏/全屏共用）—— 替换旧 View 体系
@@ -42,7 +46,7 @@ import androidx.compose.ui.unit.sp
  * - 播放/暂停按钮仅全屏且开播时显示（竖屏按钮过多会挤出屏幕）；
  * - 线路按钮仅全屏显示；
  * - 弹幕开关选中色 #FFD857 / 未选白色；
- * - 全屏按钮文字固定 ⛶。
+ * - 全屏按钮为白色图标（窗口态 Fullscreen / 全屏态 ExitFullscreen）。
  *
  * show/hide/toggle 与 5s 自动隐藏的计时逻辑由宿主（LiveRoomScreen）以 LaunchedEffect
  * 实现；本组件只按参数渲染。
@@ -168,8 +172,11 @@ fun PlayerControlsOverlay(
                     paddingV = 6.dp,
                 )
             }
-            // 全屏切换（文字固定 ⛶，点击切换逻辑由宿主处理）
-            OverlayButton(text = "⛶", onClick = onFullScreenClick)
+            // 全屏切换（图标随状态切换：窗口态 Fullscreen / 全屏态 ExitFullscreen；点击由宿主处理）
+            OverlayIconButton(
+                icon = if (fullScreen) CustomIcons.ExitFullscreen else CustomIcons.Fullscreen,
+                onClick = onFullScreenClick,
+            )
         }
     }
 }
@@ -192,6 +199,33 @@ private fun OverlayButton(
         fontSize = fontSize,
         color = tint,
         modifier = Modifier
+            .clickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null,
+                onClick = onClick,
+            )
+            .padding(horizontal = paddingH, vertical = paddingV),
+    )
+}
+
+/**
+ * 控制层图标按钮：去涟漪、保留图标内建颜色（点击/内距规格对齐 [OverlayButton]）。
+ */
+@Composable
+private fun OverlayIconButton(
+    icon: ImageVector,
+    onClick: () -> Unit,
+    size: Dp = 20.dp,
+    paddingH: Dp = 12.dp,
+    paddingV: Dp = 8.dp,
+) {
+    Icon(
+        imageVector = icon,
+        contentDescription = null,
+        // 图标 stroke 已内建白色（匹配控制层样式），避免被 Icon 默认 tint（LocalContentColor）覆盖
+        tint = Color.Unspecified,
+        modifier = Modifier
+            .size(size)
             .clickable(
                 interactionSource = remember { MutableInteractionSource() },
                 indication = null,
