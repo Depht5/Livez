@@ -874,10 +874,11 @@ fun LiveRoomScreen(
                 Icon(
                     imageVector = if (followed) CustomIcons.HeartFilled else CustomIcons.HeartOutline,
                     contentDescription = null,
-                    // 颜色由图标自身内建（红心 #FF0000 / 灰心 #808080），不随 Icon tint 覆盖
-                    tint = Color.Unspecified,
+                    // Icon 的 ColorFilter 染色决定实际颜色（tint=Unspecified 会回退为
+                    // LocalContentColor 染黑）：此处显式按状态上色（红 #FF0000 / 灰 #808080）
+                    tint = if (followed) Color(0xFFFF0000) else Color(0xFF808080),
                     modifier = Modifier
-                        .size(22.dp)
+                        .size(24.dp)
                         .clickable {
                             if (followed) {
                                 controller.removeFollowUser()

@@ -209,7 +209,8 @@ private fun OverlayButton(
 }
 
 /**
- * 控制层图标按钮：去涟漪、保留图标内建颜色（点击/内距规格对齐 [OverlayButton]）。
+ * 控制层图标按钮：去涟漪、显式白色（Icon 的 ColorFilter 染色；控制层背景为深色渐隐，
+ * 白色图标确定可见，避免 fallback 到 LocalContentColor 染黑）。
  */
 @Composable
 private fun OverlayIconButton(
@@ -222,8 +223,9 @@ private fun OverlayIconButton(
     Icon(
         imageVector = icon,
         contentDescription = null,
-        // 图标 stroke 已内建白色（匹配控制层样式），避免被 Icon 默认 tint（LocalContentColor）覆盖
-        tint = Color.Unspecified,
+        // material3 Icon：tint=Unspecified 会回退为 LocalContentColor.current（此处近黑），
+        // 必须显式白以在深色控制栏上可见
+        tint = Color.White,
         modifier = Modifier
             .size(size)
             .clickable(

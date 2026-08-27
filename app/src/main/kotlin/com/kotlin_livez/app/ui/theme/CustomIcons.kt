@@ -11,10 +11,11 @@ import androidx.compose.ui.unit.dp
 /**
  * 自定义图标集（手写 SVG path，对应直播间关注按钮 / 播放器全屏按钮）。
  *
- * 颜色按调用场景内建（不随 Icon tint 染色，调用处以 `tint = Color.Unspecified` 保留原色）：
- * - [HeartOutline]：灰色空心爱心（未关注，描边 #808080）
- * - [HeartFilled]：红色实心爱心（已关注，填充 #FF0000）
- * - [Fullscreen] / [ExitFullscreen]：白色描边（匹配播放器控件白色样式），按全屏状态切换
+ * 实际显示色由调用处 `Icon(tint = ...)` 的 ColorFilter 决定（material3 Icon 的
+ * `tint = Color.Unspecified` 会回退为 LocalContentColor.current 染色，故调用处必须显式上色）：
+ * - 关注按钮：已关注 `Color(0xFFFF0000)`（红心）/ 未关注 `Color(0xFF808080)`（灰心）
+ * - 播放器全屏：`Color.White`（深色控制栏上的白色图标）
+ * 图标内建 fill/stroke 色仅作兜底，实际显示以 tint 为准。
  */
 object CustomIcons {
 
