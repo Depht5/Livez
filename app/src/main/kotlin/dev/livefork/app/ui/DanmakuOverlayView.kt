@@ -63,7 +63,8 @@ import kotlin.math.floor
  * 与原版的已知行为差异（有意保留）：
  * 1. 无 selfSend / massiveMode 特性（无自发送弹幕浮层回显需求），全满一律丢弃。
  * 2. 表情图为独立 bitmap 片段绘制（非原版 Paragraph 内联占位），观感一致。
- * 3. 视口尺寸变化（全屏切换）时清空重来（原版不清空继续滚动）。
+ * 3. 视口尺寸变化（全屏切换）时已对齐原版：不清空、在飞弹幕继续推进，
+ *    速度按当前视口宽每帧折算（原版 painter 每帧 size.width 参与 distance 计算）。
  */
 class DanmakuOverlayView @JvmOverloads constructor(
     context: Context,
@@ -111,10 +112,10 @@ class DanmakuOverlayView @JvmOverloads constructor(
         val font: Typeface,
         /** 所属轨道行号（对齐原版 yPosition；同轨可同时多条在飞） */
         val track: Int,
-        /** 起始 x = 视口宽度（右侧外部） */
+        /** 起始 x = 视口宽度（右侧外部），随 step 递减 */
         var x: Float,
-        /** px/秒 */
-        val speed: Float,
+        /** 弹幕时长（danmuSpeed 秒，入轨时设置快照；全屏切换后速度随视口宽动态折算） */
+        val durationSec: Float,
         val imageHeightPx: Float,
     ) {
         /** 弹幕总宽（片段宽之和，用于出界判定与轨道布局）。 */
@@ -295,7 +296,7 @@ class DanmakuOverlayView @JvmOverloads constructor(
             font = font,
             track = target,
             x = startX,
-            speed = speedPxPerSec(itemWidth, appSettings.danmuSpeed.value),
+            durationSec = appSettings.danmuSpeed.value.coerceAtLeast(1f),
             imageHeightPx = imageHeightPx,
         )
         item.measuredWidth = itemWidth
@@ -467,16 +468,6 @@ class DanmakuOverlayView @JvmOverloads constructor(
         }
     }
 
-    /** px/秒 —— 对齐 Dart：速度 = (视口宽 + 弹幕宽) / 时长秒（宽弹幕更快、全程含出屏在时长内走完）。 */
-    private fun speedPxPerSec(itemWidth: Float, speed: Float): Float {
-        val viewW = width.toFloat()
-        return if (viewW > 0f) {
-            (viewW + itemWidth) / speed.coerceAtLeast(1f)
-        } else {
-            200f
-        }
-    }
-
     /* ---------- 动画驱动（单循环推进所有在轨弹幕） ---------- */
 
     private fun ensureAnimator() {
@@ -506,10 +497,14 @@ class DanmakuOverlayView @JvmOverloads constructor(
 
     private fun step(dtSec: Float) {
         var dirty = false
+        // 对齐 Dart scroll_danmaku_painter：速度 = (当前视口宽 + 弹幕宽) / 时长，
+        // **每帧用当前视口宽折算**——全屏切换后视口变宽，在飞弹幕速度随之更新
+        //（原版 painter 每帧 size.width 参与 distance 计算；非入轨时固化）。
+        val viewW = width.toFloat()
         // 倒序遍历：移除元素只影响其后索引，倒序安全
         for (i in items.indices.reversed()) {
             val t = items[i]
-            t.x -= t.speed * dtSec
+            t.x -= (viewW + t.measuredWidth) / t.durationSec * dtSec
             if (t.x + t.measuredWidth <= 0f) {
                 // 完全走出左边界 → 从列表移除（轨道是逻辑行号，无需"释放"动作）
                 items.removeAt(i)
@@ -529,8 +524,8 @@ class DanmakuOverlayView @JvmOverloads constructor(
 
     override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
         super.onSizeChanged(w, h, oldw, oldh)
-        // 视口变化：清空重来（全屏切换时轨道简单重置）
-        clear()
+        // 视口变化：**不清空**（对齐原项目 canvas_danmaku——尺寸变化时轨道与在飞弹幕
+        // 继续推进，速度按当前视口宽每帧折算）。切房间/关闭弹幕的清空由外部 clear() 负责。
     }
 
     override fun onDraw(canvas: Canvas) {
