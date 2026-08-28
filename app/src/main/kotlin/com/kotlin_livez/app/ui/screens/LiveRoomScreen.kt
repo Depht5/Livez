@@ -679,7 +679,8 @@ fun LiveRoomScreen(
             .statusBarsPadding(),
     ) {
 
-        // 标题栏：返回箭头 / 标题（16sp medium 单行省略）/ 「⋮」菜单 —— 全屏时隐藏。
+        // 标题栏：返回图标（CustomIcons.Back）/ 标题（16sp medium 单行省略）/ 菜单图标
+        // （CustomIcons.Menu）—— 全屏时隐藏。
         // 根因说明（真机症状 4：标题不居中、返回按钮左侧缺几个像素）：
         // 旧实现标题用 weight(1f) 挤在左右两个文本按钮之间——「←」与「⋮」字形推进宽度
         // 不相等，可用空间不对称导致标题整体偏移几个像素；且「←」按字形紧排，负 left
@@ -704,7 +705,12 @@ fun LiveRoomScreen(
                         ),
                     contentAlignment = Alignment.Center,
                 ) {
-                    Text(text = "←", fontSize = 22.sp, color = MaterialTheme.colorScheme.onSurface)
+                    Icon(
+                        imageVector = CustomIcons.Back,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurface,
+                        modifier = Modifier.size(24.dp),
+                    )
                 }
                 Text(
                     text = detail?.title?.ifEmpty { null } ?: "直播间",
@@ -730,7 +736,12 @@ fun LiveRoomScreen(
                         ),
                     contentAlignment = Alignment.Center,
                 ) {
-                    Text(text = "⋮", fontSize = 22.sp, color = MaterialTheme.colorScheme.onSurface)
+                    Icon(
+                        imageVector = CustomIcons.Menu,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurface,
+                        modifier = Modifier.size(24.dp),
+                    )
                 }
             }
         }
@@ -899,7 +910,7 @@ fun LiveRoomScreen(
                             }
                         }
                         .padding(horizontal = 4.dp, vertical = 4.dp)
-                        .size(24.dp),
+                        .size(23.dp),
                 )
                 Text(
                     text = "🔥 ${Utils.onlineToString(online)}",

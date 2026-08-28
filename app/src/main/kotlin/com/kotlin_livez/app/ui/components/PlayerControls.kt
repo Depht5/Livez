@@ -31,8 +31,11 @@ import com.kotlin_livez.app.ui.theme.CustomIcons
  * 播放器控制层（Compose 版，竖屏/全屏共用）—— 替换旧 View 体系
  * `ui/PlayerControlsOverlay.kt`，对应 Flutter `player_controls.dart` 的简化版。
  *
- * 结构：顶部渐隐栏（返回/标题/⋮菜单，仅全屏显示）+ 底部渐隐栏
+ * 结构：顶部渐隐栏（返回/标题/菜单图标，仅全屏显示）+ 底部渐隐栏
  * （刷新[含转圈态]/播放暂停[仅全屏+开播]/弹幕开关/弹幕设置/直播时长/清晰度/线路[仅全屏]/全屏切换）。
+ * 控件图标（task svg-button-icons）：Back/Menu/Refresh/Play/Pause/DanmakuOn/DanmakuOff/
+ * DanmuSetting/Fullscreen/ExitFullscreen 均为 CustomIcons ImageVector，统一 20dp
+ * （OverlayIconButton 默认值，调用处不传 size）；弹幕开关选中色 #FFD857 / 未选白。
  *
  * **文件位置说明**：本组件约 160 行且为纯无状态展示件（所有状态经参数注入、
  * 动作经回调上抛），符合 `ui/components` 目录定位；并入 LiveRoomScreen.kt 会让页面
@@ -91,7 +94,7 @@ fun PlayerControlsOverlay(
                     .padding(horizontal = 12.dp, vertical = 10.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                OverlayButton(text = "←", onClick = onBackClick)
+                OverlayIconButton(icon = CustomIcons.Back, onClick = onBackClick)
                 Text(
                     text = title,
                     fontSize = 16.sp,
@@ -101,7 +104,7 @@ fun PlayerControlsOverlay(
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.weight(1f).padding(horizontal = 4.dp),
                 )
-                OverlayButton(text = "⋮", onClick = onMenuClick)
+                OverlayIconButton(icon = CustomIcons.Menu, onClick = onMenuClick)
             }
         }
 
@@ -121,28 +124,28 @@ fun PlayerControlsOverlay(
             // 刷新（refreshRoom）：动画由宿主在视频区显示「与加载相同的居中转圈」，
             // 控制层按钮保持常显（task player-ui-polish）；竖屏时收窄三键间距。
             val compactH = if (!fullScreen) 6.dp else 12.dp
-            OverlayButton(
-                text = "⟳",
+            OverlayIconButton(
+                icon = CustomIcons.Refresh,
                 onClick = onRefreshClick,
                 paddingH = compactH,
             )
             // 播放/暂停：仅全屏且开播时显示（refreshButtons 规则）
             if (fullScreen && liveStatus) {
-                OverlayButton(
-                    text = if (playing) "⏸" else "▶",
+                OverlayIconButton(
+                    icon = if (playing) CustomIcons.Pause else CustomIcons.Play,
                     onClick = onPlayPauseClick,
                 )
             }
             // 弹幕开关（选中色 #FFD857）
-            OverlayButton(
-                text = "弹",
+            OverlayIconButton(
+                icon = if (danmakuEnabled) CustomIcons.DanmakuOn else CustomIcons.DanmakuOff,
                 tint = if (danmakuEnabled) Color(0xFFFFD857) else Color.White,
                 onClick = onDanmakuToggle,
                 paddingH = compactH,
             )
             // 弹幕设置（对齐 Dart 弹幕开关旁的设置图标按钮）
-            OverlayButton(
-                text = "设置",
+            OverlayIconButton(
+                icon = CustomIcons.DanmuSetting,
                 onClick = onDanmakuSettingsClick,
                 paddingH = compactH,
             )
@@ -209,13 +212,15 @@ private fun OverlayButton(
 }
 
 /**
- * 控制层图标按钮：去涟漪、显式白色（Icon 的 ColorFilter 染色；控制层背景为深色渐隐，
- * 白色图标确定可见，避免 fallback 到 LocalContentColor 染黑）。
+ * 控制层图标按钮：去涟漪、显式上色（Icon 的 ColorFilter 染色；控制层背景为深色渐隐，
+ * 默认白色图标确定可见，避免 fallback 到 LocalContentColor 染黑；弹幕开关等双色场景
+ * 经 tint 参数传入）。全部图标统一 20dp（默认值，调用处不传 size）。
  */
 @Composable
 private fun OverlayIconButton(
     icon: ImageVector,
     onClick: () -> Unit,
+    tint: Color = Color.White,
     size: Dp = 20.dp,
     paddingH: Dp = 12.dp,
     paddingV: Dp = 8.dp,
@@ -224,8 +229,8 @@ private fun OverlayIconButton(
         imageVector = icon,
         contentDescription = null,
         // material3 Icon：tint=Unspecified 会回退为 LocalContentColor.current（此处近黑），
-        // 必须显式白以在深色控制栏上可见
-        tint = Color.White,
+        // 必须显式上色以在深色控制栏上可见
+        tint = tint,
         modifier = Modifier
             // 顺序关键：padding 在外层撑开点击区，size 在最内层决定图标本体渲染尺寸；
             // 反序（size 外、padding 内）会使内容区 = size − padding ≤ 0，图标不渲染
