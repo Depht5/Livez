@@ -1,15 +1,10 @@
 package com.kotlin_livez.app
 
-import android.app.Activity
 import android.app.Application
 import android.content.ContentValues
-import android.graphics.Color
 import android.os.Build
-import android.os.Bundle
 import android.os.Environment
 import android.provider.MediaStore
-import androidx.core.view.WindowCompat
-import androidx.core.view.WindowInsetsControllerCompat
 import com.kotlin_livez.app.di.ServiceContainer
 import com.kotlin_livez.core.common.CoreLog
 import java.io.File
@@ -27,35 +22,11 @@ class LiveApp : Application() {
         }
         ServiceContainer.install(app = this)
         installCrashHandler()
-        installWindowDecorAdaptation()
-    }
-
-    /**
-     * 全局窗口装饰适配（沉浸式，Material 3 任务延续）：
-     * - `setDecorFitsSystemWindows(false)`：全窗口 edge-to-edge，内容可延伸到
-     *   状态栏/导航条区域，由各页面自身的背景色覆盖系统栏区域（状态栏+底部导航条
-     *   不再显示固定白条，随页面背景统一）；
-     * - 系统栏背景透明 + 图标深色（浅色页面下清晰可见）。
-     */
-    private fun installWindowDecorAdaptation() {
-        registerActivityLifecycleCallbacks(object : Application.ActivityLifecycleCallbacks {
-            override fun onActivityCreated(activity: Activity, savedInstanceState: Bundle?) {
-                val window = activity.window
-                WindowCompat.setDecorFitsSystemWindows(window, false)
-                window.statusBarColor = Color.TRANSPARENT
-                window.navigationBarColor = Color.TRANSPARENT
-                val controller = WindowInsetsControllerCompat(window, window.decorView)
-                controller.isAppearanceLightStatusBars = true
-                controller.isAppearanceLightNavigationBars = true
-            }
-
-            override fun onActivityStarted(activity: Activity) {}
-            override fun onActivityResumed(activity: Activity) {}
-            override fun onActivityPaused(activity: Activity) {}
-            override fun onActivityStopped(activity: Activity) {}
-            override fun onActivitySaveInstanceState(activity: Activity, outState: Bundle) {}
-            override fun onActivityDestroyed(activity: Activity) {}
-        })
+        // 注（targetSdk 35 迁移）：原 installWindowDecorAdaptation（手动
+        // setDecorFitsSystemWindows(false) + 透明系统栏 + light bars 深色图标）已由
+        // MainActivity.onCreate 的 enableEdgeToEdge() 取代——API 35 弃用
+        // statusBarColor/navigationBarColor setter；单 Activity 项目只需一处调用。
+        // light bars 动态切换（全屏 transient 栏白图标）见 LiveRoomScreen。
     }
 
     /**

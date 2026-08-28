@@ -5,8 +5,9 @@
      `shortEdges`（values-v28 声明）只允许窗口延伸到**短边**刘海区，系统遂对
      content 区域在刘海侧强制避让 135px（uiautomator：content=[135,0]-[2800,1272]），
      Compose 内容含 mpv SurfaceView 全部从 x=135 开始 → 刘海侧露出窗口背景白条。
-     `always` 允许窗口延伸到所有方向 cutout（含长边）；本机 compileSdk=34、设备 SDK 36，
-     该值于 API 35 起 deprecated 但功能保留（本 app targetSdk=34，不受强制 edge-to-edge 影响）。
+     `always` 允许窗口延伸到所有方向 cutout（含长边）；本机 compileSdk=35、设备 SDK 36，
+     该值于 API 35 起 deprecated 但功能保留；本 app 已升 targetSdk 35（Android 15 强制
+     edge-to-edge，ALWAYS 即平台强制行为），声明保留与系统行为一致。
      竖屏时状态栏仍占位（非全屏），content 依旧从状态栏下沿开始，无视觉回归（实测确认）。 -->
 <resources>
     <style name="Theme.LiveApp" parent="Theme.MaterialComponents.DayNight.NoActionBar">

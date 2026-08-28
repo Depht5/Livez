@@ -3,6 +3,7 @@ package com.kotlin_livez.app
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
@@ -22,6 +23,11 @@ import com.kotlin_livez.app.ui.theme.AppTheme
 class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        // Edge-to-edge 迁移（targetSdk 35 / androidx.activity 1.8+）：替代原 LiveApp 中手动
+        // setDecorFitsSystemWindows(false) + 透明系统栏 + light bars 三件套（API 35 已弃用
+        // statusBarColor/navigationBarColor setter）。默认 SystemBarStyle.auto：API 29+ 系统
+        // 栏纯透明、浅色 app → 深色图标（与旧行为一致）；API 26-28 导航栏自动加融合 scrim。
+        enableEdgeToEdge()
         super.onCreate(savedInstanceState)
 
         Router.install(applicationContext)

@@ -1,7 +1,9 @@
-﻿<?xml version="1.0" encoding="utf-8"?>
+<?xml version="1.0" encoding="utf-8"?>
 <!-- API 28+：刘海屏适配——对比原项目 dart_simple_live NormalTheme 的
      windowLayoutInDisplayCutoutMode=shortEdges。运行时对已附加窗口改
-     layoutInDisplayCutoutMode 在部分 OEM（实测荣耀）不生效，必须主题声明。 -->
+     layoutInDisplayCutoutMode 在部分 OEM（实测荣耀）不生效，必须主题声明。
+     targetSdk 35 起 SHORT_EDGES 会被系统解读为 ALWAYS（Android 15 行为变更：
+     非浮动窗口的 DEFAULT/NEVER/SHORT_EDGES 均按 ALWAYS 处理），声明保留无副作用。 -->
 <resources>
     <style name="Theme.LiveApp" parent="Theme.MaterialComponents.DayNight.NoActionBar">
         <item name="android:statusBarColor">@android:color/transparent</item>

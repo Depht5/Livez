@@ -199,17 +199,23 @@ fun LiveRoomScreen(
     LaunchedEffect(isFullScreen) {
         val activity = context as? Activity ?: return@LaunchedEffect
         val window = activity.window
+        val insetsController = WindowInsetsControllerCompat(window, window.decorView)
         if (isFullScreen) {
             // 运行时方向覆盖 Manifest portrait（configChanges 已声明 → 不 recreate）
             activity.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
-            val insetsController = WindowInsetsControllerCompat(window, window.decorView)
             insetsController.hide(WindowInsetsCompat.Type.systemBars())
             insetsController.systemBarsBehavior =
                 WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+            // transient 栏图标明暗：全屏为黑色视频底，滑动呼出的临时系统栏需浅色图标
+            //（false = 浅色图标）；否则深色图标在黑底上不可见。
+            insetsController.isAppearanceLightStatusBars = false
+            insetsController.isAppearanceLightNavigationBars = false
         } else {
             activity.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
-            WindowInsetsControllerCompat(window, window.decorView)
-                .show(WindowInsetsCompat.Type.systemBars())
+            insetsController.show(WindowInsetsCompat.Type.systemBars())
+            // 恢复浅色页面默认：深色系统栏图标（与 LiveApp/enableEdgeToEdge 初始值一致）
+            insetsController.isAppearanceLightStatusBars = true
+            insetsController.isAppearanceLightNavigationBars = true
         }
     }
     // 离开直播间时若仍处于全屏：恢复竖屏方向与系统栏
@@ -220,8 +226,13 @@ fun LiveRoomScreen(
             if (activity != null) {
                 runCatching {
                     activity.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
-                    WindowInsetsControllerCompat(activity.window, activity.window.decorView)
-                        .show(WindowInsetsCompat.Type.systemBars())
+                    val insetsController = WindowInsetsControllerCompat(
+                        activity.window, activity.window.decorView,
+                    )
+                    insetsController.show(WindowInsetsCompat.Type.systemBars())
+                    // 兜底恢复深色图标（浅色壳层页面），防全屏态离页残留白图标不可见
+                    insetsController.isAppearanceLightStatusBars = true
+                    insetsController.isAppearanceLightNavigationBars = true
                 }
             }
         }

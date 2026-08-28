@@ -18,7 +18,8 @@ val signingProps = Properties().apply {
 
 android {
     namespace = "com.kotlin_livez.app"
-    compileSdk = 34
+    // compileSdk 35（Android 15）：配合 targetSdk 35；AGP 8.13.2 支持
+    compileSdk = 35
 
     buildFeatures {
         buildConfig = true
@@ -31,7 +32,9 @@ android {
         // minSdk 26（Android 8.0+）：libmpv（dev.jdtech.mpv:libmpv）AAR 强制要求；
         // mpv 播放内核在旧系统上不可用。
         minSdk = 26
-        targetSdk = 34
+        // targetSdk 35（Android 15）：强制 edge-to-edge（本 app 已全局 e2e，无行为回归预期）；
+        // 系统栏 setter（statusBarColor/navigationBarColor）在 35 弃用，已迁移 enableEdgeToEdge()。
+        targetSdk = 35
         versionCode = 1
         versionName = "0.1.0"
     }
