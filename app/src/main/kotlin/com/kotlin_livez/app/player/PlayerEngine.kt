@@ -277,8 +277,10 @@ class PlayerEngine private constructor() {
         // 移动端限制 demuxer 缓存
         MPVLib.setOptionString("demuxer-max-bytes", "${64 * 1024 * 1024}")
         MPVLib.setOptionString("demuxer-max-back-bytes", "${64 * 1024 * 1024}")
-        // media_kit 仓库更新导致的临时解决办法
-        MPVLib.setOptionString("force-seekable", "yes")
+        // 不设 force-seekable（task 08-29-playback-stutter）：直播流本质不可 seek，强制可 seek
+        // 会让 mpv 在缓冲恢复时对底层流发起内部 seek（日志 `Stream is not seekable`），缓存状态
+        // 整体复位 100%->0% → 停播回填 1-2s + 音频 underrun（偶发卡顿根因）。原为照搬
+        // media_kit 默认配置的历史遗留；Kotlin 端无 seek 功能，换线/清晰度均为 loadfile。
 
         // 静态选项（对应 Dart MpvOptionsService.applyToPlayer；不含 vo/hwdec）
         for ((key, value) in config.options) {
