@@ -17,7 +17,6 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
-import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
@@ -280,8 +279,8 @@ private fun MainShell(shell: ShellState) {
  * 底部导航栏 —— Material 3 默认观感（task 08-26-material3-ui-restyle）：
  * NavigationBarItem + 药丸选中指示器 + ripple 状态层，颜色跟随 colorScheme。
  * 图标化（task 08-28-bottom-tab-icons）：icon 槽由 13sp 文字占位改为 CustomIcons 图标
- * （Home / HeartOutline[关注与直播间关注按钮同源复用] / Category / Mine），标题移入
- * label（12sp）；选中 onSecondaryContainer / 未选中 onSurfaceVariant 显式着色
+ * （Home / HeartOutline[关注与直播间关注按钮同源复用] / Category / Mine），**纯图标无文字**
+ * （label 置空，用户决策）；选中 onSecondaryContainer / 未选中 onSurfaceVariant 显式着色
  * （不依赖 NavigationBarItem 的 LocalContentColor 内部实现）。
  * 高度：60 → 68dp（适配 24dp 图标 + label；tab 下移 4dp 保留）。
  * 底部导航条 insets 由 NavigationBar 默认 windowInsets 处理。
@@ -315,17 +314,7 @@ private fun MainBottomBar(currentIndex: Int, onSelect: (Int) -> Unit) {
                         modifier = Modifier.size(24.dp),
                     )
                 },
-                label = {
-                    Text(
-                        text = title,
-                        fontSize = 12.sp,
-                        color = if (selected) {
-                            MaterialTheme.colorScheme.onSecondaryContainer
-                        } else {
-                            MaterialTheme.colorScheme.onSurfaceVariant
-                        },
-                    )
-                },
+                label = null,
             )
         }
     }
