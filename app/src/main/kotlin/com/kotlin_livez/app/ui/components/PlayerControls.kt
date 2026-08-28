@@ -34,8 +34,9 @@ import com.kotlin_livez.app.ui.theme.CustomIcons
  * 结构：顶部渐隐栏（返回/标题/菜单图标，仅全屏显示）+ 底部渐隐栏
  * （刷新[含转圈态]/播放暂停[仅全屏+开播]/弹幕开关/弹幕设置/直播时长/清晰度/线路[仅全屏]/全屏切换）。
  * 控件图标（task svg-button-icons）：Back/Menu/Refresh/Play/Pause/DanmakuOn/DanmakuOff/
- * DanmuSetting/Fullscreen/ExitFullscreen 均为 CustomIcons ImageVector，统一 20dp
- * （OverlayIconButton 默认值，调用处不传 size）；弹幕开关选中色 #FFD857 / 未选白。
+ * DanmuSetting/Fullscreen/ExitFullscreen 均为 CustomIcons ImageVector；尺寸契约：
+ * 默认 20dp，播放/暂停、弹幕开关、弹幕设置三处显式 22dp（用户决策）；
+ * 弹幕开关选中色 #FFD857 / 未选白。
  *
  * **文件位置说明**：本组件约 160 行且为纯无状态展示件（所有状态经参数注入、
  * 动作经回调上抛），符合 `ui/components` 目录定位；并入 LiveRoomScreen.kt 会让页面
@@ -133,6 +134,7 @@ fun PlayerControlsOverlay(
             if (fullScreen && liveStatus) {
                 OverlayIconButton(
                     icon = if (playing) CustomIcons.Pause else CustomIcons.Play,
+                    size = 22.dp,
                     onClick = onPlayPauseClick,
                 )
             }
@@ -140,12 +142,14 @@ fun PlayerControlsOverlay(
             OverlayIconButton(
                 icon = if (danmakuEnabled) CustomIcons.DanmakuOn else CustomIcons.DanmakuOff,
                 tint = if (danmakuEnabled) Color(0xFFFFD857) else Color.White,
+                size = 22.dp,
                 onClick = onDanmakuToggle,
                 paddingH = compactH,
             )
             // 弹幕设置（对齐 Dart 弹幕开关旁的设置图标按钮）
             OverlayIconButton(
                 icon = CustomIcons.DanmuSetting,
+                size = 22.dp,
                 onClick = onDanmakuSettingsClick,
                 paddingH = compactH,
             )

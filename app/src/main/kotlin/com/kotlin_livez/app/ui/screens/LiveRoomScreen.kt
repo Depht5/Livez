@@ -11,7 +11,6 @@ import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.view.View
-import android.view.WindowManager
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -61,6 +60,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
@@ -150,6 +150,8 @@ fun LiveRoomScreen(
     }
 
     val context = LocalContext.current
+    // view 级屏幕常亮句柄（不依赖 context 类型，见下方 DisposableEffect）
+    val view = LocalView.current
 
     // 控制器路由级生命周期：按 (siteId, roomId) 记住，离开组合销毁（等价原 Activity onDestroy）
     val controller = remember(siteId, roomId) {
@@ -168,13 +170,13 @@ fun LiveRoomScreen(
         DanmakuOverlayView(context).apply { this.siteId = siteId }
     }
 
-    // 屏幕常亮（对齐原 onCreate 的 FLAG_KEEP_SCREEN_ON；宿主为 MainActivity 单例窗口）
-    DisposableEffect(context) {
-        val activity = context as? Activity
-        activity?.window?.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-        onDispose {
-            activity?.window?.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-        }
+    // 屏幕常亮（对齐原 onCreate 的 FLAG_KEEP_SCREEN_ON；Dart 参考 player_controller
+    // playing→WakelockPlus.enable 的页面级超集：暂停期间也保持常亮）。view 级
+    // keepScreenOn 不依赖 LocalContext 的具体类型——旧写法 `context as? Activity`
+    // 强转失败会静默不加 window flag，屏幕按系统超时熄灭（task player-icons-follow-ux）。
+    DisposableEffect(view) {
+        view.keepScreenOn = true
+        onDispose { view.keepScreenOn = false }
     }
 
     /* ---------- 全屏态（UI 层状态；等价原 isFullScreen 字段）---------- */

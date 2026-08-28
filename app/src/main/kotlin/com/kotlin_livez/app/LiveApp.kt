@@ -21,6 +21,8 @@ class LiveApp : Application() {
             android.util.Log.d("CoreLog", message)
         }
         ServiceContainer.install(app = this)
+        // 启动即刷新一次关注列表 + 状态（用户决策：无条件执行，绕过进页开关与 30s 冷却）
+        ServiceContainer.followService.refreshOnStartup()
         installCrashHandler()
         // 注（targetSdk 35 迁移）：原 installWindowDecorAdaptation（手动
         // setDecorFitsSystemWindows(false) + 透明系统栏 + light bars 深色图标）已由

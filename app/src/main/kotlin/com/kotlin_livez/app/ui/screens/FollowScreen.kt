@@ -21,12 +21,16 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
+import androidx.compose.material3.pulltorefresh.PullToRefreshDefaults
+import androidx.compose.material3.pulltorefresh.rememberPullToRefreshState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
@@ -78,6 +82,7 @@ import com.kotlin_livez.core.model.FollowRefreshProgress
  * 取消关注后的刷新语义以控制器现状为准：removeItem 内部删库后调 refreshData()
  * 整体重载列表（非局部移除）。
  */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun FollowScreen(
     modifier: Modifier = Modifier,
@@ -107,6 +112,8 @@ fun FollowScreen(
     // followList 参与组合读取（groupOptions 依赖它推导平台分组项），需订阅触发重组
     val followList by ServiceContainer.followService.followList.collectAsStateWithLifecycle()
     val refreshProgress by ServiceContainer.followService.refreshProgress.collectAsStateWithLifecycle()
+    // 真实刷新态（启动/进页/定时/手动共用）：绑定下拉刷新指示器
+    val updating by ServiceContainer.followService.updating.collectAsStateWithLifecycle()
 
     // 搜索关键字本地输入态；防抖语义对齐现版 TextWatcher：每次变更直接 setSearchKeyword
     var keyword by rememberSaveable { mutableStateOf("") }
@@ -144,20 +151,40 @@ fun FollowScreen(
 
         RefreshProgressCard(progress = refreshProgress)
 
-        LazyColumn(modifier = Modifier.fillMaxSize().background(MaterialTheme.colorScheme.surface)) {
-            itemsIndexed(
-                items = list,
-                key = { _, item ->
-                    if (item.id.isNotEmpty()) item.id else "${item.siteId}_${item.roomId}"
-                },
-            ) { index, item ->
-                FollowItemRow(
-                    item = item,
-                    onClick = { openRoom(item) },
-                    onLongClick = { pendingUnfollow = item },
+        // 下拉刷新（对齐主页 PagedRoomGrid 模式，task player-icons-follow-ux）：
+        // isRefreshing 绑定 FollowService.updating（真实刷新态）；onRefresh 强制全量刷
+        // 状态（refreshAllStatus 内部 force 绕过 30s 冷却）。仅列表区参与下拉，
+        // 顶栏/分组条固定。
+        val pullState = rememberPullToRefreshState()
+        PullToRefreshBox(
+            isRefreshing = updating,
+            onRefresh = { effectiveController.refreshAllStatus() },
+            state = pullState,
+            modifier = Modifier.fillMaxSize(),
+            indicator = {
+                PullToRefreshDefaults.Indicator(
+                    isRefreshing = updating,
+                    state = pullState,
+                    modifier = Modifier.align(Alignment.TopCenter),
+                    color = LiveIndicatorRed,
                 )
-                if (index < list.lastIndex) {
-                    HorizontalDivider()
+            },
+        ) {
+            LazyColumn(modifier = Modifier.fillMaxSize().background(MaterialTheme.colorScheme.surface)) {
+                itemsIndexed(
+                    items = list,
+                    key = { _, item ->
+                        if (item.id.isNotEmpty()) item.id else "${item.siteId}_${item.roomId}"
+                    },
+                ) { index, item ->
+                    FollowItemRow(
+                        item = item,
+                        onClick = { openRoom(item) },
+                        onLongClick = { pendingUnfollow = item },
+                    )
+                    if (index < list.lastIndex) {
+                        HorizontalDivider()
+                    }
                 }
             }
         }

@@ -134,21 +134,42 @@ class FollowService(
      * 数据加载与关注 CRUD
      * ================================================================ */
 
-    /** 加载关注列表（对应 Dart loadData）。 */
+    /** 加载关注列表（对应 Dart loadData）。fire-and-forget，加载核心在 loadFollows。 */
     fun loadData(updateStatus: Boolean = true, forceUpdateStatus: Boolean = false) {
+        scope.launch { loadFollows(updateStatus, forceUpdateStatus) }
+    }
+
+    /**
+     * 关注列表加载核心（suspend）：读库更新 _followList 后必须 filterData()——
+     * 关注/取关事件链（kUpdateFollow → 防抖 loadData）依赖它发出 updatedListEvents，
+     * 缺失则关注 Tab 列表不即时重建（task player-icons-follow-ux 根因修复）。
+     */
+    private suspend fun loadFollows(updateStatus: Boolean, forceUpdateStatus: Boolean) {
+        val list = dbService.getFollowList()
+        getAllTagList()
+        if (list.isEmpty()) {
+            _updating.value = false
+            _resetRefreshProgress()
+            _followList.value = emptyList()
+            filterData()
+            return
+        }
+        _followList.value = list
+        filterData()
+        if (updateStatus) {
+            scope.launch { startUpdateStatus(force = forceUpdateStatus) }
+        }
+    }
+
+    /**
+     * 应用启动刷新一次（task player-icons-follow-ux）：先完成列表加载，再强制全量刷状态。
+     * force = true 刻意跳过 30s 冷却；同一协程顺序执行避免"列表未加载完就刷空列表"竞态；
+     * 无条件执行，不受 followRefreshOnEnter（进页自动刷）约束。
+     */
+    fun refreshOnStartup() {
         scope.launch {
-            val list = dbService.getFollowList()
-            getAllTagList()
-            if (list.isEmpty()) {
-                _updating.value = false
-                _resetRefreshProgress()
-                _followList.value = emptyList()
-                return@launch
-            }
-            _followList.value = list
-            if (updateStatus) {
-                scope.launch { startUpdateStatus(force = forceUpdateStatus) }
-            }
+            loadFollows(updateStatus = false, forceUpdateStatus = false)
+            startUpdateStatus(force = true)
         }
     }
 
