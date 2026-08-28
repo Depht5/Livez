@@ -13,7 +13,8 @@ import androidx.compose.ui.unit.dp
  *
  * 覆盖：直播间关注按钮 / 播放器全屏切换 / 直播间标题栏与播放器控制层按钮
  * （返回 Back / 菜单 Menu / 刷新 Refresh / 播放 Play / 暂停 Pause /
- * 弹幕开关 DanmakuOn/DanmakuOff / 弹幕设置 DanmuSetting）。
+ * 弹幕开关 DanmakuOn/DanmakuOff / 弹幕设置 DanmuSetting）/
+ * 底栏 Tab（首页 Home / 关注复用 HeartOutline / 分类 Category / 我的 Mine）。
  *
  * 实际显示色由调用处 `Icon(tint = ...)` 的 ColorFilter 决定（material3 Icon 的
  * `tint = Color.Unspecified` 会回退为 LocalContentColor.current 染色，故调用处必须显式上色）：
@@ -357,6 +358,90 @@ object CustomIcons {
             addPath(
                 pathData = PathParser().parsePathString(
                     "M15.5 15H22 M15.5 18H22 M15.5 21H22"
+                ).toNodes(),
+                fill = null,
+                stroke = SolidColor(Color.White),
+                strokeLineWidth = 1.8f,
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round,
+            )
+        }.build()
+    }
+
+    /** 首页（首页.svg：实心房子，fill + stroke 同色）。底栏 Tab 图标。 */
+    val Home: ImageVector by lazy {
+        ImageVector.Builder(
+            name = "Home",
+            defaultWidth = 24.dp,
+            defaultHeight = 24.dp,
+            viewportWidth = 24f,
+            viewportHeight = 24f,
+        ).apply {
+            addPath(
+                pathData = PathParser().parsePathString(
+                    """
+                    M3.5 10.5 L12 3.5 L20.5 10.5 V19
+                    C20.5 19.8 19.8 20.5 19 20.5 H15 V14 H9 V20.5 H5
+                    C4.2 20.5 3.5 19.8 3.5 19 Z
+                    """.trimIndent()
+                ).toNodes(),
+                fill = SolidColor(Color.White),
+                stroke = SolidColor(Color.White),
+                strokeLineWidth = 1.8f,
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round,
+            )
+        }.build()
+    }
+
+    /** 分类（分类.svg：2×2 圆角方块网格，白色描边）。底栏 Tab 图标。 */
+    val Category: ImageVector by lazy {
+        ImageVector.Builder(
+            name = "Category",
+            defaultWidth = 24.dp,
+            defaultHeight = 24.dp,
+            viewportWidth = 24f,
+            viewportHeight = 24f,
+        ).apply {
+            addPath(
+                // rect(4|13.5, 4|13.5, 6.5, 6.5, rx=1.5) × 4 展开为 a 弧闭合路径
+                pathData = PathParser().parsePathString(
+                    """
+                    M5.5 4 H9 A1.5 1.5 0 0 1 10.5 5.5 V9 A1.5 1.5 0 0 1 9 10.5 H5.5
+                    A1.5 1.5 0 0 1 4 9 V5.5 A1.5 1.5 0 0 1 5.5 4 Z
+                    M15 4 H18.5 A1.5 1.5 0 0 1 20 5.5 V9 A1.5 1.5 0 0 1 18.5 10.5 H15
+                    A1.5 1.5 0 0 1 13.5 9 V5.5 A1.5 1.5 0 0 1 15 4 Z
+                    M5.5 13.5 H9 A1.5 1.5 0 0 1 10.5 15 V18.5 A1.5 1.5 0 0 1 9 20 H5.5
+                    A1.5 1.5 0 0 1 4 18.5 V15 A1.5 1.5 0 0 1 5.5 13.5 Z
+                    M15 13.5 H18.5 A1.5 1.5 0 0 1 20 15 V18.5 A1.5 1.5 0 0 1 18.5 20 H15
+                    A1.5 1.5 0 0 1 13.5 18.5 V15 A1.5 1.5 0 0 1 15 13.5 Z
+                    """.trimIndent()
+                ).toNodes(),
+                fill = null,
+                stroke = SolidColor(Color.White),
+                strokeLineWidth = 1.8f,
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round,
+            )
+        }.build()
+    }
+
+    /** 我的（我的.svg：圆头 + 肩弧人形，白色描边）。底栏 Tab 图标。 */
+    val Mine: ImageVector by lazy {
+        ImageVector.Builder(
+            name = "Mine",
+            defaultWidth = 24.dp,
+            defaultHeight = 24.dp,
+            viewportWidth = 24f,
+            viewportHeight = 24f,
+        ).apply {
+            addPath(
+                // circle(12, 8, r=3.5) 展开为 A 弧
+                pathData = PathParser().parsePathString(
+                    """
+                    M8.5 8 A3.5 3.5 0 1 1 15.5 8 A3.5 3.5 0 1 1 8.5 8
+                    M5 20 C5.5 16.5 8.2 14.5 12 14.5 C15.8 14.5 18.5 16.5 19 20
+                    """.trimIndent()
                 ).toNodes(),
                 fill = null,
                 stroke = SolidColor(Color.White),

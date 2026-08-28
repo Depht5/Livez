@@ -11,7 +11,10 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.grid.LazyGridState
+import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Text
@@ -48,6 +51,7 @@ import com.kotlin_livez.app.ui.screens.MineScreen
 import com.kotlin_livez.app.ui.screens.QRLoginScreen
 import com.kotlin_livez.app.ui.screens.SearchScreen
 import com.kotlin_livez.app.ui.screens.SettingsScreen
+import com.kotlin_livez.app.ui.theme.CustomIcons
 import com.kotlin_livez.app.ui.screens.WebLoginScreen
 
 /**
@@ -274,27 +278,54 @@ private fun MainShell(shell: ShellState) {
 
 /**
  * 底部导航栏 —— Material 3 默认观感（task 08-26-material3-ui-restyle）：
- * NavigationBarItem + 药丸选中指示器 + ripple 状态层，颜色跟随 colorScheme
- * （选中 onSecondaryContainer / 未选中 onSurfaceVariant，M3 语义）。
- * 移除旧版「白底、纯文字、无 indicator、去涟漪」的自定义观感
- * （main_nav.xml 无 icon，故 icon 位放平台文字、label 置空）。
- * 高度：按用户反馈定为 60dp（原项目 56dp 基础上调 4dp 微调；tab 下移 4dp 保留）。
+ * NavigationBarItem + 药丸选中指示器 + ripple 状态层，颜色跟随 colorScheme。
+ * 图标化（task 08-28-bottom-tab-icons）：icon 槽由 13sp 文字占位改为 CustomIcons 图标
+ * （Home / HeartOutline[关注与直播间关注按钮同源复用] / Category / Mine），标题移入
+ * label（12sp）；选中 onSecondaryContainer / 未选中 onSurfaceVariant 显式着色
+ * （不依赖 NavigationBarItem 的 LocalContentColor 内部实现）。
+ * 高度：60 → 68dp（适配 24dp 图标 + label；tab 下移 4dp 保留）。
  * 底部导航条 insets 由 NavigationBar 默认 windowInsets 处理。
  */
 @Composable
 private fun MainBottomBar(currentIndex: Int, onSelect: (Int) -> Unit) {
     val titles = listOf("首页", "关注", "分类", "我的")
+    val icons = listOf(
+        CustomIcons.Home,
+        CustomIcons.HeartOutline,
+        CustomIcons.Category,
+        CustomIcons.Mine,
+    )
 
-    NavigationBar(modifier = Modifier.height(60.dp)) {
+    NavigationBar(modifier = Modifier.height(68.dp)) {
         titles.forEachIndexed { index, title ->
+            val selected = currentIndex == index
             NavigationBarItem(
-                selected = currentIndex == index,
+                selected = selected,
                 onClick = { onSelect(index) },
                 modifier = Modifier.offset(y = 4.dp),
                 icon = {
-                    Text(text = title, fontSize = 13.sp)
+                    Icon(
+                        imageVector = icons[index],
+                        contentDescription = title,
+                        tint = if (selected) {
+                            MaterialTheme.colorScheme.onSecondaryContainer
+                        } else {
+                            MaterialTheme.colorScheme.onSurfaceVariant
+                        },
+                        modifier = Modifier.size(24.dp),
+                    )
                 },
-                label = null,
+                label = {
+                    Text(
+                        text = title,
+                        fontSize = 12.sp,
+                        color = if (selected) {
+                            MaterialTheme.colorScheme.onSecondaryContainer
+                        } else {
+                            MaterialTheme.colorScheme.onSurfaceVariant
+                        },
+                    )
+                },
             )
         }
     }
