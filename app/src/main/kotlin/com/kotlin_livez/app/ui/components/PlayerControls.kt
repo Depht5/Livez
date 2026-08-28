@@ -146,12 +146,15 @@ fun PlayerControlsOverlay(
                 onClick = onDanmakuToggle,
                 paddingH = compactH,
             )
-            // 弹幕设置（对齐 Dart 弹幕开关旁的设置图标按钮）
+            // 弹幕设置（对齐 Dart 弹幕开关旁的设置图标按钮）。
+            // 视觉间距补偿：该图标墨迹在 24 viewport 内偏右（左留白 4.5 / 右 2，其余图标
+            // 约 3/3 对称），墨迹间距比相邻按钮对大约 2dp——paddingH 减 2dp 拉平
+            // 「刷新↔弹幕开关」与「弹幕开关↔弹幕设置」的观感间隔（task player-icons-follow-ux）。
             OverlayIconButton(
                 icon = CustomIcons.DanmuSetting,
                 size = 22.dp,
                 onClick = onDanmakuSettingsClick,
-                paddingH = compactH,
+                paddingH = compactH - 2.dp,
             )
             // 直播时长
             Text(
