@@ -192,8 +192,8 @@ fun LiveRoomScreen(
     // 全屏延伸说明（真机实证：全屏横屏刘海侧 135px 空白）：主题 values-v30 已声明
     // LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS，但 ContentView 仍可能被系统在刘海侧避让
     // （Android 15+ / 荣耀实测 mAppBounds=Rect(135, 0 - 2800, 1194)）。
-    // 沉浸改造（用户反馈：状态栏/底部小白条区域纯白不统一）：LiveApp 全局已
-    // setDecorFitsSystemWindows(false)（edge-to-edge），本页不再切换 decorFits；
+    // 沉浸改造（用户反馈：状态栏/底部小白条区域纯白不统一）：MainActivity 已
+    // enableEdgeToEdge()（edge-to-edge），本页不再切换 decorFits；
     // 竖屏页面背景（根 Column）延伸覆盖状态栏区，靠根容器的 statusBarsPadding 避让内容
     //（全屏隐藏系统栏后该 insets 为 0，padding 自动归零，视频铺满无影响）。
     LaunchedEffect(isFullScreen) {
