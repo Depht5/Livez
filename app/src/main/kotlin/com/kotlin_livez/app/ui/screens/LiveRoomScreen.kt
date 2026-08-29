@@ -100,6 +100,7 @@ import com.kotlin_livez.app.ui.components.QualityDialog
 import com.kotlin_livez.app.ui.components.RoomMenuDialog
 import com.kotlin_livez.app.ui.components.RoomSheet
 import com.kotlin_livez.app.ui.theme.CustomIcons
+import com.kotlin_livez.app.ui.theme.LocalAppDarkTheme
 import com.kotlin_livez.app.ui.theme.LiveIndicatorRed
 import com.kotlin_livez.app.ui.theme.LiveOrange
 import com.kotlin_livez.core.model.LiveContributionRankItem
@@ -929,8 +930,16 @@ fun LiveRoomScreen(
                     imageVector = if (followed) CustomIcons.HeartFilled else CustomIcons.HeartOutline,
                     contentDescription = null,
                     // Icon 的 ColorFilter 染色决定实际颜色（tint=Unspecified 会回退为
-                    // LocalContentColor 染黑）：此处显式按状态上色（红 #FF0000 / 灰 #808080）
-                    tint = if (followed) Color(0xFFFF0000) else Color(0xFF808080),
+                    // LocalContentColor 染黑）：显式按状态上色——已关注红 #FF0000；
+                    // 未关注浅色灰 #808080，深色下浅灰 #B0B0B0（深灰底对比不足，
+                    // task 08-29-dark-mode 用户定标；经 LocalAppDarkTheme 感知手动切换）
+                    tint = if (followed) {
+                        Color(0xFFFF0000)
+                    } else if (LocalAppDarkTheme.current) {
+                        Color(0xFFB0B0B0)
+                    } else {
+                        Color(0xFF808080)
+                    },
                     modifier = Modifier
                         // 顺序关键：padding 外层撑点击区、size 最内层决定爱心本体尺寸
                         //（反序会让 padding 挤压渲染区，爱心实际只显示 size−padding）

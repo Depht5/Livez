@@ -79,8 +79,12 @@ fun SettingsScreen(modifier: Modifier = Modifier) {
     val contributionRankEnable by settings.contributionRankEnable.collectAsStateWithLifecycle()
     // 动态取色开关（外观分组；API < 31 无 Monet，禁用并提示）
     val isDynamic by settings.isDynamic.collectAsStateWithLifecycle()
+    // 深色模式三态（0 跟随系统/1 浅色/2 深色）+ 纯黑主题开关（task 08-29-dark-mode）
+    val themeMode by settings.themeMode.collectAsStateWithLifecycle()
+    val amoledBlack by settings.amoledBlack.collectAsStateWithLifecycle()
 
     // 单选对话框显隐
+    var showThemeModeDialog by remember { mutableStateOf(false) }
     var showMpvProfileDialog by remember { mutableStateOf(false) }
     var showQualityLevelDialog by remember { mutableStateOf(false) }
 
@@ -130,6 +134,21 @@ fun SettingsScreen(modifier: Modifier = Modifier) {
         ) {
         SettingSectionTitle("外观")
         SettingGroupCard {
+            // 深色模式（task 08-29-dark-mode）：三态单选，选中即生效（MainActivity 统一
+            // 解析并驱动主题与系统栏）；副标题显示当前模式
+            SettingClickRow(
+                title = "深色模式",
+                subtitle = themeModeLabel(themeMode),
+                onClick = { showThemeModeDialog = true },
+            )
+            // 纯黑主题（OLED）：仅深色实际生效时覆盖页面级背景为纯黑（底栏保持深灰，
+            // 用户核定）；浅色下无视觉效果，副标题说明作用域
+            SettingSwitchRow(
+                title = "纯黑主题",
+                subtitle = "深色模式下背景改为纯黑，适配 OLED 屏幕",
+                checked = amoledBlack,
+                onChange = { settings.setAmoledBlack(it) },
+            )
             SettingSwitchRow(
                 title = "动态取色",
                 subtitle = if (Build.VERSION.SDK_INT >= 31) {
@@ -196,7 +215,7 @@ fun SettingsScreen(modifier: Modifier = Modifier) {
 
             SettingSwitchRow(
                 title = "兼容模式",
-                subtitle = "强制 mediacodec_embed 直通渲染（gpu 通路异常时的退路；开启后 mpv 档位渲染参数不生效）",
+                subtitle = "强制 mediacodec_embed 直通渲染，播放闪退时可尝试开启",
                 checked = playerCompatMode,
                 onChange = { settings.setPlayerCompatMode(it) },
             )
@@ -335,6 +354,20 @@ fun SettingsScreen(modifier: Modifier = Modifier) {
         }
     }
 
+    if (showThemeModeDialog) {
+        SingleChoiceDialog(
+            title = "深色模式",
+            labels = listOf("跟随系统", "浅色模式", "深色模式"),
+            values = listOf("0", "1", "2"),
+            selectedValue = themeMode.toString(),
+            onSelect = { value ->
+                settings.setTheme(value.toInt())
+                showThemeModeDialog = false
+            },
+            onDismiss = { showThemeModeDialog = false },
+        )
+    }
+
     if (showMpvProfileDialog) {
         SingleChoiceDialog(
             title = "mpv 档位",
@@ -369,6 +402,13 @@ private fun qualityLevelLabel(level: Int): String = when (level) {
     0 -> "最低"
     2 -> "最高"
     else -> "中间"
+}
+
+/** 深色模式副标题文案（0 跟随系统 / 1 浅色 / 2 深色，对齐 Dart themeMode）。 */
+private fun themeModeLabel(mode: Int): String = when (mode) {
+    1 -> "浅色模式"
+    2 -> "深色模式"
+    else -> "跟随系统"
 }
 
 /**
