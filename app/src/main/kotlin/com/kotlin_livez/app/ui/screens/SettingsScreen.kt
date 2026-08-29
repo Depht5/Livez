@@ -1,9 +1,6 @@
 package com.kotlin_livez.app.ui.screens
 
-import android.Manifest
-import android.content.pm.PackageManager
 import android.os.Build
-import androidx.activity.ComponentActivity
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -25,13 +22,9 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.sp
-import androidx.core.app.ActivityCompat
-import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.kotlin_livez.app.di.ServiceContainer
-import com.kotlin_livez.app.services.LogCaptureService
 import com.kotlin_livez.app.ui.Router
 import com.kotlin_livez.app.ui.components.SettingClickRow
 import com.kotlin_livez.app.ui.components.SettingSectionTitle
@@ -50,10 +43,6 @@ import com.kotlin_livez.app.ui.components.SettingSwitchRow
 @Composable
 fun SettingsScreen(modifier: Modifier = Modifier) {
     val settings = ServiceContainer.appSettings
-    val context = LocalContext.current
-    // 宿主 Activity（权限请求用；非 Activity 场景传 null 由工具函数跳过）
-    val activity = context as? ComponentActivity
-
     // ===== 设置项状态订阅（字段名与 setter 均取自 AppSettingsController 源码）=====
     val mpvProfile by settings.mpvProfile.collectAsStateWithLifecycle()
     val hardwareDecode by settings.hardwareDecode.collectAsStateWithLifecycle()
@@ -69,7 +58,6 @@ fun SettingsScreen(modifier: Modifier = Modifier) {
     val danmuUserShieldEnable by settings.danmuUserShieldEnable.collectAsStateWithLifecycle()
     val shieldList by settings.shieldList.collectAsStateWithLifecycle()
     val qualityLevel by settings.qualityLevel.collectAsStateWithLifecycle()
-    val logEnable by settings.logEnable.collectAsStateWithLifecycle()
     val contributionRankEnable by settings.contributionRankEnable.collectAsStateWithLifecycle()
     // 动态取色开关（外观分组；API < 31 无 Monet，禁用并提示）
     val isDynamic by settings.isDynamic.collectAsStateWithLifecycle()
@@ -77,11 +65,6 @@ fun SettingsScreen(modifier: Modifier = Modifier) {
     // 单选对话框显隐
     var showMpvProfileDialog by remember { mutableStateOf(false) }
     var showQualityLevelDialog by remember { mutableStateOf(false) }
-
-    // 抓取状态非 StateFlow（进程级单例布尔），本页是唯一入口之一，
-    // 用本地镜像 + 操作后递增 tick 触发重组，展示动态标题（对齐旧版 refreshSubtitleLabels 的效果）
-    var logCapturingTick by remember { mutableIntStateOf(0) }
-    val logCapturing = remember(logCapturingTick) { LogCaptureService.isCapturing }
 
     Column(
         modifier = modifier
@@ -212,36 +195,10 @@ fun SettingsScreen(modifier: Modifier = Modifier) {
         SettingSectionTitle("其他")
 
         SettingSwitchRow(
-            title = "日志输出",
-            subtitle = "",
-            checked = logEnable,
-            onChange = { settings.setLogEnable(it) },
-        )
-
-        SettingSwitchRow(
             title = "贡献榜",
             subtitle = "直播间显示贡献榜",
             checked = contributionRankEnable,
             onChange = { settings.setContributionRankEnable(it) },
-        )
-
-        SettingClickRow(
-            title = if (logCapturing) "停止抓取日志" else "抓取日志",
-            subtitle = if (logCapturing) "采集中，点击停止并导出" else "手动开关：开启后写入 logcat 文件，用于排查闪退",
-            onClick = {
-                if (LogCaptureService.isCapturing) {
-                    LogCaptureService.stop()
-                    val path = LogCaptureService.lastLogPath()
-                    Router.toast("已停止，日志文件：${path ?: "未知路径"}")
-                } else {
-                    ensureWritePermissionIfNeeded(activity)
-                    LogCaptureService.start(context)
-                    val path = LogCaptureService.lastLogPath()
-                    Router.toast("开始抓取：${path ?: "启动失败"}")
-                }
-                // 触发本页重组以刷新「抓取日志」行动态标题
-                logCapturingTick++
-            },
         )
     }
 
@@ -314,24 +271,4 @@ private fun SingleChoiceDialog(
         confirmButton = {},
         dismissButton = {},
     )
-}
-
-/**
- * Android 9- 直接写共享存储需要 WRITE_EXTERNAL_STORAGE。
- * 对齐现版行为：仅发起运行时请求、不等待授权结果；activity 为空（预览等
- * 非 Activity 场景）时静默跳过。普通函数（非 @Composable），供点击回调调用——
- * Compose 禁止在回调里发起组合副作用。
- */
-private fun ensureWritePermissionIfNeeded(activity: ComponentActivity?) {
-    if (activity == null || Build.VERSION.SDK_INT >= 29) return
-    if (ContextCompat.checkSelfPermission(
-            activity, Manifest.permission.WRITE_EXTERNAL_STORAGE,
-        ) != PackageManager.PERMISSION_GRANTED
-    ) {
-        ActivityCompat.requestPermissions(
-            activity,
-            arrayOf(Manifest.permission.WRITE_EXTERNAL_STORAGE),
-            1001,
-        )
-    }
 }

@@ -20,6 +20,7 @@ import androidx.compose.foundation.layout.wrapContentSize
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.PagerState
 import androidx.compose.foundation.pager.rememberPagerState
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ScrollableTabRow
 import androidx.compose.material3.Text
@@ -41,7 +42,9 @@ import androidx.compose.ui.util.lerp
 import com.kotlin_livez.app.app.EventBus
 import com.kotlin_livez.app.app.Site
 import com.kotlin_livez.app.modules.home.HomeController
+import com.kotlin_livez.app.ui.Router
 import com.kotlin_livez.app.ui.components.PagedRoomGrid
+import com.kotlin_livez.app.ui.theme.CustomIcons
 import kotlin.math.floor
 import kotlinx.coroutines.launch
 
@@ -177,8 +180,16 @@ private fun SiteTabRow(
     pagerState: PagerState,
     onSelect: (Int) -> Unit,
 ) {
-    ScrollableTabRow(
-        selectedTabIndex = selectedIndex,
+    // 顶栏 = Tab 滚动区（占剩余宽度）+ 右侧固定搜索入口（task mine-page-cleanup：
+    // 我的页搜索入口移除后改由这里进入；48dp 触控区 + 23dp 图标，用户定标）
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(MaterialTheme.colorScheme.surface),
+    ) {
+        ScrollableTabRow(
+            selectedTabIndex = selectedIndex,
+            modifier = Modifier.weight(1f),
         containerColor = MaterialTheme.colorScheme.surface,
         // Tab 内容左右留白（对应 Dart labelPadding H20）；起始边距取小值贴近左缘（对齐 GRAVITY_START）
         edgePadding = 12.dp,
@@ -232,6 +243,23 @@ private fun SiteTabRow(
                     },
                 )
             }
+        }
+        }
+
+        // 右侧固定搜索入口：48dp 触控区 + 23dp 图标（用户定标；task mine-page-cleanup）
+        Box(
+            modifier = Modifier
+                .align(Alignment.CenterVertically)
+                .size(48.dp)
+                .clickable { Router.openFeature("search", "搜索") },
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(
+                imageVector = CustomIcons.Search,
+                contentDescription = "搜索",
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(23.dp),
+            )
         }
     }
 }

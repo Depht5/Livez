@@ -137,24 +137,8 @@ class OtherSettingsController(
         }
     }
 
-    /** 开启/关闭日志（对应 Dart setLogEnable）。 */
-    fun setLogEnable(e: Boolean) {
-        appSettings.setLogEnable(e)
-        if (e) {
-            // 100ms 后刷新日志文件列表（镜像 Dart 延迟）
-            scope.launch {
-                delay(100)
-                loadLogFiles()
-            }
-        }
-    }
-
     /** 清空日志目录（对应 Dart cleanLog）。 */
     fun cleanLog() {
-        if (appSettings.logEnable.value) {
-            Log.d("Toast: 请先关闭日志记录")
-            return
-        }
         scope.launch {
             withContext(Dispatchers.IO) {
                 val logDir = File(com.kotlin_livez.app.di.ServiceContainer.context().filesDir, "log")

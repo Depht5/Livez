@@ -273,9 +273,6 @@ class AppSettingsController(
     private val _bilibiliLoginTip = MutableStateFlow(true)
     val bilibiliLoginTip: StateFlow<Boolean> = _bilibiliLoginTip
 
-    private val _logEnable = MutableStateFlow(false)
-    val logEnable: StateFlow<Boolean> = _logEnable
-
     private val _customPlayerOutput = MutableStateFlow(false)
     val customPlayerOutput: StateFlow<Boolean> = _customPlayerOutput
 
@@ -539,7 +536,6 @@ class AppSettingsController(
             localStorage.getValue(LocalStorageService.kBilibiliLoginTip, true)
         _playerBufferSize.value =
             localStorage.getValue(LocalStorageService.kPlayerBufferSize, 32)
-        _logEnable.value = localStorage.getValue(LocalStorageService.kLogEnable, false)
 
         _customPlayerOutput.value =
             localStorage.getValue(LocalStorageService.kCustomPlayerOutput, false)
@@ -1001,11 +997,6 @@ class AppSettingsController(
     fun setBiliBiliLoginTip(e: Boolean) {
         _bilibiliLoginTip.value = e
         localStorage.setValue(LocalStorageService.kBilibiliLoginTip, e)
-    }
-
-    fun setLogEnable(e: Boolean) {
-        _logEnable.value = e
-        localStorage.setValue(LocalStorageService.kLogEnable, e)
     }
 
     fun setCustomPlayerOutput(e: Boolean) {

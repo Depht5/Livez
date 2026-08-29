@@ -112,7 +112,6 @@ class LocalStorageService(private val appContext: Context) {
         const val kStyleColor = "kStyleColor"
         const val kIsDynamic = "kIsDynamic"
         const val kBilibiliLoginTip = "BilibiliLoginTip"
-        const val kLogEnable = "LogEnable"
         const val kCustomPlayerOutput = "CustomPlayerOutput"
         const val kVideoOutputDriver = "VideoOutputDriver"
         const val kVideoHardwareDecoder = "VideoHardwareDecoder"

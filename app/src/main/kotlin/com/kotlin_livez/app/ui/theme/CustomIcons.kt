@@ -368,7 +368,7 @@ object CustomIcons {
         }.build()
     }
 
-    /** 首页（首页.svg：实心房子，fill + stroke 同色）。底栏 Tab 图标。 */
+    /** 首页（首页.svg 描边轮廓版：房子轮廓 + 门，白色描边）。底栏 Tab 图标。 */
     val Home: ImageVector by lazy {
         ImageVector.Builder(
             name = "Home",
@@ -378,14 +378,42 @@ object CustomIcons {
             viewportHeight = 24f,
         ).apply {
             addPath(
+                // 房子轮廓（闭合）+ 门（开口），同 stroke 设置合并为一个 path
                 pathData = PathParser().parsePathString(
                     """
                     M3.5 10.5 L12 3.5 L20.5 10.5 V19
-                    C20.5 19.8 19.8 20.5 19 20.5 H15 V14 H9 V20.5 H5
+                    C20.5 19.8 19.8 20.5 19 20.5 H5
                     C4.2 20.5 3.5 19.8 3.5 19 Z
+                    M9 20.5V14 H15V20.5
                     """.trimIndent()
                 ).toNodes(),
-                fill = SolidColor(Color.White),
+                fill = null,
+                stroke = SolidColor(Color.White),
+                strokeLineWidth = 1.8f,
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round,
+            )
+        }.build()
+    }
+
+    /** 搜索（搜索.svg：放大镜圆 + 手柄，白色描边）。首页顶栏搜索入口。 */
+    val Search: ImageVector by lazy {
+        ImageVector.Builder(
+            name = "Search",
+            defaultWidth = 24.dp,
+            defaultHeight = 24.dp,
+            viewportWidth = 24f,
+            viewportHeight = 24f,
+        ).apply {
+            addPath(
+                // circle(10.5, 10.5, r=6.5) 展开为 A 弧 + 手柄线
+                pathData = PathParser().parsePathString(
+                    """
+                    M4 10.5 A6.5 6.5 0 1 1 17 10.5 A6.5 6.5 0 1 1 4 10.5
+                    M15.5 15.5L20 20
+                    """.trimIndent()
+                ).toNodes(),
+                fill = null,
                 stroke = SolidColor(Color.White),
                 strokeLineWidth = 1.8f,
                 strokeLineCap = StrokeCap.Round,
