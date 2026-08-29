@@ -410,7 +410,7 @@ private fun SingleChoiceDialog(
                             .background(
                                 if (selected) {
                                     // 半透明主题色：灰化 + 玻璃质感（task m3-mine-settings 迭代）
-                                    MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.45f)
+                                    MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.7f)
                                 } else {
                                     Color.Transparent
                                 },
