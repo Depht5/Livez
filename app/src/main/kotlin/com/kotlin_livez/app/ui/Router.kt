@@ -2,6 +2,7 @@ package com.kotlin_livez.app.ui
 
 import android.content.Context
 import android.net.Uri
+import android.os.SystemClock
 import android.widget.Toast
 import androidx.navigation.NavController
 import com.kotlin_livez.app.app.Log
@@ -14,21 +15,39 @@ import com.kotlin_livez.app.app.Site
  */
 object Router {
 
+    /**
+     * 导航节流窗口（task 08-29-live-room-bars-follow-status 真机实证：快速双击卡片/选项
+     * 会打开两次目标页）——navigate 同步执行后转场（280ms）期间上一页仍可交互，第二击
+     * 再次导航即叠加入栈；窗口取 600ms > 转场时长且覆盖典型双击间隔，窗口内合法的跨页
+     * 连跳实际不存在（转场中上一页不可交互）。back()/popBackStack 不受限。
+     */
+    private const val navigateThrottleMs = 600L
+
+    /** 上次成功导航的时刻（elapsedRealtime 单调时钟，不受系统时间回拨影响）。 */
+    private var lastNavigateElapsed = -navigateThrottleMs
+
     private var appContext: Context? = null
 
     /** Compose 导航控制器 —— 由 MainActivity setContent 后注入（见 ui/nav/AppNavHost.kt）。 */
     internal var navController: NavController? = null
 
     /**
-     * Compose 路由跳转：navController 为空时（非 MainActivity 宿主场景）仅记日志丢弃。
+     * Compose 路由跳转：navController 为空时（非 MainActivity 宿主场景）仅记日志丢弃；
+     * 节流窗口内的重复导航忽略（防快速双击叠开两次页面）。
      */
     fun navigate(route: String) {
         val nc = navController
-        if (nc != null) {
-            nc.navigate(route)
-        } else {
+        if (nc == null) {
             Log.d("路由：navController 未注入，route=$route 已忽略")
+            return
         }
+        val now = SystemClock.elapsedRealtime()
+        if (now - lastNavigateElapsed < navigateThrottleMs) {
+            Log.d("路由：节流窗口内忽略重复导航 route=$route")
+            return
+        }
+        lastNavigateElapsed = now
+        nc.navigate(route)
     }
 
     /** 由 MainActivity/Application 在启动时注入。 */
