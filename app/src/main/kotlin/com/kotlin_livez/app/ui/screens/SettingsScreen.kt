@@ -77,6 +77,8 @@ fun SettingsScreen(modifier: Modifier = Modifier) {
     val shieldList by settings.shieldList.collectAsStateWithLifecycle()
     val qualityLevel by settings.qualityLevel.collectAsStateWithLifecycle()
     val contributionRankEnable by settings.contributionRankEnable.collectAsStateWithLifecycle()
+    // 弹幕气泡开关（其他分组；task 08-29-chat-pin-bubble-follow-grid）
+    val danmuBubble by settings.danmuBubble.collectAsStateWithLifecycle()
     // 动态取色开关（外观分组；API < 31 无 Monet，禁用并提示）
     val isDynamic by settings.isDynamic.collectAsStateWithLifecycle()
     // 深色模式三态（0 跟随系统/1 浅色/2 深色）+ 纯黑主题开关（task 08-29-dark-mode）
@@ -300,12 +302,19 @@ fun SettingsScreen(modifier: Modifier = Modifier) {
         // ===== 其他 =====
         SettingSectionTitle("其他")
         SettingGroupCard {
-            SettingSwitchRow(
-                title = "贡献榜",
-                subtitle = "直播间显示贡献榜",
-                checked = contributionRankEnable,
-                onChange = { settings.setContributionRankEnable(it) },
-            )
+        SettingSwitchRow(
+            title = "贡献榜",
+            subtitle = "直播间显示贡献榜",
+            checked = contributionRankEnable,
+            onChange = { settings.setContributionRankEnable(it) },
+        )
+
+        SettingSwitchRow(
+            title = "弹幕气泡",
+            subtitle = "为聊天框中的弹幕添加气泡",
+            checked = danmuBubble,
+            onChange = { settings.setDanmuBubble(it) },
+        )
         }
         }
     }
