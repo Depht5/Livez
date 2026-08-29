@@ -5,20 +5,20 @@
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
-    <!-- 背景圆角方块 -->
+    <!-- 背景白色圆角方块 -->
     <path
-        android:pathData="M0,0h108v108h-108z"
-        android:fillColor="#1F1F25" />
-    <!-- 圆形底（品牌色，镜像 bilibili 粉） -->
-    <path
-        android:pathData="M54,54m-38,0a38,38 0 1,1 76,0a38,38 0 1,1 -76,0"
-        android:fillColor="#FB7299" />
-    <!-- 播放三角 -->
-    <path
-        android:pathData="M45,38 L74,54 L45,70 Z"
+        android:pathData="M18,0h72a18,18 0 0 1 18,18v72a18,18 0 0 1 -18,18h-72a18,18 0 0 1 -18,-18v-72a18,18 0 0 1 18,-18z"
         android:fillColor="#FFFFFF" />
-    <!-- 底部标语圆 -->
+    <!-- 圆形底（深灰） -->
     <path
-        android:pathData="M33,72m-9,0a9,9 0 1,1 18,0a9,9 0 1,1 -18,0"
-        android:fillColor="#FB7299" />
+        android:pathData="M54,54m-32,0a32,32 0 1,1 64,0a32,32 0 1,1 -64,0"
+        android:fillColor="#333333" />
+    <!-- 播放三角（质心对齐圆形底圆心） -->
+    <path
+        android:pathData="M46,41 L69,54 L46,67 Z"
+        android:fillColor="#FFFFFF" />
+    <!-- 左下角红色圆点 -->
+    <path
+        android:pathData="M29,77m-7,0a7,7 0 1,1 14,0a7,7 0 1,1 -14,0"
+        android:fillColor="#E53935" />
 </vector>
