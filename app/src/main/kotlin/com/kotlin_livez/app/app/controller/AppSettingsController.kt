@@ -270,6 +270,10 @@ class AppSettingsController(
     private val _isDynamic = MutableStateFlow(false)
     val isDynamic: StateFlow<Boolean> = _isDynamic
 
+    /** 纯黑主题（OLED，task 08-29-dark-mode）：仅深色实际生效时覆盖页面级背景为纯黑。 */
+    private val _amoledBlack = MutableStateFlow(false)
+    val amoledBlack: StateFlow<Boolean> = _amoledBlack
+
     private val _bilibiliLoginTip = MutableStateFlow(true)
     val bilibiliLoginTip: StateFlow<Boolean> = _bilibiliLoginTip
 
@@ -529,6 +533,7 @@ class AppSettingsController(
 
         _styleColor.value = localStorage.getValue(LocalStorageService.kStyleColor, 0xff3498db.toInt())
         _isDynamic.value = localStorage.getValue(LocalStorageService.kIsDynamic, false)
+        _amoledBlack.value = localStorage.getValue(LocalStorageService.kAmoledBlack, false)
         _bilibiliLoginTip.value =
             localStorage.getValue(LocalStorageService.kBilibiliLoginTip, true)
         _playerBufferSize.value =
@@ -987,6 +992,11 @@ class AppSettingsController(
     fun setIsDynamic(e: Boolean) {
         _isDynamic.value = e
         localStorage.setValue(LocalStorageService.kIsDynamic, e)
+    }
+
+    fun setAmoledBlack(e: Boolean) {
+        _amoledBlack.value = e
+        localStorage.setValue(LocalStorageService.kAmoledBlack, e)
     }
 
     fun setBiliBiliLoginTip(e: Boolean) {

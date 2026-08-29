@@ -2,25 +2,32 @@ package com.kotlin_livez.app.ui.theme
 
 import android.os.Build
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.darkColorScheme
+import androidx.compose.material3.dynamicDarkColorScheme
 import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 
 /**
  * Compose 主题与全局色值 —— 对应 Dart `AppStyle`/各页面取色。
- * App 不做暗色模式（浅色-only，见 index.md「显示全部 & 窗口装饰」批次的既有决策），
- * 故只提供 lightColorScheme，不区分暗色分支。
  *
- * Material 3 风格化（task 08-26-material3-ui-restyle）：
- * - [AppTheme] 新增 `dynamicColor` 参数：开关开启且 Android 12+（API 31+）时使用
- *   `dynamicLightColorScheme`（跟随系统壁纸 Monet 取色）；否则使用 `lightColorScheme()`
- *   （M3 默认色板）。开关默认关（AppSettingsController.isDynamic 默认 false）。
- * - 直播语义强调色固定保留为常量（动态色/默认色不影响）：直播中状态/SC 用户名红
+ * 深色模式（task 08-29-dark-mode，逆转"浅色-only"既有决策）：
+ * [AppTheme] 接收**已解析**的 `dark` 态（跟随系统/手动三态由 MainActivity 统一解析，
+ * 系统栏适配共用同一出口），内部选择 light/dark 色板：
+ * - 动态取色开启且 Android 12+（API 31+）→ `dynamicLight/DarkColorScheme`（壁纸 Monet）；
+ * - 否则 `lightColorScheme()` / `darkColorScheme()`（M3 基线色板，深浅对称）。
+ * - `amoledBlack` 仅在深色生效时覆盖页面级背景角色为纯黑
+ *   （background/surface/surfaceContainerLowest/Low，含 ModalBottomSheet 弹层底——
+ *   其容器为 SurfaceContainerLow）；**surfaceContainer 不覆盖**（底栏 NavigationBar
+ *   容器即该色槽，用户决策底栏保持基线深灰）；高档容器（分组卡片等）同样保持暗灰。
+ * - 解析结果经 [LocalAppDarkTheme] 下发，供页面级局部色判断（如关注按钮未关注态）。
+ * - 直播语义强调色固定保留为常量（动态色/深浅色不影响）：直播中状态/SC 用户名红
  *   用 [LiveIndicatorRed]，人气/SC 价格橙用 [LiveOrange]；「取消关注」等删除语义改走
- *   `colorScheme.error`。其余布局/文本/交互色一律从 `MaterialTheme.colorScheme` 读取
- *   （页面/组件无局部硬编码色）。
+ *   `colorScheme.error`。其余布局/文本/交互色一律从 `MaterialTheme.colorScheme` 读取。
  */
 
 // ===== 直播语义强调色（固定保留，不随主题/壁纸变化）=====
@@ -40,24 +47,56 @@ val ImagePlaceholder = Color(0xFFF2F2F2)
 val ImageError = Color(0xFFE0E0E0)
 
 /**
+ * 当前生效的深色态 —— 跟随系统/手动三态解析后的最终结果。
+ * 页面内局部色需要按深浅分支时读这里（勿用 isSystemInDarkTheme()，其不感知应用内手动切换）。
+ */
+val LocalAppDarkTheme = staticCompositionLocalOf { false }
+
+/** 纯黑（OLED）主题底色：amoledBlack 开启时页面级背景角色的覆盖值。 */
+private val AmoledBlack = Color(0xFF000000)
+
+/**
  * 应用主题 —— Material 3 风格化。
  *
+ * @param dark 已解析的生效深色态（MainActivity：2 手动深 / 1 手动浅 / 0 跟随系统）
+ * @param amoledBlack 纯黑主题开关（仅 dark=true 时起作用）
  * @param dynamicColor 动态取色开关（设置 → 外观 → 动态取色）：
- *   开启且 Android 12+ → `dynamicLightColorScheme`（壁纸 Monet）；
- *   关闭（默认）或 API < 31 → `lightColorScheme()`（M3 默认色板）。
+ *   开启且 Android 12+ → dynamic 色板；关闭（默认）或 API < 31 → M3 基线色板。
  */
 @Composable
 fun AppTheme(
+    dark: Boolean,
+    amoledBlack: Boolean = false,
     dynamicColor: Boolean = false,
     content: @Composable () -> Unit,
 ) {
-    val colorScheme = if (dynamicColor && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-        dynamicLightColorScheme(LocalContext.current)
+    val colorScheme = if (dark) {
+        val base = if (dynamicColor && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            dynamicDarkColorScheme(LocalContext.current)
+        } else {
+            darkColorScheme()
+        }
+        if (amoledBlack) {
+            base.copy(
+                background = AmoledBlack,
+                surface = AmoledBlack,
+                surfaceContainerLowest = AmoledBlack,
+                surfaceContainerLow = AmoledBlack,
+            )
+        } else {
+            base
+        }
     } else {
-        lightColorScheme()
+        if (dynamicColor && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            dynamicLightColorScheme(LocalContext.current)
+        } else {
+            lightColorScheme()
+        }
     }
-    MaterialTheme(
-        colorScheme = colorScheme,
-        content = content,
-    )
+    CompositionLocalProvider(LocalAppDarkTheme provides dark) {
+        MaterialTheme(
+            colorScheme = colorScheme,
+            content = content,
+        )
+    }
 }

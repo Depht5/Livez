@@ -52,6 +52,7 @@ class LocalStorageService(private val appContext: Context) {
         const val kMultiRoomGap = "MultiRoomGap"
         const val kMultiRoomCollapseChat = "MultiRoomCollapseChat"
         const val kThemeMode = "ThemeMode"
+        const val kAmoledBlack = "AmoledBlack"
         const val kDebugModeKey = "DebugMode"
         const val kDanmuSize = "DanmuSize"
         const val kDanmuSpeed = "DanmuSpeed"

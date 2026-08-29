@@ -1,10 +1,15 @@
 package com.kotlin_livez.app
 
+import android.graphics.Color
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.SystemBarStyle
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.foundation.background
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
@@ -27,27 +32,59 @@ class MainActivity : ComponentActivity() {
         // setDecorFitsSystemWindows(false) + 透明系统栏 + light bars 三件套（API 35 已弃用
         // statusBarColor/navigationBarColor setter）。默认 SystemBarStyle.auto：API 29+ 系统
         // 栏纯透明、浅色 app → 深色图标（与旧行为一致）；API 26-28 导航栏自动加融合 scrim。
+        // （深色生效时的图标明暗切换见下方 DisposableEffect——auto 只跟随系统，不感知应用内手动切换）
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
 
         Router.install(applicationContext)
 
         setContent {
-            // 动态取色开关（设置 → 外观）：状态驱动主题即时切换，无需重建 Activity。
-            // API < 31 时 AppTheme 内部自动回退 M3 默认色板。
+            // ===== 主题状态（task 08-29-dark-mode）=====
+            // 动态取色/深色模式/纯黑主题均为状态驱动即时切换，无需重建 Activity。
+            // 深色解析唯一出口：2 手动深色 / 1 手动浅色 / 0 跟随系统（AppTheme 与系统栏共用）。
             val dynamicColor by ServiceContainer.appSettings.isDynamic
                 .collectAsStateWithLifecycle()
-            AppTheme(dynamicColor = dynamicColor) {
+            val themeMode by ServiceContainer.appSettings.themeMode
+                .collectAsStateWithLifecycle()
+            val amoledBlack by ServiceContainer.appSettings.amoledBlack
+                .collectAsStateWithLifecycle()
+            val dark = when (themeMode) {
+                2 -> true
+                1 -> false
+                else -> isSystemInDarkTheme()
+            }
+
+            // 系统栏图标明暗跟随生效主题：深色 → 浅色图标（透明 scrim，API 26-28 导航栏
+            // 无法深色图标化、保持浅色）；浅色 → enableEdgeToEdge() 默认 auto（现状行为）。
+            DisposableEffect(dark) {
+                if (dark) {
+                    enableEdgeToEdge(
+                        statusBarStyle = SystemBarStyle.dark(Color.TRANSPARENT),
+                        navigationBarStyle = SystemBarStyle.dark(Color.TRANSPARENT),
+                    )
+                } else {
+                    enableEdgeToEdge()
+                }
+                onDispose { }
+            }
+
+            AppTheme(dark = dark, amoledBlack = amoledBlack, dynamicColor = dynamicColor) {
                 val navController = rememberNavController()
                 // 注入 Router 双模式导航；离开组合时清空引用避免泄漏
                 DisposableEffect(navController) {
                     Router.navController = navController
                     onDispose { Router.navController = null }
                 }
-                // 根级填满窗口（NavHost 内部包内容测量，必须由根约束撑起）
+                // 根级填满窗口（NavHost 内部包内容测量，必须由根约束撑起）。
+                // 背景铺 colorScheme.background（task 08-29-dark-mode 真机反馈：深色下页面
+                // 转场发白）——NavHost 自身不画背景，转场淡出/淡入的透明区域透出的是窗口
+                // 背景（Activity DayNight 主题、只跟系统不跟应用内切换）；铺主题底色后
+                // 转场揭示区域与页面底色一致，纯黑模式下同为纯黑。
                 AppNavHost(
                     navController = navController,
-                    modifier = Modifier.fillMaxSize(),
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(MaterialTheme.colorScheme.background),
                 )
             }
         }
