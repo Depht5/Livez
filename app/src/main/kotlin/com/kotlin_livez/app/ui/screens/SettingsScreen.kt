@@ -16,7 +16,6 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -33,6 +32,7 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.kotlin_livez.app.di.ServiceContainer
 import com.kotlin_livez.app.services.MpvOptionsService
+import com.kotlin_livez.app.modules.settings.other.OtherSettingsController
 import com.kotlin_livez.app.ui.Router
 import com.kotlin_livez.app.ui.components.SettingClickRow
 import com.kotlin_livez.app.ui.components.SettingGroupCard
@@ -133,6 +133,13 @@ fun SettingsScreen(modifier: Modifier = Modifier) {
         // ===== 播放 =====
         SettingSectionTitle("播放")
         SettingGroupCard {
+            SettingSwitchRow(
+                title = "硬件解码",
+                subtitle = "使用硬件解码加速播放",
+                checked = hardwareDecode,
+                onChange = { settings.setHardwareDecode(it) },
+            )
+
             SettingClickRow(
                 title = "mpv 档位",
                 // 兼容模式 = mediacodec 直通，渲染管线不经过 mpv，档位无实际作用 → 灰显
@@ -145,29 +152,25 @@ fun SettingsScreen(modifier: Modifier = Modifier) {
                 onClick = { showMpvProfileDialog = true },
             )
 
-            SettingSwitchRow(
-                title = "硬件解码",
-                subtitle = "使用硬件解码加速播放",
-                checked = hardwareDecode,
-                onChange = { settings.setHardwareDecode(it) },
-            )
-
-            SettingSwitchRow(
-                title = "兼容模式",
-                subtitle = "强制 mediacodec_embed 直通渲染（gpu 通路异常时的退路；开启后 mpv 档位渲染参数不生效）",
-                checked = playerCompatMode,
-                onChange = { settings.setPlayerCompatMode(it) },
-            )
-
             SettingClickRow(
                 title = "视频输出驱动",
-                subtitle = videoOutputDriver.ifEmpty { "默认（跟随 mpv 档位：gpu）" },
+                subtitle = if (playerCompatMode) {
+                    "兼容模式下不可用"
+                } else {
+                    videoOutputDriver.ifEmpty { "默认（跟随 mpv 档位：gpu）" }
+                },
+                enabled = !playerCompatMode,
                 onClick = { editingDriver = "vo" },
             )
 
             SettingClickRow(
                 title = "视频硬件解码器",
-                subtitle = videoHardwareDecoder.ifEmpty { "默认（auto-safe）" },
+                subtitle = if (playerCompatMode) {
+                    "兼容模式下不可用"
+                } else {
+                    videoHardwareDecoder.ifEmpty { "默认（auto-safe）" }
+                },
+                enabled = !playerCompatMode,
                 onClick = { editingDriver = "hwdec" },
             )
 
@@ -175,6 +178,13 @@ fun SettingsScreen(modifier: Modifier = Modifier) {
                 title = "音频输出驱动",
                 subtitle = audioOutputDriver.ifEmpty { "默认（audiotrack,opensles）" },
                 onClick = { editingDriver = "ao" },
+            )
+
+            SettingSwitchRow(
+                title = "兼容模式",
+                subtitle = "强制 mediacodec_embed 直通渲染（gpu 通路异常时的退路；开启后 mpv 档位渲染参数不生效）",
+                checked = playerCompatMode,
+                onChange = { settings.setPlayerCompatMode(it) },
             )
 
             SettingSwitchRow(
@@ -267,47 +277,53 @@ fun SettingsScreen(modifier: Modifier = Modifier) {
     }
 
     editingDriver?.let { key ->
-        val dialogTitle: String
-        val hint: String
         when (key) {
-            "vo" -> { dialogTitle = "视频输出驱动"; hint = "留空 = 跟随 mpv 档位（gpu）" }
-            "hwdec" -> { dialogTitle = "视频硬件解码器"; hint = "留空 = 默认（auto-safe）" }
-            else -> { dialogTitle = "音频输出驱动"; hint = "留空 = 默认（audiotrack,opensles）" }
-        }
-        var text by remember(key) {
-            mutableStateOf(
-                when (key) {
-                    "vo" -> videoOutputDriver
-                    "hwdec" -> videoHardwareDecoder
-                    else -> audioOutputDriver
+            "vo" -> SingleChoiceDialog(
+                title = "视频输出驱动",
+                labels = listOf("默认（跟随 mpv 档位）") +
+                    OtherSettingsController.videoOutputDrivers
+                        .filterKeys { it != "mediacodec_embed" }.values.toList(),
+                values = listOf("") +
+                    OtherSettingsController.videoOutputDrivers
+                        .filterKeys { it != "mediacodec_embed" }.keys.toList(),
+                selectedValue = videoOutputDriver,
+                onSelect = { value ->
+                    settings.setVideoOutputDriver(value)
+                    editingDriver = null
                 },
+                onDismiss = { editingDriver = null },
+            )
+
+            "hwdec" -> SingleChoiceDialog(
+                title = "视频硬件解码器",
+                labels = listOf("默认（auto-safe）") +
+                    OtherSettingsController.hardwareDecoder
+                        .filterKeys { it != "mediacodec" && it != "mediacodec-copy" }.values.toList(),
+                values = listOf("") +
+                    OtherSettingsController.hardwareDecoder
+                        .filterKeys { it != "mediacodec" && it != "mediacodec-copy" }.keys.toList(),
+                selectedValue = videoHardwareDecoder,
+                onSelect = { value ->
+                    settings.setVideoHardwareDecoder(value)
+                    editingDriver = null
+                },
+                onDismiss = { editingDriver = null },
+            )
+
+            else -> SingleChoiceDialog(
+                title = "音频输出驱动",
+                labels = listOf("默认（audiotrack,opensles）") +
+                    OtherSettingsController.audioOutputDrivers.values.toList(),
+                values = listOf("") +
+                    OtherSettingsController.audioOutputDrivers.keys.toList(),
+                selectedValue = audioOutputDriver,
+                onSelect = { value ->
+                    settings.setAudioOutputDriver(value)
+                    editingDriver = null
+                },
+                onDismiss = { editingDriver = null },
             )
         }
-        AlertDialog(
-            onDismissRequest = { editingDriver = null },
-            title = { Text(text = dialogTitle) },
-            text = {
-                OutlinedTextField(
-                    value = text,
-                    onValueChange = { text = it },
-                    placeholder = { Text(text = hint) },
-                    singleLine = true,
-                )
-            },
-            confirmButton = {
-                TextButton(onClick = {
-                    when (key) {
-                        "vo" -> settings.setVideoOutputDriver(text.trim())
-                        "hwdec" -> settings.setVideoHardwareDecoder(text.trim())
-                        else -> settings.setAudioOutputDriver(text.trim())
-                    }
-                    editingDriver = null
-                }) { Text(text = "确定") }
-            },
-            dismissButton = {
-                TextButton(onClick = { editingDriver = null }) { Text(text = "取消") }
-            },
-        )
     }
 
     if (showMpvProfileDialog) {

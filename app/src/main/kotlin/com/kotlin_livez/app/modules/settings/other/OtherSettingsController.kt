@@ -41,6 +41,7 @@ class OtherSettingsController(
     val logFiles = MutableStateFlow<List<LogFileModel>>(emptyList())
     val logFilesState: StateFlow<List<LogFileModel>> = logFiles
 
+    companion object {
     /** 视频输出驱动选项（冻结，对应 Dart videoOutputDrivers） */
     val videoOutputDrivers: Map<String, String> = linkedMapOf(
         "gpu" to "gpu",
@@ -110,6 +111,7 @@ class OtherSettingsController(
         "crystalhd" to "crystalhd",
         "rkmpp" to "rkmpp",
     )
+    }
 
     /** 读取日志目录（filesDir/log；对应 Dart loadLogFiles）。 */
     fun loadLogFiles() {

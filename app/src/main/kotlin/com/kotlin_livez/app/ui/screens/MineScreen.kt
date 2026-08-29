@@ -11,11 +11,12 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -35,6 +36,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.kotlin_livez.app.di.ServiceContainer
 import com.kotlin_livez.app.services.LogCaptureService
 import com.kotlin_livez.app.ui.Router
+import com.kotlin_livez.app.ui.components.SettingGroupCard
 
 /**
  * 我的页（Compose 版）—— 对应 Dart `mine_page.dart`（账号 + 功能入口列表），
@@ -61,16 +63,20 @@ fun MineScreen(modifier: Modifier = Modifier) {
 
     val entries = buildMineEntries(biliLogined, douyinHasCookie)
 
-    LazyColumn(
-        modifier = modifier.fillMaxSize().background(MaterialTheme.colorScheme.surface).statusBarsPadding(),
+    // M3 单卡片列表（task m3-mine-settings 迭代：与设置页圆角卡片同风格，不分组/无顶栏）
+    Column(
+        modifier = modifier
+            .fillMaxSize()
+            .background(MaterialTheme.colorScheme.surface)
+            .statusBarsPadding()
+            .verticalScroll(rememberScrollState()),
     ) {
-        itemsIndexed(entries) { index, entry ->
-            MineMenuRow(
-                entry = entry,
-                onClick = { handleEntryClick(entry, activity) { showLogDialog = true } },
-            )
-            if (index < entries.lastIndex) {
-                HorizontalDivider()
+        SettingGroupCard {
+            entries.forEach { entry ->
+                MineMenuRow(
+                    entry = entry,
+                    onClick = { handleEntryClick(entry, activity) { showLogDialog = true } },
+                )
             }
         }
     }
@@ -195,7 +201,6 @@ private fun MineMenuRow(entry: MineEntry, onClick: () -> Unit) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .background(MaterialTheme.colorScheme.surface)
             .clickable(onClick = onClick)
             .padding(start = 16.dp, top = 12.dp, end = 16.dp, bottom = 12.dp),
         verticalAlignment = Alignment.CenterVertically,

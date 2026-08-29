@@ -176,7 +176,7 @@ fun SettingGroupCard(
             .padding(horizontal = 12.dp)
             .fillMaxWidth()
             .clip(RoundedCornerShape(12.dp))
-            .background(MaterialTheme.colorScheme.surfaceContainerLow),
+            .background(MaterialTheme.colorScheme.surfaceContainerHigh),
         content = content,
     )
 }
