@@ -11,6 +11,7 @@ import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -19,6 +20,7 @@ import com.kotlin_livez.app.di.ServiceContainer
 import com.kotlin_livez.app.ui.Router
 import com.kotlin_livez.app.ui.nav.AppNavHost
 import com.kotlin_livez.app.ui.theme.AppTheme
+import com.kotlin_livez.app.ui.theme.appThemeResolvedDark
 
 /**
  * 主界面 —— 对应 Flutter 端 `lib/main.dart` 根结构 + `home_page.dart` 的底部导航。
@@ -53,6 +55,9 @@ class MainActivity : ComponentActivity() {
                 1 -> false
                 else -> isSystemInDarkTheme()
             }
+            // 组合外镜像（ui.theme.appThemeResolvedDark）：effect/回调内读取用
+            //（CompositionLocal.current 不可在非 Composable 上下文读）
+            SideEffect { appThemeResolvedDark = dark }
 
             // 系统栏图标明暗跟随生效主题：深色 → 浅色图标（透明 scrim，API 26-28 导航栏
             // 无法深色图标化、保持浅色）；浅色 → enableEdgeToEdge() 默认 auto（现状行为）。

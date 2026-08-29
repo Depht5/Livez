@@ -101,6 +101,7 @@ import com.kotlin_livez.app.ui.components.RoomMenuDialog
 import com.kotlin_livez.app.ui.components.RoomSheet
 import com.kotlin_livez.app.ui.theme.CustomIcons
 import com.kotlin_livez.app.ui.theme.LocalAppDarkTheme
+import com.kotlin_livez.app.ui.theme.appThemeResolvedDark
 import com.kotlin_livez.app.ui.theme.LiveIndicatorRed
 import com.kotlin_livez.app.ui.theme.LiveOrange
 import com.kotlin_livez.core.model.LiveContributionRankItem
@@ -220,9 +221,11 @@ fun LiveRoomScreen(
         } else {
             activity.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
             insetsController.show(WindowInsetsCompat.Type.systemBars())
-            // 恢复浅色页面默认：深色系统栏图标（与 LiveApp/enableEdgeToEdge 初始值一致）
-            insetsController.isAppearanceLightStatusBars = true
-            insetsController.isAppearanceLightNavigationBars = true
+            // 恢复图标明暗 = 应用当前生效主题的对应值（task 08-29-live-room-bars-follow-status
+            // 真机实证：原硬编码 true（深色图标）在深色模式下把状态栏打成黑图标不可见；
+            // 经 appThemeResolvedDark 组合外镜像读取当前生效深色态）
+            insetsController.isAppearanceLightStatusBars = !appThemeResolvedDark
+            insetsController.isAppearanceLightNavigationBars = !appThemeResolvedDark
         }
     }
     // 离开直播间时若仍处于全屏：恢复竖屏方向与系统栏
@@ -237,9 +240,11 @@ fun LiveRoomScreen(
                         activity.window, activity.window.decorView,
                     )
                     insetsController.show(WindowInsetsCompat.Type.systemBars())
-                    // 兜底恢复深色图标（浅色壳层页面），防全屏态离页残留白图标不可见
-                    insetsController.isAppearanceLightStatusBars = true
-                    insetsController.isAppearanceLightNavigationBars = true
+                    // 兜底恢复图标明暗 = 应用当前生效主题对应值（原硬编码 true 在深色模式下
+                    // 使退出直播间后卡在黑图标直到重启——MainActivity 的主题效果仅在 dark
+                    // 变化时重跑，dark 未变不会纠正，故此处必须自行恢复正确值）
+                    insetsController.isAppearanceLightStatusBars = !appThemeResolvedDark
+                    insetsController.isAppearanceLightNavigationBars = !appThemeResolvedDark
                 }
             }
         }

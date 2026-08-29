@@ -52,6 +52,14 @@ val ImageError = Color(0xFFE0E0E0)
  */
 val LocalAppDarkTheme = staticCompositionLocalOf { false }
 
+/**
+ * 生效深色态的组合外镜像 —— MainActivity 每次解析后写入（SideEffect），与
+ * [LocalAppDarkTheme] 同源同值；供 effect/回调等**非 Composable 上下文**读取
+ * （CompositionLocal.current 不可在 effect 协程内读，如直播间系统栏图标恢复）。
+ */
+var appThemeResolvedDark: Boolean = false
+    internal set
+
 /** 纯黑（OLED）主题底色：amoledBlack 开启时页面级背景角色的覆盖值。 */
 private val AmoledBlack = Color(0xFF000000)
 
