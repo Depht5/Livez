@@ -83,9 +83,8 @@ fun HomeScreen(
     val siteIndex = selectedSiteIndex.coerceIn(0, sites.lastIndex.coerceAtLeast(0))
 
     // 横向翻页器（foundation 1.7 stable API）：站点网格页左右滑动切换；
-    // beyondViewportPageCount=1（task mine-page-cleanup 滑动卡顿优化）：预组合相邻页，
-    // 使邻页首次组合 + 首载网络请求发生在静止时而非手势进行中（默认 0 时全部堆在
-    // 滑动瞬间做 → 掉帧）；代价是多存活一页网格的内存，可接受。
+    // 默认不预组合邻页（beyondViewportPageCount=0），滑动中邻页被组合时其内部
+    // 「仅首次加载」守卫触发邻站首载，等价旧 View attach 即加载语义，可接受。
     val pagerState = rememberPagerState(initialPage = siteIndex, pageCount = { sites.size })
 
     // 滑动过程中回写选中索引，驱动 Tab 切色/指示条跟随；
@@ -139,11 +138,7 @@ fun HomeScreen(
         // 各站点一页：网格滚动状态仍由壳层 gridStates Map 持有（键 = 站点 id），
         // pager 页销毁重建不影响位置；下拉刷新/触底分页/首屏加载守卫均在 PagedRoomGrid 内部，
         // 行为不变。pager 横滑与网格纵向滚动方向正交，无手势冲突。
-        HorizontalPager(
-            state = pagerState,
-            modifier = Modifier.weight(1f).fillMaxWidth(),
-            beyondViewportPageCount = 1,
-        ) { page ->
+        HorizontalPager(state = pagerState, modifier = Modifier.weight(1f).fillMaxWidth()) { page ->
             // 越界保护：sites 尺寸变化瞬间 pageCount 已更新但页面索引可能短暂越界
             val pageIdx = page.coerceIn(0, sites.lastIndex.coerceAtLeast(0))
             val pageSite = sites[pageIdx]
