@@ -392,7 +392,14 @@ private fun FollowItemRow(
                 overflow = TextOverflow.Ellipsis,
             )
             Text(
-                text = "${site?.name ?: item.siteId} · ${item.roomTitle.ifEmpty { item.tag }}",
+                // 描述行：有标题 →「平台 · 标题」；标题为空 → 仅平台名
+                //（task 08-29-live-room-bars-follow-status 用户反馈：不再回退 tag
+                //「全部」，「斗鱼直播 · 全部」只保留前面的平台描述）
+                text = if (item.roomTitle.isEmpty()) {
+                    site?.name ?: item.siteId
+                } else {
+                    "${site?.name ?: item.siteId} · ${item.roomTitle}"
+                },
                 fontSize = 12.sp,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 maxLines = 1,
