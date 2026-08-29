@@ -60,6 +60,16 @@ val LocalAppDarkTheme = staticCompositionLocalOf { false }
 var appThemeResolvedDark: Boolean = false
     internal set
 
+/**
+ * 卡片容器色（首页/分类/关注页的直播间与子分类卡片，task 08-29-chat-pin-bubble-follow-grid
+ * 用户定标）：深色下取 **#1D1B20**（M3 暗色基线 Neutral10 = surfaceContainerLow 档位）——
+ * 精确介于页面背景（surface #141218）与底栏（surfaceContainer #211F26）之间，纯黑主题下
+ * 同样适用（在纯黑背景上更清晰，且不受 amoled 覆盖列表影响）；浅色维持 surface（现状不变）。
+ */
+@Composable
+fun cardContainerColor(): Color =
+    if (LocalAppDarkTheme.current) Color(0xFF1D1B20) else MaterialTheme.colorScheme.surface
+
 /** 纯黑（OLED）主题底色：amoledBlack 开启时页面级背景角色的覆盖值。 */
 private val AmoledBlack = Color(0xFF000000)
 

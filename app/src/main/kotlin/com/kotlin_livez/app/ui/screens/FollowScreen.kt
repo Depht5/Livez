@@ -62,6 +62,7 @@ import com.kotlin_livez.app.ui.Router
 import com.kotlin_livez.app.ui.components.NetImage
 import com.kotlin_livez.app.ui.components.resolveLiveRoomGrid
 import com.kotlin_livez.app.ui.theme.ImagePlaceholder
+import com.kotlin_livez.app.ui.theme.cardContainerColor
 import com.kotlin_livez.app.ui.theme.LiveIndicatorRed
 import com.kotlin_livez.core.model.FollowRefreshProgress
 
@@ -394,7 +395,7 @@ private fun FollowItemCard(
     Column(
         modifier = modifier
             .shadow(elevation = 2.dp, shape = RoundedCornerShape(8.dp))
-            .background(MaterialTheme.colorScheme.surface, RoundedCornerShape(8.dp))
+            .background(cardContainerColor(), RoundedCornerShape(8.dp))
             .combinedClickable(
                 onClick = onClick,
                 onLongClick = onLongClick,

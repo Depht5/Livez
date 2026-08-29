@@ -59,6 +59,7 @@ import com.kotlin_livez.app.modules.category.AppLiveCategory
 import com.kotlin_livez.app.modules.category.CategoryController
 import com.kotlin_livez.app.modules.category.CategoryListController
 import com.kotlin_livez.app.ui.components.NetImage
+import com.kotlin_livez.app.ui.theme.cardContainerColor
 import com.kotlin_livez.core.model.LiveSubCategory
 import kotlin.math.floor
 import kotlinx.coroutines.launch
@@ -441,7 +442,7 @@ private fun SubCategoryCard(
         modifier = Modifier
             .height(84.dp)
             .shadow(elevation = 2.dp, shape = RoundedCornerShape(8.dp))
-            .background(MaterialTheme.colorScheme.surface, RoundedCornerShape(8.dp))
+            .background(cardContainerColor(), RoundedCornerShape(8.dp))
             .clickable(onClick = onClick)
             .padding(start = 8.dp, top = 10.dp, end = 8.dp, bottom = 10.dp),
         horizontalAlignment = Alignment.CenterHorizontally,

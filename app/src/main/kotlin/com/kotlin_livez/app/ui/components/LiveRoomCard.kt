@@ -23,6 +23,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.kotlin_livez.app.app.Utils
 import com.kotlin_livez.app.ui.theme.ImagePlaceholder
+import com.kotlin_livez.app.ui.theme.cardContainerColor
 import com.kotlin_livez.core.model.LiveRoomItem
 
 /**
@@ -46,9 +47,10 @@ fun LiveRoomCard(
     Column(
         modifier = modifier
             .fillMaxWidth()
-            // M3 surface 底、8dp 圆角；阴影 elevation 2dp（对齐 View 版）
+            // 卡片容器色（task 08-29-chat-pin-bubble-follow-grid）：深色 = #1D1B20
+            //（介于页面背景与底栏之间的灰）；浅色 = surface。8dp 圆角 + 2dp 阴影不变
             .shadow(elevation = 2.dp, shape = RoundedCornerShape(8.dp))
-            .background(MaterialTheme.colorScheme.surface, RoundedCornerShape(8.dp))
+            .background(cardContainerColor(), RoundedCornerShape(8.dp))
             .clickable(onClick = onClick),
     ) {
         // 封面：16:9，顶部两角圆角（底部直角，由卡片整体裁剪配合）
