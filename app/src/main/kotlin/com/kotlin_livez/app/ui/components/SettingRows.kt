@@ -48,15 +48,21 @@ fun SettingClickRow(
     subtitle: String,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
+    enabled: Boolean = true,
 ) {
     Row(
         modifier = modifier
             .fillMaxWidth()
-            .clickable(onClick = onClick)
+            .clickable(enabled = enabled, onClick = onClick)
             .padding(start = 16.dp, top = 12.dp, end = 16.dp, bottom = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        SettingRowTexts(title = title, subtitle = subtitle, modifier = Modifier.weight(1f))
+        SettingRowTexts(
+            title = title,
+            subtitle = subtitle,
+            modifier = Modifier.weight(1f),
+            enabled = enabled,
+        )
         Text(text = "›", fontSize = 18.sp, color = MaterialTheme.colorScheme.outline)
     }
 }

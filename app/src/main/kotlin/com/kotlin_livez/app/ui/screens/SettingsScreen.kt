@@ -32,6 +32,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.kotlin_livez.app.di.ServiceContainer
+import com.kotlin_livez.app.services.MpvOptionsService
 import com.kotlin_livez.app.ui.Router
 import com.kotlin_livez.app.ui.components.SettingClickRow
 import com.kotlin_livez.app.ui.components.SettingGroupCard
@@ -132,9 +133,17 @@ fun SettingsScreen(modifier: Modifier = Modifier) {
         // ===== 播放 =====
         SettingSectionTitle("播放")
         SettingGroupCard {
-            SettingClickRow(title = "mpv 档位", subtitle = mpvProfile, onClick = {
-                showMpvProfileDialog = true
-            })
+            SettingClickRow(
+                title = "mpv 档位",
+                // 兼容模式 = mediacodec 直通，渲染管线不经过 mpv，档位无实际作用 → 灰显
+                subtitle = if (playerCompatMode) {
+                    "兼容模式下不可用"
+                } else {
+                    MpvOptionsService.profileLabels[mpvProfile] ?: mpvProfile
+                },
+                enabled = !playerCompatMode,
+                onClick = { showMpvProfileDialog = true },
+            )
 
             SettingSwitchRow(
                 title = "硬件解码",
