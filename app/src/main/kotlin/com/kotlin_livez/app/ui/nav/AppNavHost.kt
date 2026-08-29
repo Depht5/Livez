@@ -76,6 +76,27 @@ fun AppNavHost(navController: NavHostController, modifier: Modifier = Modifier) 
         // 必须显式填满：否则 NavHost 包内容测量，竖屏壳层高度塌缩为底栏高度
         //（实测症状：内容区高度 0、底栏被垂直居中）
         modifier = modifier.fillMaxSize(),
+        // 全局页面转场（task 08-29-nav-anim-danmu-panel，用户反馈：所有页面统一为
+        // 进入直播间的右侧滑入动画）：
+        // - enter：新页面从屏幕右缘滑入（initialOffsetX = it，100% 宽度偏移起步）；
+        // - popExit：顶层页面向屏幕右缘滑出，与 enter 镜像；
+        // - exit / popEnter：原地淡出/淡入——「main」壳层等下层页面保持不横移，
+        //   只有新页面层在滑动；「main」作为被覆盖方仅参与 fade（出入场观感不变）；
+        // - 时长统一 tween(280)（250–300 区间取中，沿用原直播间转场取值）：固定时长比
+        //   默认 spring 更可控，且与 leaveRoom() 的「先 GONE 等两帧再出栈」兼容——
+        //   Surface 图层先消失、滑出动画随后播放，视频不会残留在滑动画面上。
+        enterTransition = {
+            slideInHorizontally(animationSpec = tween(280)) { fullX -> fullX }
+        },
+        exitTransition = {
+            fadeOut(animationSpec = tween(280))
+        },
+        popEnterTransition = {
+            fadeIn(animationSpec = tween(280))
+        },
+        popExitTransition = {
+            slideOutHorizontally(animationSpec = tween(280)) { fullX -> fullX }
+        },
     ) {
         // 三 Tab 壳（首页/分类/我的为内部状态切换，非独立路由）
         composable("main") { MainShell(shell) }
@@ -145,32 +166,14 @@ fun AppNavHost(navController: NavHostController, modifier: Modifier = Modifier) 
         // NavController 解析后自动解码）；控制器在 Screen 内 remember 创建 + DisposableEffect
         // 销毁（等价原 LiveRoomActivity onDestroy：controller.dispose() + videoView.destroy()）
         //
-        // 转场动画（用户反馈：进入/退出直播间改为右侧滑入/滑出，替代默认渐变）：
-        // - enter：从屏幕右缘滑入（initialOffsetX = it，即 100% 宽度偏移起步）；
-        // - popExit：向屏幕右缘滑出（targetOffsetX = it），与 enter 镜像；
-        // - exit / popEnter：保持淡出/淡入——「main」壳层是底栏页面，若跟随左移会出现
-        //   「整个首页横移」的观感，淡入淡出让下层页面原地过渡、只有直播间层在滑动；
-        // - 时长统一 tween(280)（250–300 区间取中）：固定时长比默认 spring 更可控，
-        //   且与 leaveRoom() 的「先 GONE 等两帧再出栈」兼容——Surface 图层先消失、
-        //   滑出动画随后播放，视频不会残留在滑动画面上。
+        // 转场动画：原直播间专用右滑转场已提升为 NavHost 全局默认（见上方 NavHost 参数，
+        // task 08-29-nav-anim-danmu-panel），本路由不再单独声明。
         composable(
             route = "livertoom/{siteId}/{roomId}",
             arguments = listOf(
                 navArgument("siteId") { type = NavType.StringType },
                 navArgument("roomId") { type = NavType.StringType },
             ),
-            enterTransition = {
-                slideInHorizontally(animationSpec = tween(280)) { fullX -> fullX }
-            },
-            exitTransition = {
-                fadeOut(animationSpec = tween(280))
-            },
-            popEnterTransition = {
-                fadeIn(animationSpec = tween(280))
-            },
-            popExitTransition = {
-                slideOutHorizontally(animationSpec = tween(280)) { fullX -> fullX }
-            },
         ) { entry ->
             LiveRoomScreen(
                 siteId = entry.arguments?.getString("siteId").orEmpty(),
