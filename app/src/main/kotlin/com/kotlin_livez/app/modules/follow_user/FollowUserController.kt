@@ -312,7 +312,10 @@ class FollowUserController(
         if (keyword.isNotEmpty()) {
             items = items.filter { it.userName.lowercase().contains(keyword) }
         }
-        return followService.sortFollowUsers(distinctFollowUsers(items))
+        // 关注页显示排序 = 关注时间升序（task 08-29-chat-pin-bubble-follow-grid 用户定标：
+        // 先关注的排前面；不再用 sortFollowUsers 的「直播中优先桶 + 时间倒序」）。
+        // 仅显示层排序——状态刷新调度（服务内 _orderRefreshBucketBySite 等）不受影响。
+        return distinctFollowUsers(items).sortedBy { it.addTime }
     }
 
     fun setSearchKeyword(value: String) {

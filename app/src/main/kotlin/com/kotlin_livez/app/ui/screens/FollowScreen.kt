@@ -6,9 +6,13 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.statusBarsPadding
@@ -16,13 +20,13 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
@@ -40,6 +44,8 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -54,6 +60,8 @@ import com.kotlin_livez.app.modules.follow_user.FollowGroupOption
 import com.kotlin_livez.app.modules.follow_user.FollowUserController
 import com.kotlin_livez.app.ui.Router
 import com.kotlin_livez.app.ui.components.NetImage
+import com.kotlin_livez.app.ui.components.resolveLiveRoomGrid
+import com.kotlin_livez.app.ui.theme.ImagePlaceholder
 import com.kotlin_livez.app.ui.theme.LiveIndicatorRed
 import com.kotlin_livez.core.model.FollowRefreshProgress
 
@@ -170,20 +178,33 @@ fun FollowScreen(
                 )
             },
         ) {
-            LazyColumn(modifier = Modifier.fillMaxSize().background(MaterialTheme.colorScheme.surface)) {
-                itemsIndexed(
-                    items = list,
-                    key = { _, item ->
-                        if (item.id.isNotEmpty()) item.id else "${item.siteId}_${item.roomId}"
-                    },
-                ) { index, item ->
-                    FollowItemRow(
-                        item = item,
-                        onClick = { openRoom(item) },
-                        onLongClick = { pendingUnfollow = item },
-                    )
-                    if (index < list.lastIndex) {
-                        HorizontalDivider()
+            // 网格规格与首页同源（resolveLiveRoomGrid：列数/行高按视口宽度解析；
+            // task 08-29-chat-pin-bubble-follow-grid：关注页排版改为首页同款卡片网格）
+            BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+                val spec = resolveLiveRoomGrid(maxWidth.value)
+                LazyVerticalGrid(
+                    columns = GridCells.Fixed(spec.columns),
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(MaterialTheme.colorScheme.surface),
+                    contentPadding = PaddingValues(start = 12.dp, top = 4.dp, end = 12.dp, bottom = 12.dp),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    items(
+                        items = list,
+                        key = { item ->
+                            if (item.id.isNotEmpty()) item.id else "${item.siteId}_${item.roomId}"
+                        },
+                    ) { item ->
+                        Box(modifier = Modifier.fillMaxWidth().height(spec.mainAxisExtentDp.dp)) {
+                            FollowItemCard(
+                                item = item,
+                                onClick = { openRoom(item) },
+                                onLongClick = { pendingUnfollow = item },
+                                modifier = Modifier.fillMaxSize(),
+                            )
+                        }
                     }
                 }
             }
@@ -353,68 +374,85 @@ private fun RefreshProgressCard(progress: FollowRefreshProgress) {
 }
 
 /**
- * 单条关注行：44dp 圆形头像（NetImage isRound）+ 标题（15sp #222 单行省略）+
- * 副标题「站点 · 房间标题」（无房间标题时回退标签名，12sp #888）+
- * 直播状态徽标（直播中红字 / 其余灰字，12sp）。
- * 点击进直播间、长按弹取消关注确认。
+ * 单条关注卡片（task 08-29-chat-pin-bubble-follow-grid）—— 首页 LiveRoomCard 同款排版
+ * （2dp 阴影 + 8dp 圆角 + 16:9 封面 + 64dp 文字区），差异由用户定标：
+ * - 标题位 = 用户名（原卡片为房间标题）；
+ * - 主播名位 = 关注页描述行文本（roomTitle 非空 →「平台 · 标题」，空 → 仅平台名）；
+ * - 不显示热度；
+ * - 封面右上角状态角标：直播中（红底白字）/ 未开播（半透明黑白字）；状态未知（0）不显示。
+ * 封面 = roomCover（空 URL 显示占位底）。点击进直播间、长按弹取消关注确认。
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun FollowItemRow(
+private fun FollowItemCard(
     item: FollowUser,
     onClick: () -> Unit,
     onLongClick: () -> Unit,
+    modifier: Modifier = Modifier,
 ) {
     val site = Sites.allSites[item.siteId]
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .background(MaterialTheme.colorScheme.surface)
+    Column(
+        modifier = modifier
+            .shadow(elevation = 2.dp, shape = RoundedCornerShape(8.dp))
+            .background(MaterialTheme.colorScheme.surface, RoundedCornerShape(8.dp))
             .combinedClickable(
                 onClick = onClick,
                 onLongClick = onLongClick,
-            )
-            .padding(start = 16.dp, top = 12.dp, end = 16.dp, bottom = 12.dp),
-        verticalAlignment = Alignment.CenterVertically,
+            ),
     ) {
-        NetImage(
-            url = item.face,
-            modifier = Modifier.size(44.dp),
-            isRound = true,
-        )
-        Spacer(modifier = Modifier.width(12.dp))
-        Column(modifier = Modifier.weight(1f)) {
+        Box(modifier = Modifier.fillMaxWidth().aspectRatio(16f / 9f)) {
+            NetImage(
+                url = item.roomCover,
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(ImagePlaceholder),
+                shape = RoundedCornerShape(topStart = 8.dp, topEnd = 8.dp),
+            )
+            if (item.liveStatus != 0) {
+                val live = item.liveStatus == 2
+                // 角标：两种状态统一半透明黑底白字（用户定标：不再用直播红；缩小背景）
+                Text(
+                    text = if (live) "直播中" else "未开播",
+                    fontSize = 9.sp,
+                    color = Color.White,
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .padding(4.dp)
+                        .background(Color(0x99000000), RoundedCornerShape(4.dp))
+                        .padding(horizontal = 4.dp, vertical = 1.dp),
+                )
+            }
+        }
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(64.dp)
+                .padding(8.dp),
+        ) {
+            // 标题位 = 用户名（用户定标；14sp 加粗，对齐 LiveRoomCard 标题样式）
             Text(
                 text = item.userName,
-                fontSize = 15.sp,
                 color = MaterialTheme.colorScheme.onSurface,
+                fontSize = 14.sp,
+                fontWeight = FontWeight.Bold,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.fillMaxWidth(),
             )
+            Spacer(modifier = Modifier.weight(1f))
+            // 主播名位 = 关注页描述行文本（无热度显示）
             Text(
-                // 描述行：有标题 →「平台 · 标题」；标题为空 → 仅平台名
-                //（task 08-29-live-room-bars-follow-status 用户反馈：不再回退 tag
-                //「全部」，「斗鱼直播 · 全部」只保留前面的平台描述）
                 text = if (item.roomTitle.isEmpty()) {
                     site?.name ?: item.siteId
                 } else {
                     "${site?.name ?: item.siteId} · ${item.roomTitle}"
                 },
-                fontSize = 12.sp,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
+                fontSize = 12.sp,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.fillMaxWidth(),
             )
         }
-        Spacer(modifier = Modifier.width(8.dp))
-        Text(
-            text = when (item.liveStatus) {
-                2 -> "直播中"
-                0 -> "状态未知"
-                else -> "未开播"
-            },
-            fontSize = 12.sp,
-            color = if (item.liveStatus == 2) LiveIndicatorRed else MaterialTheme.colorScheme.outline,
-        )
     }
 }
