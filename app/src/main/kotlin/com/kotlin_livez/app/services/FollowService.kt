@@ -56,6 +56,9 @@ class FollowService(
     companion object {
         const val updateStatusCooldownMs = 30_000L
         const val refreshProgressCompletionHoldMs = 2_000L
+
+        /** 空目标刷新的最短可见窗口：保证 updating=true 跨帧被 UI 观察（见 _refreshStatusTargets）。 */
+        const val emptyTargetsCollapseDelayMs = 400L
         const val kDouyinLimitedAutoResumeMaxAttempts = 2
         const val kDouyinLimitedAutoResumeBaseDelayMs = 45_000L
         const val kFollowProgressUiBurstThreshold = 500
@@ -474,8 +477,19 @@ class FollowService(
         )
 
         if (targets.isEmpty()) {
-            _updating.value = false
-            _resetRefreshProgress()
+            // 空目标（无关注，或分组过滤后为空）：无实际刷新项，但收尾必须跨帧。
+            // 根因（task 08-29-scroll-restore-follow-refresh 真机实证：关注页空列表下拉刷新
+            // 指示器卡住）：协程为 Main.immediate，本方法至首个挂起点前同步执行——若在此同帧
+            // 内 true→false，StateFlow 值合并后 UI 只观察到 false；而 M3 PullToRefreshBox
+            // 仅在 isRefreshing 参数变化沿才 animateToHidden（onRelease 已先 animateToThreshold），
+            // 指示器会停在阈值位永不收起。delay 让 true 至少跨一帧被重组观察，
+            // 观感 = 一次瞬时完成的刷新。generation 守卫：delay 期间若发起新刷新
+            // （generation 递增），本协程跳过清理，避免误关新任务的刷新态。
+            delay(emptyTargetsCollapseDelayMs)
+            if (generation == _updateGeneration) {
+                _updating.value = false
+                _resetRefreshProgress()
+            }
             filterData()
             return
         }
