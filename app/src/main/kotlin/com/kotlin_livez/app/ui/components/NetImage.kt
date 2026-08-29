@@ -2,7 +2,6 @@ package com.kotlin_livez.app.ui.components
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
@@ -10,10 +9,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
+import androidx.compose.ui.graphics.painter.ColorPainter
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
-import coil.compose.SubcomposeAsyncImage
+import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import com.kotlin_livez.app.ui.theme.ImageError
 import com.kotlin_livez.app.ui.theme.ImagePlaceholder
@@ -56,21 +56,19 @@ fun NetImage(
         return
     }
 
-    // 加载中/失败用纯色 Box 槽位（SubcomposeAsyncImage 稳定 API；Compose 层无 Drawable 概念，
-    // 色值对齐 View 版：加载中 #F2F2F2、失败 #E0E0E0）
-    SubcomposeAsyncImage(
+    // AsyncImage（Coil 推荐，无子组合开销；task mine-page-cleanup 性能优化）：
+    // 加载中/失败用 ColorPainter 占位（纯色块），色值对齐 View 版：
+    // 加载中 #F2F2F2、失败 #E0E0E0。不用 SubcomposeAsyncImage——每图一次子组合，
+    // 网格滚动/横滑场景组合成本被放大（Coil 文档明确不建议长列表使用）。
+    AsyncImage(
         model = ImageRequest.Builder(LocalContext.current)
             .data(pic)
             .crossfade(true)
             .build(),
         contentDescription = null,
         contentScale = contentScale,
-        loading = {
-            Box(modifier = Modifier.fillMaxSize().background(placeholderColor))
-        },
-        error = {
-            Box(modifier = Modifier.fillMaxSize().background(errorColor))
-        },
+        placeholder = ColorPainter(placeholderColor),
+        error = ColorPainter(errorColor),
         modifier = clipModifier,
     )
 }
