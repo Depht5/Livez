@@ -1021,16 +1021,22 @@ class LiveRoomController(
         val currentSite = site ?: return
         val id = "${currentSite.id}_$roomId"
         scope.launch {
-            dbService.addFollow(
-                FollowUser(
-                    id = id,
-                    roomId = roomId,
-                    siteId = currentSite.id,
-                    userName = roomDetail.userName,
-                    face = roomDetail.userAvatar,
-                    addTime = System.currentTimeMillis(),
-                ),
-            )
+            // 新关注用户带入房间当前已知状态（task 08-29-live-room-bars-follow-status
+            // 真机反馈：新关注显示「状态未知」，需刷新+重进关注页才恢复）——正在观看的
+            // 房间 liveStatus 已知（未开播也标 1，与状态刷新语义一致，不再用 0=未知）。
+            // 经 followService.addFollow 走服务维护内存列表 + filterData：关注页即时出现
+            // 且状态正确；后续 kUpdateFollow 重载经运行时状态回填保留该状态。
+            val follow = FollowUser(
+                id = id,
+                roomId = roomId,
+                siteId = currentSite.id,
+                userName = roomDetail.userName,
+                face = roomDetail.userAvatar,
+                addTime = System.currentTimeMillis(),
+            ).apply {
+                liveStatus = if (_liveStatus.value) 2 else 1
+            }
+            followService.addFollow(follow)
             _followed.value = true
             EventBus.emit(Constant.kUpdateFollow, id)
         }

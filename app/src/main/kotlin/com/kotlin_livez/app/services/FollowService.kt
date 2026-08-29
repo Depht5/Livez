@@ -157,6 +157,18 @@ class FollowService(
             filterData()
             return
         }
+        // 运行时状态回填（task 08-29-live-room-bars-follow-status 真机实证：关注/取关任一
+        // 用户后其他用户全部显示「状态未知」）——liveStatus/liveStartTime 为 @Transient
+        // 不入库，关注/取关/同步导入都会经本方法重读 DB 并整体替换内存列表，新对象状态
+        // 恒为 0；按 id 从上一份内存列表回填运行时字段。新关注用户不在旧表中 → 保持默认
+        // 0，待下次状态刷新（与刷新语义一致）。previewUpdatedAt 持久化，无需回填。
+        val prevById = _followList.value.associateBy { it.id }
+        for (item in list) {
+            prevById[item.id]?.let { prev ->
+                item.liveStatus = prev.liveStatus
+                item.liveStartTime = prev.liveStartTime
+            }
+        }
         _followList.value = list
         filterData()
         if (updateStatus) {
