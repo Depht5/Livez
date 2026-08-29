@@ -23,6 +23,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
@@ -234,30 +235,40 @@ private fun MainShell(shell: ShellState) {
 
     Column(modifier = Modifier.fillMaxSize()) {
         Box(modifier = Modifier.weight(1f)) {
-            when (currentIndex) {
-                0 -> HomeScreen(
-                    controller = shell.homeController,
-                    gridStates = shell.homeGridStates,
-                    onOpenLiveRoom = { site, roomId ->
-                        // 直播间已迁路由（Batch 7）：Router.openLiveRoom 导航至
-                        // livertoom/{siteId}/{roomId}（siteId/roomId 经 URL 编码）
-                        Router.openLiveRoom(site, roomId)
-                    },
-                )
-                1 -> FollowScreen(controller = shell.followController)
-                2 -> CategoryScreen(
-                    controller = shell.categoryController,
-                    gridStates = shell.categoryGridStates,
-                    onOpenCategory = { site, sub ->
-                        // 分类详情已迁路由（本批）：path/query 字符串传参，
-                        // 特殊字符经 URL 编码（NavController 解析后自动解码）
-                        val route = "category/${Uri.encode(site.id)}" +
-                            "?categoryId=${Uri.encode(sub.id)}" +
-                            "&categoryName=${Uri.encode(sub.name)}"
-                        Router.navigate(route)
-                    },
-                )
-                else -> MineScreen()
+            // SaveableStateProvider（task 08-29-scroll-restore-follow-refresh）：底栏 Tab
+            // 切换按键保留各 Tab 的 rememberSaveable 状态。根因（真机实证：底栏切走再切回
+            // 后首页/分类回落第一站点顶部）：此前 when 分支直接销毁重建，无状态保存——
+            // 首页/分类的 selectedSiteIndex 与 rememberPagerState 均为 rememberSaveable，
+            // 丢弃后切回即重置，观感即「离开再返回滚动位置丢失」。各站点 LazyGridState
+            // 由壳层持有本就存活，恢复站点索引后位置随之恢复。路由导航由 NavHost 自带
+            // SaveableStateProvider 保存（进直播间返回不丢），与本层嵌套互不影响。
+            val tabStateHolder = rememberSaveableStateHolder()
+            tabStateHolder.SaveableStateProvider(currentIndex) {
+                when (currentIndex) {
+                    0 -> HomeScreen(
+                        controller = shell.homeController,
+                        gridStates = shell.homeGridStates,
+                        onOpenLiveRoom = { site, roomId ->
+                            // 直播间已迁路由（Batch 7）：Router.openLiveRoom 导航至
+                            // livertoom/{siteId}/{roomId}（siteId/roomId 经 URL 编码）
+                            Router.openLiveRoom(site, roomId)
+                        },
+                    )
+                    1 -> FollowScreen(controller = shell.followController)
+                    2 -> CategoryScreen(
+                        controller = shell.categoryController,
+                        gridStates = shell.categoryGridStates,
+                        onOpenCategory = { site, sub ->
+                            // 分类详情已迁路由（本批）：path/query 字符串传参，
+                            // 特殊字符经 URL 编码（NavController 解析后自动解码）
+                            val route = "category/${Uri.encode(site.id)}" +
+                                "?categoryId=${Uri.encode(sub.id)}" +
+                                "&categoryName=${Uri.encode(sub.name)}"
+                            Router.navigate(route)
+                        },
+                    )
+                    else -> MineScreen()
+                }
             }
         }
         MainBottomBar(currentIndex) { index ->
