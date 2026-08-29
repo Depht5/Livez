@@ -1188,6 +1188,8 @@ private fun buildTabEntries(siteId: String): List<RoomTab> {
  */
 @Composable
 private fun ChatTabContent(messages: List<LiveMessage>, listState: LazyListState) {
+    // 弹幕气泡开关（设置 → 其他；task 08-29-chat-pin-bubble-follow-grid）
+    val danmuBubble by ServiceContainer.appSettings.danmuBubble.collectAsStateWithLifecycle()
     // 是否贴底（留 1 条容差：贴底时新增消息仍视为贴底，继续自动滚）
     val atBottom by remember(listState) {
         derivedStateOf {
@@ -1213,7 +1215,23 @@ private fun ChatTabContent(messages: List<LiveMessage>, listState: LazyListState
             Text(
                 text = buildMessageText(msg),
                 fontSize = 14.sp,
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
+                // 弹幕气泡：开启时加主题容器色圆角背景（与单选对话框选中药丸同源
+                // primaryContainer alpha 0.7；无阴影，用户定标）；关闭为现状纯文本。
+                // padding 外层为两模式一致的页边距，背景仅包裹文本内容（气泡状）。
+                modifier = Modifier
+                    .padding(horizontal = 12.dp, vertical = 4.dp)
+                    .then(
+                        if (danmuBubble) {
+                            Modifier
+                                .background(
+                                    MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.7f),
+                                    RoundedCornerShape(8.dp),
+                                )
+                                .padding(horizontal = 10.dp, vertical = 6.dp)
+                        } else {
+                            Modifier
+                        },
+                    ),
             )
         }
     }
