@@ -12,6 +12,9 @@ import android.os.Handler
 import android.os.Looper
 import android.view.View
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -87,6 +90,7 @@ import com.kotlin_livez.app.services.MpvOptionsService
 import com.kotlin_livez.app.ui.DanmakuOverlayView
 import com.kotlin_livez.app.ui.Router
 import com.kotlin_livez.app.ui.components.DanmuSettingsSheet
+import com.kotlin_livez.app.ui.components.DanmuSettingsSidePanel
 import com.kotlin_livez.app.ui.components.DanmuShieldSheet
 import com.kotlin_livez.app.ui.components.LineDialog
 import com.kotlin_livez.app.ui.components.LiveSettingsSheet
@@ -531,6 +535,13 @@ fun LiveRoomScreen(
 
     var activeSheet by rememberSaveable { mutableStateOf(RoomSheet.None) }
 
+    // 全屏弹幕设置右侧小窗打开时 BACK 仅关小窗（不退全屏/不退出直播间）。注册位置
+    // 晚于上方两个 BackHandler：同组合内后注册的启用回调优先生效（task 08-29-nav-anim-danmu-panel）。
+    // 竖屏时的 ModalBottomSheet 是独立窗口、自行拦截 BACK，无需此处处理。
+    BackHandler(enabled = isFullScreen && activeSheet == RoomSheet.DanmuSettings) {
+        activeSheet = RoomSheet.None
+    }
+
     /* ---------- 视频区手势 ---------- */
 
     // 本次拖动起点是否在左半屏（决定调亮度还是音量）；snapshot state 保证跨重组可见
@@ -858,6 +869,25 @@ fun LiveRoomScreen(
                 onMenuClick = { activeSheet = RoomSheet.Menu },
                 onFullScreenClick = { toggleFullScreen() },
             )
+
+            // 全屏弹幕设置右侧小窗（task 08-29-nav-anim-danmu-panel，用户反馈：
+            // 全屏时从底部上滑改为原项目 showRightDialog 同款右侧小窗）：
+            // - 右缘滑入/滑出 200ms（对齐原项目 animationTime）；透明遮罩点外部关闭；
+            // - 挂在视频区 Box 内（全屏时视频区铺满整窗），与控制层同为 Compose 覆盖层，
+            //   绘制于 mpv SurfaceView 之上（PlayerControlsOverlay 已验证的同款模式）；
+            // - 竖屏形态走根级 when 分支的 ModalBottomSheet（下方加了 !isFullScreen 守卫）。
+            // 全限定调用：此处处于根 Column 的 ColumnScope 作用域内，foundation 的
+            // ColumnScope.AnimatedVisibility（禁用级 @Deprecated）会遮蔽顶层同名函数。
+            androidx.compose.animation.AnimatedVisibility(
+                visible = isFullScreen && activeSheet == RoomSheet.DanmuSettings,
+                enter = slideInHorizontally(animationSpec = tween(200)) { fullX -> fullX },
+                exit = slideOutHorizontally(animationSpec = tween(200)) { fullX -> fullX },
+            ) {
+                DanmuSettingsSidePanel(
+                    viewportHeight = danmakuOverlay.height.toFloat(),
+                    onDismiss = { activeSheet = RoomSheet.None },
+                )
+            }
         }
 
         // 信息区（对应 Dart buildUserProfile）：头像/名称/平台 + 人气 —— 全屏时隐藏
@@ -1051,12 +1081,16 @@ fun LiveRoomScreen(
             onDismiss = { activeSheet = RoomSheet.None },
         )
 
-        RoomSheet.DanmuSettings -> DanmuSettingsSheet(
-            // 传入当前弹幕层高度（px）：弹层据此计算「显示几行」动态上限；
-            // 全屏/竖屏状态不同 → 打开弹层时的上限不同（对齐原项目传 previewViewportHeight）
-            viewportHeight = danmakuOverlay.height.toFloat(),
-            onDismiss = { activeSheet = RoomSheet.None },
-        )
+        RoomSheet.DanmuSettings -> if (!isFullScreen) {
+            // 竖屏 = 底部弹窗；全屏形态由视频区内 AnimatedVisibility 右侧小窗渲染
+            //（见 PlayerControlsOverlay 之后）。守卫防止全屏/竖屏切换瞬间双渲染。
+            DanmuSettingsSheet(
+                // 传入当前弹幕层高度（px）：弹层据此计算「显示几行」动态上限；
+                // 全屏/竖屏状态不同 → 打开弹层时的上限不同（对齐原项目传 previewViewportHeight）
+                viewportHeight = danmakuOverlay.height.toFloat(),
+                onDismiss = { activeSheet = RoomSheet.None },
+            )
+        }
 
         RoomSheet.LiveSettings -> LiveSettingsSheet(
             controller = controller,

@@ -1,19 +1,31 @@
 package com.kotlin_livez.app.ui.components
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Slider
+import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
@@ -26,14 +38,17 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.kotlin_livez.app.di.ServiceContainer
 import com.kotlin_livez.app.modules.live_room.LiveRoomController
 import com.kotlin_livez.app.ui.Router
+import com.kotlin_livez.app.ui.theme.CustomIcons
 import kotlin.math.roundToInt
 
 /** ⋮ 菜单条目（对齐旧 LiveRoomSheets.showMenuSheet 的 items 顺序与文案）。 */
@@ -168,10 +183,9 @@ fun LineDialog(
 private val FONT_WEIGHT_LABELS = listOf("极细", "很细", "细", "正常", "小粗", "偏粗", "粗", "很粗", "极粗")
 
 /**
- * 弹幕设置：「弹幕显示」8 项（默认开启/显示表情/显示区域/显示几行/不透明度/字号/粗细/速度），
- * 即时持久化。对齐 Dart `danmu_settings_page.dart` 弹幕显示区块。
- * 数值行内联实现而非复用 SettingSliderRow：旧行型需要整数步进 + 单位后缀 +
- * valueLabel（如粗细的 极细..极粗），SettingSliderRow 的 Float API 不适用。
+ * 弹幕设置（竖屏底部弹窗）：壳层 + 标题 + 共用行内容，即时持久化。
+ * 全屏时由 LiveRoomScreen 改挂 [DanmuSettingsSidePanel]（右侧小窗，对齐原项目
+ * showRightDialog），两者共用 [DanmuSettingsRows]。
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -179,6 +193,27 @@ fun DanmuSettingsSheet(
     onDismiss: () -> Unit,
     viewportHeight: Float = 0f,
 ) {
+    ModalBottomSheet(onDismissRequest = onDismiss) {
+        Column(
+            modifier = Modifier
+                .verticalScroll(rememberScrollState())
+                .padding(start = 20.dp, end = 20.dp, bottom = 24.dp),
+        ) {
+            SheetTitle(text = "弹幕设置")
+            DanmuSettingsRows(viewportHeight)
+        }
+    }
+}
+
+/**
+ * 弹幕设置行内容：「弹幕显示」8 项（默认开启/显示表情/显示区域/显示几行/不透明度/字号/粗细/速度），
+ * 即时持久化。对齐 Dart `danmu_settings_page.dart` 弹幕显示区块；竖屏底部弹窗与
+ * 全屏右侧小窗共用（task 08-29-nav-anim-danmu-panel）。
+ * 数值行内联实现而非复用 SettingSliderRow：旧行型需要整数步进 + 单位后缀 +
+ * valueLabel（如粗细的 极细..极粗），SettingSliderRow 的 Float API 不适用。
+ */
+@Composable
+private fun DanmuSettingsRows(viewportHeight: Float) {
     val settings = ServiceContainer.appSettings
     val danmuEnable by settings.danmuEnable.collectAsStateWithLifecycle()
     val danmuRenderEmoji by settings.danmuRenderEmoji.collectAsStateWithLifecycle()
@@ -230,95 +265,88 @@ fun DanmuSettingsSheet(
         }
     }
 
-    ModalBottomSheet(onDismissRequest = onDismiss) {
-        Column(
-            modifier = Modifier
-                .verticalScroll(rememberScrollState())
-                .padding(start = 20.dp, end = 20.dp, bottom = 24.dp),
-        ) {
-            SheetTitle(text = "弹幕设置")
-            // 默认开启
-            SheetSwitchRow(label = "默认开启", checked = danmuEnable) {
-                settings.setDanmuEnable(it)
-            }
-            // 显示弹幕表情
-            SheetSwitchRow(label = "显示弹幕表情", checked = danmuRenderEmoji) {
-                settings.setDanmuRenderEmoji(it)
-            }
-            // 显示区域（4 档滑条：全屏/3/4屏/半屏/1/4屏，task player-ui-polish；
-            // 对齐原项目「显示区域」滑条语义，仅 4 个刻度；改档后保持「行数自动收紧」联动）
-            val areaIndex = (DANMU_AREA_OPTIONS.indexOfFirst {
-                kotlin.math.abs(it.first - danmuArea) < 0.01f
-            } + 1).coerceIn(1, 4)
-            SheetSliderRow(
-                label = "显示区域",
-                value = areaIndex,
-                min = 1,
-                max = 4,
-                steps = 2, // 共 4 档（全屏/3/4屏/半屏/1/4屏）
-                valueLabel = { idx -> DANMU_AREA_OPTIONS[(idx - 1).coerceIn(0, 3)].second },
-                onChange = { idx ->
-                    applyDanmuArea(DANMU_AREA_OPTIONS[(idx - 1).coerceIn(0, 3)].first)
-                },
-            )
-            // 显示几行（0=不显示，对齐 Dart lineCount=0 语义）；
-            // 上限随弹幕层高度×显示区域×字号动态（对齐原项目 _buildDanmuLineValueMap），
-            // 右侧数值显示「当前/上限」便于观察动态范围。
-            SheetSliderRow(
-                label = "显示几行",
-                value = danmuLineCount.coerceIn(0, maxVisibleLines),
-                min = 0,
-                max = maxVisibleLines,
-                valueLabel = { v -> "$v/$maxVisibleLines" },
-                onChange = { settings.setDanmuLineCount(it) },
-            )
-            // 不透明度（%）
-            SheetSliderRow(
-                label = "不透明度",
-                value = (danmuOpacity * 100).roundToInt().coerceIn(10, 100),
-                min = 10,
-                max = 100,
-                unit = "%",
-                onChange = { settings.setDanmuOpacity(it / 100f) },
-            )
-            // 字体大小：改字号后若当前行数超新上限则自动收紧（对齐原项目）
-            SheetSliderRow(
-                label = "字体大小",
-                value = danmuSize.roundToInt(),
-                min = 8,
-                max = 72,
-                onChange = { v ->
-                    val nextSize = v.toFloat()
-                    val nextMax = settings.estimateDanmuMaxVisibleLineCount(
-                        viewportHeight = effectiveViewportH,
-                        fontSize = nextSize * density,
-                    )
-                    if (settings.danmuLineCount.value > nextMax && nextMax >= 1) {
-                        settings.setDanmuLineCount(nextMax)
-                    }
-                    settings.setDanmuSize(nextSize)
-                },
-            )
-            // 字体粗细（1–9，极细..极粗）
-            SheetSliderRow(
-                label = "字体粗细",
-                value = danmuFontWeight,
-                min = 1,
-                max = 9,
-                valueLabel = { v -> FONT_WEIGHT_LABELS.getOrElse(v - 1) { "$v" } },
-                onChange = { settings.setDanmuFontWeight(it) },
-            )
-            // 滚动速度（秒数，越小越快；对齐 Dart danmuSpeed 语义）
-            SheetSliderRow(
-                label = "滚动速度",
-                value = danmuSpeed.roundToInt(),
-                min = 4,
-                max = 20,
-                unit = "秒",
-                onChange = { settings.setDanmuSpeed(it.toFloat()) },
-            )
-        }
+    // 默认开启
+    SheetSwitchRow(label = "默认开启", checked = danmuEnable) {
+        settings.setDanmuEnable(it)
     }
+    // 显示弹幕表情
+    SheetSwitchRow(label = "显示弹幕表情", checked = danmuRenderEmoji) {
+        settings.setDanmuRenderEmoji(it)
+    }
+    // 显示区域（4 档滑条：全屏/3/4屏/半屏/1/4屏，task player-ui-polish；
+    // 对齐原项目「显示区域」滑条语义，仅 4 个刻度；改档后保持「行数自动收紧」联动）
+    val areaIndex = (DANMU_AREA_OPTIONS.indexOfFirst {
+        kotlin.math.abs(it.first - danmuArea) < 0.01f
+    } + 1).coerceIn(1, 4)
+    SheetSliderRow(
+        label = "显示区域",
+        value = areaIndex,
+        min = 1,
+        max = 4,
+        steps = 2, // 共 4 档（全屏/3/4屏/半屏/1/4屏）
+        valueLabel = { idx -> DANMU_AREA_OPTIONS[(idx - 1).coerceIn(0, 3)].second },
+        onChange = { idx ->
+            applyDanmuArea(DANMU_AREA_OPTIONS[(idx - 1).coerceIn(0, 3)].first)
+        },
+    )
+    // 显示几行（0=不显示，对齐 Dart lineCount=0 语义）；
+    // 上限随弹幕层高度×显示区域×字号动态（对齐原项目 _buildDanmuLineValueMap），
+    // 右侧数值显示「当前/上限」便于观察动态范围。
+    SheetSliderRow(
+        label = "显示几行",
+        value = danmuLineCount.coerceIn(0, maxVisibleLines),
+        min = 0,
+        max = maxVisibleLines,
+        valueLabel = { v -> "$v/$maxVisibleLines" },
+        onChange = { settings.setDanmuLineCount(it) },
+    )
+    // 不透明度（%）
+    SheetSliderRow(
+        label = "不透明度",
+        value = (danmuOpacity * 100).roundToInt().coerceIn(10, 100),
+        min = 10,
+        max = 100,
+        unit = "%",
+        showTickDots = false,
+        onChange = { settings.setDanmuOpacity(it / 100f) },
+    )
+    // 字体大小：改字号后若当前行数超新上限则自动收紧（对齐原项目）
+    SheetSliderRow(
+        label = "字体大小",
+        value = danmuSize.roundToInt(),
+        min = 8,
+        max = 72,
+        showTickDots = false,
+        onChange = { v ->
+            val nextSize = v.toFloat()
+            val nextMax = settings.estimateDanmuMaxVisibleLineCount(
+                viewportHeight = effectiveViewportH,
+                fontSize = nextSize * density,
+            )
+            if (settings.danmuLineCount.value > nextMax && nextMax >= 1) {
+                settings.setDanmuLineCount(nextMax)
+            }
+            settings.setDanmuSize(nextSize)
+        },
+    )
+    // 字体粗细（1–9，极细..极粗）
+    SheetSliderRow(
+        label = "字体粗细",
+        value = danmuFontWeight,
+        min = 1,
+        max = 9,
+        valueLabel = { v -> FONT_WEIGHT_LABELS.getOrElse(v - 1) { "$v" } },
+        onChange = { settings.setDanmuFontWeight(it) },
+    )
+    // 滚动速度（秒数，越小越快；对齐 Dart danmuSpeed 语义）
+    SheetSliderRow(
+        label = "滚动速度",
+        value = danmuSpeed.roundToInt(),
+        min = 4,
+        max = 20,
+        unit = "秒",
+        onChange = { settings.setDanmuSpeed(it.toFloat()) },
+    )
 }
 
 /** 弹幕显示区域 4 档（对齐用户需求：全屏/3/4屏/半屏/1/4屏 → 1.0/0.75/0.5/0.25）。 */
@@ -328,6 +356,79 @@ private val DANMU_AREA_OPTIONS = listOf(
     0.50f to "半屏",
     0.25f to "1/4屏",
 )
+
+/* ---------- 弹幕设置（全屏右侧小窗） ---------- */
+
+/**
+ * 全屏弹幕设置右侧小窗 —— 对齐原项目 Utils.showRightDialog(弹幕设置, width=400)：
+ * topRight 全高面板、透明遮罩点外部关闭、头部 back+标题+分隔线；行内容与竖屏
+ * 底部弹窗共用 [DanmuSettingsRows]。滑入/滑出动画由宿主 AnimatedVisibility 承担
+ * （200ms，右缘进/出），本组件只负责静态布局。
+ */
+@Composable
+fun DanmuSettingsSidePanel(
+    viewportHeight: Float,
+    onDismiss: () -> Unit,
+) {
+    Box(modifier = Modifier.fillMaxSize()) {
+        // 透明遮罩：点外部关闭 + 挡住下层手势（对齐原项目 maskColor transparent）
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .pointerInput(Unit) { detectTapGestures { onDismiss() } },
+        )
+        // 面板：全高、宽 400dp（对齐原项目 width=400）、左侧圆角 4dp、surface 底色
+        Column(
+            modifier = Modifier
+                .align(Alignment.CenterEnd)
+                .fillMaxHeight()
+                .width(400.dp)
+                .background(
+                    MaterialTheme.colorScheme.surface,
+                    shape = RoundedCornerShape(topStart = 4.dp, bottomStart = 4.dp),
+                ),
+        ) {
+            // 头部：返回箭头 + 标题（对齐原 ListTile leading arrow_back + title）
+            Row(
+                modifier = Modifier.fillMaxWidth().height(48.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(48.dp)
+                        .clickable(
+                            interactionSource = remember { MutableInteractionSource() },
+                            indication = null,
+                            onClick = onDismiss,
+                        ),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        imageVector = CustomIcons.Back,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurface,
+                        modifier = Modifier.size(24.dp),
+                    )
+                }
+                Text(
+                    text = "弹幕设置",
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.Medium,
+                    color = MaterialTheme.colorScheme.onSurface,
+                )
+            }
+            HorizontalDivider(thickness = 1.dp, color = MaterialTheme.colorScheme.outlineVariant)
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState())
+                    .padding(12.dp),
+            ) {
+                DanmuSettingsRows(viewportHeight)
+            }
+        }
+    }
+}
 
 /* ---------- 直播设置 ---------- */
 
@@ -517,7 +618,9 @@ private fun SheetClickRow(
 /**
  * 整数滑杆行：label + 右侧数值文本（valueLabel 优先，否则 "$value$unit"）+ 下方 Slider。
  * 对齐旧 row() 帮助函数：整数步进（steps 锁定刻度）、即时回调持久化。
+ * （自定义 track 走 experimental API，需 OptIn。）
  */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun SheetSliderRow(
     label: String,
@@ -527,6 +630,7 @@ private fun SheetSliderRow(
     unit: String = "",
     valueLabel: ((Int) -> String)? = null,
     steps: Int? = null,
+    showTickDots: Boolean = true,
     onChange: (Int) -> Unit,
 ) {
     val display = valueLabel?.invoke(value) ?: "$value$unit"
@@ -547,8 +651,25 @@ private fun SheetSliderRow(
         onValueChange = { v -> onChange(v.roundToInt().coerceIn(min, max)) },
         valueRange = min.toFloat()..max.toFloat(),
         // 整数步进：显式 steps 优先（如显示区域 4 档传 2 → 1..4 四刻度）；
-        // 未传时默认「区间长度 - 1」全整数刻度（其余行沿用原行为）
-        steps = (steps ?: (max - min - 1)).coerceAtLeast(0),
+        // 未传时默认「区间长度 - 1」全整数刻度（其余行沿用原行为）。
+        // showTickDots=false（连续量滑条，task 08-29-nav-anim-danmu-panel）：刻度点整段
+        // 去掉——密集整数档（如不透明度 89 档）的轨道会呈点阵观感。steps=0 后轨道本无
+        // 刻度，再经自定义 track 去端点圆点（drawStopIndicator=null）与 thumb 缺口
+        //（thumbTrackGapSize=0），轨道呈连续光条；整数取值仍由 roundToInt 保证
+        //（拖动连续、松手吸附整数位）。
+        steps = if (showTickDots) (steps ?: (max - min - 1)).coerceAtLeast(0) else 0,
         modifier = Modifier.fillMaxWidth(),
+        track = { state ->
+            if (showTickDots) {
+                SliderDefaults.Track(sliderState = state)
+            } else {
+                SliderDefaults.Track(
+                    sliderState = state,
+                    drawStopIndicator = null,
+                    drawTick = { _, _ -> },
+                    thumbTrackGapSize = 0.dp,
+                )
+            }
+        },
     )
 }
