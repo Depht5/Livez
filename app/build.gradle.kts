@@ -54,6 +54,11 @@ android {
     }
 
     buildTypes {
+        debug {
+            // 共存：debug 包名加后缀（com.kotlin_livez.app.debug），与 release 并存；
+            // Room/DataStore 按包名沙箱隔离，两变体数据互不影响。
+            applicationIdSuffix = ".debug"
+        }
         release {
             if (signingProps.getProperty("storeFile", "").isNotEmpty()) {
                 signingConfig = signingConfigs.getByName("release")

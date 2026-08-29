@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- debug 变体覆盖 app_name：桌面显示「Livez D」，与 release 的「Livez」区分
+     （应用名仅此一处资源覆盖，UI 文案仍为中文硬编码，不引入其他字符串资源）。 -->
+<resources>
+    <string name="app_name">Livez D</string>
+</resources>
