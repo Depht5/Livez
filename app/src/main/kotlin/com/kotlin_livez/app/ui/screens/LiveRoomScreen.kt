@@ -1001,13 +1001,21 @@ fun LiveRoomScreen(
             Box(modifier = Modifier.weight(1f)) {
                 when (selectedKey) {
                     TAB_KEY_CHAT -> {
-                        // 切回聊天 Tab / 退出全屏时滚到最新（对齐原 showTab 的 scrollToPosition；
-                        // task 08-29-chat-pin-bubble-follow-grid 真机反馈：全屏期间聊天面板不
-                        // 参与组合、消息持续入列，退出后 LazyColumn 恢复旧滚动位置且不满足
-                        // 「贴底才自动滚」→ 停在全屏前的那一段；isFullScreen 入 key，
-                        // true→false 时强制跳最新。上滑回看的逐条贴底语义不受影响）
-                        LaunchedEffect(selectedTabIndex, isFullScreen) {
+                        // 退出全屏锚定最新（task 08-29-chat-pin-bubble-follow-grid 真机反馈：
+                        // 全屏期间聊天面板不参与组合、消息持续入列，退出后恢复旧滚动位置；
+                        // 首版「LaunchedEffect + suspend scrollToItem」与重组后首帧布局的
+                        // 旧位置恢复存在时序竞态未生效——改组合期转场检测 +
+                        // requestScrollToItem（非挂起、下一次测量立即生效，先于旧位置恢复）。
+                        var previousFullScreen by remember { mutableStateOf(isFullScreen) }
+                        if (previousFullScreen != isFullScreen) {
+                            previousFullScreen = isFullScreen
                             if (!isFullScreen && messages.isNotEmpty()) {
+                                chatListState.requestScrollToItem(messages.size - 1)
+                            }
+                        }
+                        // 切回聊天 Tab 时滚到底部（对齐原 showTab 的 scrollToPosition）
+                        LaunchedEffect(selectedTabIndex) {
+                            if (messages.isNotEmpty()) {
                                 chatListState.scrollToItem(messages.size - 1)
                             }
                         }
