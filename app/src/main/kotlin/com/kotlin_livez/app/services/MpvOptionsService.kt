@@ -66,22 +66,22 @@ object MpvOptionsService {
         val source = HashMap<String, String>()
         for (key in profileOptions.keys) source[key] = "profile:$profile"
 
-        if (appSettings.customPlayerOutput.value) {
-            val vo = appSettings.videoOutputDriver.value.trim()
-            val hwdec = appSettings.videoHardwareDecoder.value.trim()
-            val ao = appSettings.audioOutputDriver.value.trim()
-            if (vo.isNotEmpty()) {
-                options["vo"] = vo
-                source["vo"] = "custom"
-            }
-            if (hwdec.isNotEmpty()) {
-                options["hwdec"] = hwdec
-                source["hwdec"] = "custom"
-            }
-            if (ao.isNotEmpty()) {
-                options["ao"] = ao
-                source["ao"] = "custom"
-            }
+        // 输出驱动字段非空即覆盖档位默认（task m3-mine-settings：自定义输出开关已移除，
+        // 驱动字段无条件生效；空值 = 跟随档位/平台默认）
+        val vo = appSettings.videoOutputDriver.value.trim()
+        val hwdec = appSettings.videoHardwareDecoder.value.trim()
+        val ao = appSettings.audioOutputDriver.value.trim()
+        if (vo.isNotEmpty()) {
+            options["vo"] = vo
+            source["vo"] = "custom"
+        }
+        if (hwdec.isNotEmpty()) {
+            options["hwdec"] = hwdec
+            source["hwdec"] = "custom"
+        }
+        if (ao.isNotEmpty()) {
+            options["ao"] = ao
+            source["ao"] = "custom"
         }
 
         val advancedOptions = parseOptions(appSettings.mpvAdvancedOptions.value)
@@ -97,23 +97,24 @@ object MpvOptionsService {
 
     /** 视频控制器配置（对应 Dart videoControllerConfiguration 的 Android 部分）。 */
     fun videoControllerConfiguration(appSettings: AppSettingsController): MpvVideoConfig {
-        // 默认统一使用 mediacodec_embed / mediacodec（Android 首选软硬解通路，兼容性最好）；
-        // 用户自定义输出驱动开启时才遵循档位/自定义 vo/hwdec。
-        if (appSettings.customPlayerOutput.value) {
-            val vo = appSettings.videoOutputDriver.value.trim()
-            val hwdec = appSettings.videoHardwareDecoder.value.trim()
-            if (vo.isNotEmpty() || hwdec.isNotEmpty()) {
-                return MpvVideoConfig(
-                    vo = vo.ifEmpty { "mediacodec_embed" },
-                    hwdec = hwdec.ifEmpty { "mediacodec" },
-                    enableHardwareAcceleration = appSettings.hardwareDecode.value,
-                    androidAttachSurfaceAfterVideoParameters = true,
-                )
-            }
+        // 兼容模式开：强制 MediaCodec 安全通路（对齐 Dart：compat && Android → mediacodec 对）
+        if (appSettings.playerCompatMode.value) {
+            return MpvVideoConfig(
+                vo = "mediacodec_embed",
+                hwdec = "mediacodec",
+                enableHardwareAcceleration = appSettings.hardwareDecode.value,
+                androidAttachSurfaceAfterVideoParameters = true,
+            )
         }
+        // 兼容模式关（默认，对齐 Dart）：vo = 驱动字段非空 ? 驱动 : 档位 vo（gpu/gpu-next，
+        // gpu-next 由 PlayerEngine 钳为 gpu）；hwdec = 驱动字段非空 ? 驱动 : auto-safe。
+        // gpu 通路下 mpv 渲染管线生效，档位的缩放/去带参数才有实际作用。
+        val vo = appSettings.videoOutputDriver.value.trim()
+            .ifEmpty { profileOptionsForPlatform(appSettings.mpvProfile.value)["vo"] ?: "gpu" }
+        val hwdec = appSettings.videoHardwareDecoder.value.trim().ifEmpty { "auto-safe" }
         return MpvVideoConfig(
-            vo = "mediacodec_embed",
-            hwdec = "mediacodec",
+            vo = vo,
+            hwdec = hwdec,
             enableHardwareAcceleration = appSettings.hardwareDecode.value,
             // Fix Issue #57：安卓全屏后画面卡死 - 延迟 attach 避免 surface race condition
             androidAttachSurfaceAfterVideoParameters = true,

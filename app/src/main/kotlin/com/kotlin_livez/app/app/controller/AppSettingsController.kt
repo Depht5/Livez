@@ -273,9 +273,6 @@ class AppSettingsController(
     private val _bilibiliLoginTip = MutableStateFlow(true)
     val bilibiliLoginTip: StateFlow<Boolean> = _bilibiliLoginTip
 
-    private val _customPlayerOutput = MutableStateFlow(false)
-    val customPlayerOutput: StateFlow<Boolean> = _customPlayerOutput
-
     private val _liveSubtitleEnable = MutableStateFlow(false)
     val liveSubtitleEnable: StateFlow<Boolean> = _liveSubtitleEnable
 
@@ -537,8 +534,6 @@ class AppSettingsController(
         _playerBufferSize.value =
             localStorage.getValue(LocalStorageService.kPlayerBufferSize, 32)
 
-        _customPlayerOutput.value =
-            localStorage.getValue(LocalStorageService.kCustomPlayerOutput, false)
         _mpvProfile.value = localStorage.getValue(LocalStorageService.kMpvProfile, "balanced")
         _mpvAdvancedOptions.value =
             localStorage.getValue(LocalStorageService.kMpvAdvancedOptions, "")
@@ -997,11 +992,6 @@ class AppSettingsController(
     fun setBiliBiliLoginTip(e: Boolean) {
         _bilibiliLoginTip.value = e
         localStorage.setValue(LocalStorageService.kBilibiliLoginTip, e)
-    }
-
-    fun setCustomPlayerOutput(e: Boolean) {
-        _customPlayerOutput.value = e
-        localStorage.setValue(LocalStorageService.kCustomPlayerOutput, e)
     }
 
     fun setLiveSubtitleEnable(e: Boolean) {
