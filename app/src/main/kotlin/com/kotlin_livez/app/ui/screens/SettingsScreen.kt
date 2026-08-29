@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBarsPadding
@@ -30,7 +31,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -91,8 +91,7 @@ fun SettingsScreen(modifier: Modifier = Modifier) {
         modifier = modifier
             .fillMaxSize()
             .background(MaterialTheme.colorScheme.surface)
-            .statusBarsPadding()
-            .verticalScroll(rememberScrollState()),
+            .statusBarsPadding(),
     ) {
         // M3 顶栏：返回 + 标题（task m3-mine-settings）
         Row(
@@ -120,6 +119,15 @@ fun SettingsScreen(modifier: Modifier = Modifier) {
             )
         }
 
+        // 滚动区（顶栏吸顶不随滚动）；底部导航栏避让 + 收尾边距，
+        // 避免最后一张卡片贴到屏幕底缘被误读为"滑不到底"
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .verticalScroll(rememberScrollState())
+                .navigationBarsPadding()
+                .padding(bottom = 16.dp),
+        ) {
         SettingSectionTitle("外观")
         SettingGroupCard {
             SettingSwitchRow(
@@ -280,13 +288,14 @@ fun SettingsScreen(modifier: Modifier = Modifier) {
                 onChange = { settings.setContributionRankEnable(it) },
             )
         }
+        }
     }
 
     editingDriver?.let { key ->
         when (key) {
             "vo" -> SingleChoiceDialog(
                 title = "视频输出驱动",
-                labels = listOf("默认（跟随 mpv 档位）") +
+                labels = listOf("默认") +
                     OtherSettingsController.videoOutputDrivers
                         .filterKeys { it != "mediacodec_embed" }.values.toList(),
                 values = listOf("") +
@@ -302,7 +311,7 @@ fun SettingsScreen(modifier: Modifier = Modifier) {
 
             "hwdec" -> SingleChoiceDialog(
                 title = "视频硬件解码器",
-                labels = listOf("默认（auto-safe）") +
+                labels = listOf("默认") +
                     OtherSettingsController.hardwareDecoder
                         .filterKeys { it != "mediacodec" && it != "mediacodec-copy" }.values.toList(),
                 values = listOf("") +
@@ -318,10 +327,8 @@ fun SettingsScreen(modifier: Modifier = Modifier) {
 
             else -> SingleChoiceDialog(
                 title = "音频输出驱动",
-                labels = listOf("默认（audiotrack,opensles）") +
-                    OtherSettingsController.audioOutputDrivers.values.toList(),
-                values = listOf("") +
-                    OtherSettingsController.audioOutputDrivers.keys.toList(),
+                labels = OtherSettingsController.audioOutputDrivers.values.toList(),
+                values = OtherSettingsController.audioOutputDrivers.keys.toList(),
                 selectedValue = audioOutputDriver,
                 onSelect = { value ->
                     settings.setAudioOutputDriver(value)
@@ -399,14 +406,11 @@ private fun SingleChoiceDialog(
                         modifier = Modifier
                             .fillMaxWidth()
                             // 选中项：主题加深色圆条（药丸）+ 阴影覆盖，整行水平范围可点
-                            .shadow(
-                                elevation = if (selected) 2.dp else 0.dp,
-                                shape = RoundedCornerShape(50),
-                            )
                             .clip(RoundedCornerShape(50))
                             .background(
                                 if (selected) {
-                                    MaterialTheme.colorScheme.primaryContainer
+                                    // 半透明主题色：灰化 + 玻璃质感（task m3-mine-settings 迭代）
+                                    MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.45f)
                                 } else {
                                     Color.Transparent
                                 },
@@ -419,11 +423,7 @@ private fun SingleChoiceDialog(
                         Text(
                             text = label,
                             fontSize = 15.sp,
-                            color = if (selected) {
-                                MaterialTheme.colorScheme.onPrimaryContainer
-                            } else {
-                                MaterialTheme.colorScheme.onSurface
-                            },
+                            color = MaterialTheme.colorScheme.onSurface,
                         )
                     }
                 }
