@@ -295,12 +295,10 @@ fun SettingsScreen(modifier: Modifier = Modifier) {
         when (key) {
             "vo" -> SingleChoiceDialog(
                 title = "视频输出驱动",
-                labels = listOf("默认") +
-                    OtherSettingsController.videoOutputDrivers
-                        .filterKeys { it != "mediacodec_embed" }.values.toList(),
-                values = listOf("") +
-                    OtherSettingsController.videoOutputDrivers
-                        .filterKeys { it != "mediacodec_embed" }.keys.toList(),
+                labels = OtherSettingsController.videoOutputDrivers
+                    .filterKeys { it != "mediacodec_embed" }.values.toList(),
+                values = OtherSettingsController.videoOutputDrivers
+                    .filterKeys { it != "mediacodec_embed" }.keys.toList(),
                 selectedValue = videoOutputDriver,
                 onSelect = { value ->
                     settings.setVideoOutputDriver(value)
@@ -311,12 +309,10 @@ fun SettingsScreen(modifier: Modifier = Modifier) {
 
             "hwdec" -> SingleChoiceDialog(
                 title = "视频硬件解码器",
-                labels = listOf("默认") +
-                    OtherSettingsController.hardwareDecoder
-                        .filterKeys { it != "mediacodec" && it != "mediacodec-copy" }.values.toList(),
-                values = listOf("") +
-                    OtherSettingsController.hardwareDecoder
-                        .filterKeys { it != "mediacodec" && it != "mediacodec-copy" }.keys.toList(),
+                labels = OtherSettingsController.hardwareDecoder
+                    .filterKeys { it != "mediacodec" && it != "mediacodec-copy" }.values.toList(),
+                values = OtherSettingsController.hardwareDecoder
+                    .filterKeys { it != "mediacodec" && it != "mediacodec-copy" }.keys.toList(),
                 selectedValue = videoHardwareDecoder,
                 onSelect = { value ->
                     settings.setVideoHardwareDecoder(value)
