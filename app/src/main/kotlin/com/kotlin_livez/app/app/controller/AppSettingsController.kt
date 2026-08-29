@@ -98,10 +98,6 @@ class AppSettingsController(
     private val _danmuRenderEmoji = MutableStateFlow(true)
     val danmuRenderEmoji: StateFlow<Boolean> = _danmuRenderEmoji
 
-    /** 弹幕气泡（task 08-29-chat-pin-bubble-follow-grid）：聊天框弹幕加主题色圆角背景。 */
-    private val _danmuBubble = MutableStateFlow(false)
-    val danmuBubble: StateFlow<Boolean> = _danmuBubble
-
     private val _danmuShieldEnable = MutableStateFlow(true)
     val danmuShieldEnable: StateFlow<Boolean> = _danmuShieldEnable
 
@@ -437,7 +433,6 @@ class AppSettingsController(
         _danmuEnable.value = localStorage.getValue(LocalStorageService.kDanmuEnable, true)
         _danmuRenderEmoji.value =
             localStorage.getValue(LocalStorageService.kDanmuRenderEmoji, true)
-        _danmuBubble.value = localStorage.getValue(LocalStorageService.kDanmuBubble, false)
         _danmuShieldEnable.value =
             localStorage.getValue(LocalStorageService.kDanmuShieldEnable, true)
         _danmuKeywordShieldEnable.value =
@@ -786,11 +781,6 @@ class AppSettingsController(
     fun setDanmuRenderEmoji(e: Boolean) {
         _danmuRenderEmoji.value = e
         localStorage.setValue(LocalStorageService.kDanmuRenderEmoji, e)
-    }
-
-    fun setDanmuBubble(e: Boolean) {
-        _danmuBubble.value = e
-        localStorage.setValue(LocalStorageService.kDanmuBubble, e)
     }
 
     fun setDanmuStrokeWidth(e: Float) {
