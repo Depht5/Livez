@@ -3,6 +3,7 @@ package com.kotlin_livez.app.ui.components
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -11,9 +12,11 @@ import androidx.compose.material3.Slider
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
@@ -34,8 +37,7 @@ fun SettingSectionTitle(text: String, modifier: Modifier = Modifier) {
         color = MaterialTheme.colorScheme.primary,
         modifier = modifier
             .fillMaxWidth()
-            .background(MaterialTheme.colorScheme.surface)
-            .padding(start = 16.dp, top = 14.dp, end = 16.dp, bottom = 4.dp),
+            .padding(start = 28.dp, top = 14.dp, end = 16.dp, bottom = 4.dp),
     )
 }
 
@@ -50,7 +52,6 @@ fun SettingClickRow(
     Row(
         modifier = modifier
             .fillMaxWidth()
-            .background(MaterialTheme.colorScheme.surface)
             .clickable(onClick = onClick)
             .padding(start = 16.dp, top = 12.dp, end = 16.dp, bottom = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -73,7 +74,6 @@ fun SettingSwitchRow(
     Row(
         modifier = modifier
             .fillMaxWidth()
-            .background(MaterialTheme.colorScheme.surface)
             .padding(start = 16.dp, top = 8.dp, end = 8.dp, bottom = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -106,7 +106,7 @@ fun SettingSliderRow(
     modifier: Modifier = Modifier,
     valueRange: ClosedFloatingPointRange<Float> = 0f..1f,
 ) {
-    Column(modifier = modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surface)) {
+    Column(modifier = modifier.fillMaxWidth()) {
         Row(
             modifier = Modifier.padding(start = 16.dp, top = 12.dp, end = 16.dp, bottom = 4.dp),
             verticalAlignment = Alignment.CenterVertically,
@@ -152,4 +152,25 @@ private fun SettingRowTexts(
             )
         }
     }
+}
+
+
+/**
+ * 分组卡片容器（Material 3 设置页风格，task m3-mine-settings）：圆角 12dp +
+ * surfaceContainerLow 底，水平外边距 12dp。组内行不再自带背景，由本容器托底；
+ * 与页面根底色（surface）形成 M3 分组层次。
+ */
+@Composable
+fun SettingGroupCard(
+    modifier: Modifier = Modifier,
+    content: @Composable ColumnScope.() -> Unit,
+) {
+    Column(
+        modifier = modifier
+            .padding(horizontal = 12.dp)
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .background(MaterialTheme.colorScheme.surfaceContainerLow),
+        content = content,
+    )
 }

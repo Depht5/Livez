@@ -36,6 +36,11 @@ object Router {
         appContext = context.applicationContext
     }
 
+    /** 返回上一页（navController 未注入时忽略；task m3-mine-settings 设置页顶栏返回）。 */
+    fun back() {
+        navController?.popBackStack()
+    }
+
     /** 轻量 Toast（对应 Flutter SmartDialog.showToast / Utils.showToast）。 */
     fun toast(message: String) {
         val ctx = appContext ?: return

@@ -2,33 +2,42 @@ package com.kotlin_livez.app.ui.screens
 
 import android.os.Build
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.kotlin_livez.app.di.ServiceContainer
 import com.kotlin_livez.app.ui.Router
 import com.kotlin_livez.app.ui.components.SettingClickRow
+import com.kotlin_livez.app.ui.components.SettingGroupCard
 import com.kotlin_livez.app.ui.components.SettingSectionTitle
 import com.kotlin_livez.app.ui.components.SettingSwitchRow
+import com.kotlin_livez.app.ui.theme.CustomIcons
 
 /**
  * 设置页（Compose 版）—— 对应 Dart `settings_page.dart`（核心播放/弹幕/画质项），
@@ -47,7 +56,9 @@ fun SettingsScreen(modifier: Modifier = Modifier) {
     val mpvProfile by settings.mpvProfile.collectAsStateWithLifecycle()
     val hardwareDecode by settings.hardwareDecode.collectAsStateWithLifecycle()
     val playerCompatMode by settings.playerCompatMode.collectAsStateWithLifecycle()
-    val customPlayerOutput by settings.customPlayerOutput.collectAsStateWithLifecycle()
+    val videoOutputDriver by settings.videoOutputDriver.collectAsStateWithLifecycle()
+    val videoHardwareDecoder by settings.videoHardwareDecoder.collectAsStateWithLifecycle()
+    val audioOutputDriver by settings.audioOutputDriver.collectAsStateWithLifecycle()
     val allowBackgroundPlayback by settings.allowBackgroundPlayback.collectAsStateWithLifecycle()
     val autoFullScreen by settings.autoFullScreen.collectAsStateWithLifecycle()
     val playerGestureControlEnable by settings.playerGestureControlEnable.collectAsStateWithLifecycle()
@@ -66,139 +77,227 @@ fun SettingsScreen(modifier: Modifier = Modifier) {
     var showMpvProfileDialog by remember { mutableStateOf(false) }
     var showQualityLevelDialog by remember { mutableStateOf(false) }
 
+    // 驱动编辑对话框：null = 关闭；"vo"/"hwdec"/"ao"
+    var editingDriver by remember { mutableStateOf<String?>(null) }
+
     Column(
         modifier = modifier
             .fillMaxSize()
-            .background(MaterialTheme.colorScheme.surfaceContainerLow)
+            .background(MaterialTheme.colorScheme.surface)
             .statusBarsPadding()
             .verticalScroll(rememberScrollState()),
     ) {
-        // ===== 外观（Material 3 动态取色）=====
-        SettingSectionTitle("外观")
+        // M3 顶栏：返回 + 标题（task m3-mine-settings）
+        Row(
+            modifier = Modifier.fillMaxWidth().height(56.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(48.dp)
+                    .clickable { Router.back() },
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    imageVector = CustomIcons.Back,
+                    contentDescription = "返回",
+                    tint = MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier.size(24.dp),
+                )
+            }
+            Text(
+                text = "设置",
+                fontSize = 20.sp,
+                fontWeight = FontWeight.Medium,
+                color = MaterialTheme.colorScheme.onSurface,
+            )
+        }
 
-        SettingSwitchRow(
-            title = "动态取色",
-            subtitle = if (Build.VERSION.SDK_INT >= 31) {
-                "跟随系统壁纸提取主题色；关闭使用 M3 默认色板"
-            } else {
-                "动态取色仅 Android 12+ 支持，当前系统使用 M3 默认色板"
-            },
-            checked = isDynamic,
-            // Android 12 以下无 Monet API，开关禁用（主副标题灰显）
-            enabled = Build.VERSION.SDK_INT >= 31,
-            onChange = { settings.setIsDynamic(it) },
-        )
+        SettingSectionTitle("外观")
+        SettingGroupCard {
+            SettingSwitchRow(
+                title = "动态取色",
+                subtitle = if (Build.VERSION.SDK_INT >= 31) {
+                    "跟随系统壁纸提取主题色；关闭使用 M3 默认色板"
+                } else {
+                    "动态取色仅 Android 12+ 支持，当前系统使用 M3 默认色板"
+                },
+                checked = isDynamic,
+                // Android 12 以下无 Monet API，开关禁用（主副标题灰显）
+                enabled = Build.VERSION.SDK_INT >= 31,
+                onChange = { settings.setIsDynamic(it) },
+            )
+        }
 
         // ===== 播放 =====
         SettingSectionTitle("播放")
+        SettingGroupCard {
+            SettingClickRow(title = "mpv 档位", subtitle = mpvProfile, onClick = {
+                showMpvProfileDialog = true
+            })
 
-        SettingClickRow(title = "mpv 档位", subtitle = mpvProfile, onClick = {
-            showMpvProfileDialog = true
-        })
+            SettingSwitchRow(
+                title = "硬件解码",
+                subtitle = "使用硬件解码加速播放",
+                checked = hardwareDecode,
+                onChange = { settings.setHardwareDecode(it) },
+            )
 
-        SettingSwitchRow(
-            title = "硬件解码",
-            subtitle = "使用硬件解码加速播放",
-            checked = hardwareDecode,
-            onChange = { settings.setHardwareDecode(it) },
-        )
+            SettingSwitchRow(
+                title = "兼容模式",
+                subtitle = "强制 mediacodec_embed 直通渲染（gpu 通路异常时的退路；开启后 mpv 档位渲染参数不生效）",
+                checked = playerCompatMode,
+                onChange = { settings.setPlayerCompatMode(it) },
+            )
 
-        SettingSwitchRow(
-            title = "兼容模式",
-            subtitle = "mediacodec_embed 输出，兼容性优先",
-            checked = playerCompatMode,
-            onChange = { settings.setPlayerCompatMode(it) },
-        )
+            SettingClickRow(
+                title = "视频输出驱动",
+                subtitle = videoOutputDriver.ifEmpty { "默认（跟随 mpv 档位：gpu）" },
+                onClick = { editingDriver = "vo" },
+            )
 
-        SettingSwitchRow(
-            title = "自定义输出",
-            subtitle = "自定义视频/音频输出驱动",
-            checked = customPlayerOutput,
-            onChange = { settings.setCustomPlayerOutput(it) },
-        )
+            SettingClickRow(
+                title = "视频硬件解码器",
+                subtitle = videoHardwareDecoder.ifEmpty { "默认（auto-safe）" },
+                onClick = { editingDriver = "hwdec" },
+            )
 
-        SettingSwitchRow(
-            title = "后台播放",
-            subtitle = "退出直播间后继续播放",
-            checked = allowBackgroundPlayback,
-            onChange = { settings.setAllowBackgroundPlayback(it) },
-        )
+            SettingClickRow(
+                title = "音频输出驱动",
+                subtitle = audioOutputDriver.ifEmpty { "默认（audiotrack,opensles）" },
+                onClick = { editingDriver = "ao" },
+            )
 
-        SettingSwitchRow(
-            title = "自动横屏",
-            subtitle = "进入直播间自动横屏",
-            checked = autoFullScreen,
-            onChange = { settings.setAutoFullScreen(it) },
-        )
+            SettingSwitchRow(
+                title = "后台播放",
+                subtitle = "退出直播间后继续播放",
+                checked = allowBackgroundPlayback,
+                onChange = { settings.setAllowBackgroundPlayback(it) },
+            )
 
-        SettingSwitchRow(
-            title = "手势控制",
-            subtitle = "单击显示控制栏 / 双击播放暂停 / 左右滑动调音量亮度",
-            checked = playerGestureControlEnable,
-            onChange = { settings.setPlayerGestureControlEnable(it) },
-        )
+            SettingSwitchRow(
+                title = "自动横屏",
+                subtitle = "进入直播间自动横屏",
+                checked = autoFullScreen,
+                onChange = { settings.setAutoFullScreen(it) },
+            )
+
+            SettingSwitchRow(
+                title = "手势控制",
+                subtitle = "单击显示控制栏 / 双击全屏 / 左右滑动调音量亮度",
+                checked = playerGestureControlEnable,
+                onChange = { settings.setPlayerGestureControlEnable(it) },
+            )
+        }
 
         // ===== 弹幕 =====
         SettingSectionTitle("弹幕")
+        SettingGroupCard {
+            SettingSwitchRow(
+                title = "启用弹幕",
+                subtitle = "",
+                checked = danmuEnable,
+                onChange = { settings.setDanmuEnable(it) },
+            )
 
-        SettingSwitchRow(
-            title = "启用弹幕",
-            subtitle = "",
-            checked = danmuEnable,
-            onChange = { settings.setDanmuEnable(it) },
-        )
+            SettingSwitchRow(
+                title = "渲染表情",
+                subtitle = "弹幕中的表情图片",
+                checked = danmuRenderEmoji,
+                onChange = { settings.setDanmuRenderEmoji(it) },
+            )
 
-        SettingSwitchRow(
-            title = "渲染表情",
-            subtitle = "弹幕中的表情图片",
-            checked = danmuRenderEmoji,
-            onChange = { settings.setDanmuRenderEmoji(it) },
-        )
+            SettingSwitchRow(
+                title = "弹幕屏蔽",
+                subtitle = "启用屏蔽过滤",
+                checked = danmuShieldEnable,
+                onChange = { settings.setDanmuShieldEnable(it) },
+            )
 
-        SettingSwitchRow(
-            title = "弹幕屏蔽",
-            subtitle = "启用屏蔽过滤",
-            checked = danmuShieldEnable,
-            onChange = { settings.setDanmuShieldEnable(it) },
-        )
+            SettingSwitchRow(
+                title = "关键词屏蔽",
+                subtitle = "",
+                checked = danmuKeywordShieldEnable,
+                onChange = { settings.setDanmuKeywordShieldEnable(it) },
+            )
 
-        SettingSwitchRow(
-            title = "关键词屏蔽",
-            subtitle = "",
-            checked = danmuKeywordShieldEnable,
-            onChange = { settings.setDanmuKeywordShieldEnable(it) },
-        )
+            SettingSwitchRow(
+                title = "用户屏蔽",
+                subtitle = "",
+                checked = danmuUserShieldEnable,
+                onChange = { settings.setDanmuUserShieldEnable(it) },
+            )
 
-        SettingSwitchRow(
-            title = "用户屏蔽",
-            subtitle = "",
-            checked = danmuUserShieldEnable,
-            onChange = { settings.setDanmuUserShieldEnable(it) },
-        )
-
-        SettingClickRow(
-            title = "屏蔽词管理",
-            subtitle = "共 ${shieldList.size} 个",
-            onClick = { Router.toast("屏蔽词管理页将在后续版本接入") },
-        )
+            SettingClickRow(
+                title = "屏蔽词管理",
+                subtitle = "共 ${shieldList.size} 个",
+                onClick = { Router.toast("屏蔽词管理页将在后续版本接入") },
+            )
+        }
 
         // ===== 画质 =====
         SettingSectionTitle("画质")
-
-        SettingClickRow(
-            title = "清晰度档位",
-            subtitle = qualityLevelLabel(qualityLevel),
-            onClick = { showQualityLevelDialog = true },
-        )
+        SettingGroupCard {
+            SettingClickRow(
+                title = "清晰度档位",
+                subtitle = qualityLevelLabel(qualityLevel),
+                onClick = { showQualityLevelDialog = true },
+            )
+        }
 
         // ===== 其他 =====
         SettingSectionTitle("其他")
+        SettingGroupCard {
+            SettingSwitchRow(
+                title = "贡献榜",
+                subtitle = "直播间显示贡献榜",
+                checked = contributionRankEnable,
+                onChange = { settings.setContributionRankEnable(it) },
+            )
+        }
+    }
 
-        SettingSwitchRow(
-            title = "贡献榜",
-            subtitle = "直播间显示贡献榜",
-            checked = contributionRankEnable,
-            onChange = { settings.setContributionRankEnable(it) },
+    editingDriver?.let { key ->
+        val dialogTitle: String
+        val hint: String
+        when (key) {
+            "vo" -> { dialogTitle = "视频输出驱动"; hint = "留空 = 跟随 mpv 档位（gpu）" }
+            "hwdec" -> { dialogTitle = "视频硬件解码器"; hint = "留空 = 默认（auto-safe）" }
+            else -> { dialogTitle = "音频输出驱动"; hint = "留空 = 默认（audiotrack,opensles）" }
+        }
+        var text by remember(key) {
+            mutableStateOf(
+                when (key) {
+                    "vo" -> videoOutputDriver
+                    "hwdec" -> videoHardwareDecoder
+                    else -> audioOutputDriver
+                },
+            )
+        }
+        AlertDialog(
+            onDismissRequest = { editingDriver = null },
+            title = { Text(text = dialogTitle) },
+            text = {
+                OutlinedTextField(
+                    value = text,
+                    onValueChange = { text = it },
+                    placeholder = { Text(text = hint) },
+                    singleLine = true,
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    when (key) {
+                        "vo" -> settings.setVideoOutputDriver(text.trim())
+                        "hwdec" -> settings.setVideoHardwareDecoder(text.trim())
+                        else -> settings.setAudioOutputDriver(text.trim())
+                    }
+                    editingDriver = null
+                }) { Text(text = "确定") }
+            },
+            dismissButton = {
+                TextButton(onClick = { editingDriver = null }) { Text(text = "取消") }
+            },
         )
     }
 

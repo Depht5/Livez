@@ -7,6 +7,7 @@ import androidx.activity.ComponentActivity
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.statusBarsPadding
@@ -23,6 +24,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
@@ -188,15 +190,27 @@ private fun LogCaptureDialog(onDismiss: () -> Unit) {
  */
 @Composable
 private fun MineMenuRow(entry: MineEntry, onClick: () -> Unit) {
-    val displayText =
-        if (entry.subtitle.isNotEmpty()) "${entry.title}　${entry.subtitle}" else entry.title
-    Column(
+    // M3 行样式（task m3-mine-settings）：标题 + 独立副标题（账号状态）两段式 + 右侧 chevron；
+    // 保持平铺列表（用户决策：不做标题与分组）。
+    Row(
         modifier = Modifier
             .fillMaxWidth()
             .background(MaterialTheme.colorScheme.surface)
             .clickable(onClick = onClick)
-            .padding(start = 16.dp, top = 14.dp, end = 16.dp, bottom = 14.dp),
+            .padding(start = 16.dp, top = 12.dp, end = 16.dp, bottom = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text(text = displayText, fontSize = 15.sp, color = MaterialTheme.colorScheme.onSurface)
+        Column(modifier = Modifier.weight(1f)) {
+            Text(text = entry.title, fontSize = 15.sp, color = MaterialTheme.colorScheme.onSurface)
+            if (entry.subtitle.isNotEmpty()) {
+                Text(
+                    text = entry.subtitle,
+                    fontSize = 12.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 2.dp),
+                )
+            }
+        }
+        Text(text = "›", fontSize = 18.sp, color = MaterialTheme.colorScheme.outline)
     }
 }
