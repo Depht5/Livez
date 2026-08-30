@@ -20,6 +20,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
+import androidx.compose.foundation.interaction.DragInteraction
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -78,6 +79,7 @@ import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.kotlin_livez.app.app.Constant
+import com.kotlin_livez.app.app.Log
 import com.kotlin_livez.app.app.Sites
 import com.kotlin_livez.app.app.Utils
 import com.kotlin_livez.app.di.ServiceContainer
@@ -682,6 +684,61 @@ fun LiveRoomScreen(
     // 聊天列表滚动状态提升到页面级：切走再切回聊天 Tab 位置不丢（对齐原 RecyclerView 复用）
     val chatListState = rememberLazyListState()
 
+    /* ---------- 聊天自动跟随（对齐原项目 disableAutoScroll 机制，task 08-30）---------- */
+
+    // 原项目机制：跟随 = 每条消息 postFrame jumpTo(maxScrollExtent)，唯一守卫是
+    // disableAutoScroll（**用户意图标志**——scrollListener 仅在「用户上滑离底」置 true、
+    // 「贴底」置 false；程序化滚动不影响它；列表当前位置不参与门控）。
+    // 原项目全屏时同样卸载竖屏页（build 分支），恢复全靠下一条消息自然贴底——因此这里
+    // 不需要任何锚定代码；此前三轮「位置派生守卫（atBottom）+ 锚定」方案全部失败
+    // （恢复组合时位置不在底 → 守卫自锁），根因分析见前任务 research 文档。
+    var disableAutoScroll by remember { mutableStateOf(false) }
+    var chatUserDragging by remember { mutableStateOf(false) }
+    // 贴底判定（供拖动检测与调试共用；留 1 条容差）
+    val chatAtBottom by remember(chatListState) {
+        derivedStateOf {
+            val layoutInfo = chatListState.layoutInfo
+            val last = layoutInfo.visibleItemsInfo.lastOrNull()
+                ?: return@derivedStateOf true
+            last.index >= layoutInfo.totalItemsCount - 2 &&
+                last.offset + last.size <= layoutInfo.viewportEndOffset + 4
+        }
+    }
+    // 用户拖动检测：DragInteraction 仅来自用户触摸，requestScrollToItem 等程序化滚动
+    // 不会产生——跟随自身不会误触发暂停
+    LaunchedEffect(chatListState) {
+        chatListState.interactionSource.interactions.collect { interaction ->
+            when (interaction) {
+                is DragInteraction.Start -> chatUserDragging = true
+                is DragInteraction.Stop, is DragInteraction.Cancel -> chatUserDragging = false
+                else -> {}
+            }
+        }
+    }
+    // 对齐原 scrollListener：拖动中离底 → 暂停跟随；贴底 → 恢复跟随
+    LaunchedEffect(chatUserDragging, chatAtBottom) {
+        if (chatAtBottom) {
+            if (disableAutoScroll) Log.d("聊天跟随恢复（贴底）")
+            disableAutoScroll = false
+        } else if (chatUserDragging) {
+            if (!disableAutoScroll) Log.d("聊天跟随暂停（用户上滑离底）")
+            disableAutoScroll = true
+        }
+    }
+    // 每条消息到达 → 贴底。门控仅 disableAutoScroll（位置不参与）：全屏/切 Tab 恢复组合
+    // 时本 effect 随之启动执行，下一条消息即贴底——与原项目完全一致。
+    // requestScrollToItem 非挂起、无互斥（弹幕连发不丢滚动），index 取实时布局条数、
+    // clamp 到绝对末尾，等价原项目 jumpTo(maxScrollExtent)。
+    LaunchedEffect(messages) {
+        if (messages.isNotEmpty() && !disableAutoScroll) {
+            chatListState.requestScrollToItem(chatListState.layoutInfo.totalItemsCount - 1)
+            val size = messages.size
+            if (size == 1 || size % 20 == 0) {
+                Log.d("UI 跟随: size=$size disable=$disableAutoScroll atBottom=$chatAtBottom")
+            }
+        }
+    }
+
     /* ---------- 布局：LinearLayout(VERTICAL) 等价 Column ---------- */
 
     // 根因说明（真机反馈：横屏全屏刘海处显示白色边界）：窗口经 SHORT_EDGES 延伸进刘海区后，
@@ -1001,12 +1058,8 @@ fun LiveRoomScreen(
             Box(modifier = Modifier.weight(1f)) {
                 when (selectedKey) {
                     TAB_KEY_CHAT -> {
-                        // 切回聊天 Tab 时滚到底部（对齐原 showTab 的 scrollToPosition）
-                        LaunchedEffect(selectedTabIndex) {
-                            if (messages.isNotEmpty()) {
-                                chatListState.scrollToItem(messages.size - 1)
-                            }
-                        }
+                        // 自动跟随在页面级（chatListState 声明处）：意图守卫 + 每消息贴底；
+                        // 面板恢复组合（全屏退出/切回 Tab）后本分支重组，消息 effect 即刻生效。
                         ChatTabContent(
                             messages = messages,
                             listState = chatListState,
@@ -1190,22 +1243,7 @@ private fun buildTabEntries(siteId: String): List<RoomTab> {
 private fun ChatTabContent(messages: List<LiveMessage>, listState: LazyListState) {
     // 弹幕气泡开关（设置 → 其他；task 08-29-chat-pin-bubble-follow-grid）
     val danmuBubble by ServiceContainer.appSettings.danmuBubble.collectAsStateWithLifecycle()
-    // 是否贴底（留 1 条容差：贴底时新增消息仍视为贴底，继续自动滚）
-    val atBottom by remember(listState) {
-        derivedStateOf {
-            val layoutInfo = listState.layoutInfo
-            val last = layoutInfo.visibleItemsInfo.lastOrNull()
-                ?: return@derivedStateOf true
-            last.index >= layoutInfo.totalItemsCount - 2 &&
-                last.offset + last.size <= layoutInfo.viewportEndOffset + 4
-        }
-    }
-    // 新消息到达且贴底 → 滚到底部（对齐原 disableAutoScroll 语义：上滑暂停、贴底恢复）
-    LaunchedEffect(messages, atBottom) {
-        if (messages.isNotEmpty() && atBottom) {
-            listState.scrollToItem(messages.size - 1)
-        }
-    }
+    // 自动跟随逻辑在页面级（chatListState 声明处）：意图守卫 + 每消息贴底
     LazyColumn(
         state = listState,
         modifier = Modifier.fillMaxSize(),
