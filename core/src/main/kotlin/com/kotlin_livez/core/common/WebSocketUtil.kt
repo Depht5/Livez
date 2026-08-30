@@ -3,6 +3,8 @@ package com.kotlin_livez.core.common
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
@@ -60,15 +62,28 @@ class WebSocketUtil(
     val reconnectDelayMs: Long = 5_000,
     /** 最大重连次数 */
     var maxReconnectTime: Int = 5,
+    /** WebSocket 协议 ping 间隔；用于发现没有 close/failure 回调的半开连接。 */
+    val pingIntervalMs: Long = 30_000,
+    /** 建连后首条业务下行的等待上限；0 表示禁用。 */
+    val firstMessageTimeoutMs: Long = 0,
 ) {
     var status: SocketStatus = SocketStatus.closed
         private set
 
-    private val scope = CoroutineScope(Dispatchers.Default)
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    private val client = OkHttpClient.Builder()
+        .connectTimeout(connectTimeoutMs, TimeUnit.MILLISECONDS)
+        .apply {
+            if (pingIntervalMs > 0) {
+                pingInterval(pingIntervalMs, TimeUnit.MILLISECONDS)
+            }
+        }
+        .build()
     private var webSocket: WebSocket? = null
     private var heartBeatJob: Job? = null
     private var reconnectJob: Job? = null
     private var connectionJob: Job? = null
+    private var firstMessageJob: Job? = null
 
     /** 重连次数 */
     var reconnectTime: Int = 0
@@ -96,10 +111,12 @@ class WebSocketUtil(
         reconnectJob?.cancel()
         reconnectJob = null
         _connecting.set(true)
-        webSocket?.close(1000, null)
+        webSocket?.cancel()
         webSocket = null
         heartBeatJob?.cancel()
         heartBeatJob = null
+        firstMessageJob?.cancel()
+        firstMessageJob = null
 
         val urls = _connectUrls.toMutableList()
         if (shuffleUrls) urls.shuffle()
@@ -112,14 +129,13 @@ class WebSocketUtil(
                 if (_manualClosed.get()) return@launch
                 CoreLog.d("WS 连接：$wsUrl (重连第 $reconnectTime 次)")
                 try {
-                    val client = OkHttpClient.Builder()
-                        .connectTimeout(connectTimeoutMs, TimeUnit.MILLISECONDS)
-                        .build()
                     val requestBuilder = Request.Builder().url(wsUrl)
                     headers?.forEach { (k, v) -> requestBuilder.header(k, v) }
                     val opened = openSocket(client, requestBuilder.build())
-                    if (_manualClosed.get()) {
-                        opened?.close(1000, null)
+                    // 服务端可能在 onOpen 后立刻发 close；监听器会先安排重连，而本协程
+                    // 此时才从 continuation 恢复。不能再把这条已失效 socket 标成 ready。
+                    if (_manualClosed.get() || reconnectJob != null) {
+                        opened.cancel()
                         return@launch
                     }
                     webSocket = opened
@@ -129,9 +145,7 @@ class WebSocketUtil(
                     lastError = e.message ?: "WebSocket connection failed"
                 }
             }
-            if (!_manualClosed.get()) {
-                onError(lastError ?: "WebSocket connection failed")
-            }
+            if (!_manualClosed.get()) onConnectionLost(lastError ?: "WebSocket connection failed")
         }
         connectionJob = job
         job.invokeOnCompletion { _connecting.set(false) }
@@ -139,11 +153,11 @@ class WebSocketUtil(
 
     private suspend fun openSocket(client: OkHttpClient, request: Request): WebSocket =
         suspendCancellableCoroutine { cont ->
-            var established = false
+            val established = AtomicBoolean(false)
+            val terminalCallbackHandled = AtomicBoolean(false)
             val attemptListener = object : WebSocketListener() {
                 override fun onOpen(ws: WebSocket, response: Response) {
-                    if (!established) {
-                        established = true
+                    if (established.compareAndSet(false, true)) {
                         if (cont.isActive) cont.resume(ws)
                     }
                 }
@@ -160,15 +174,29 @@ class WebSocketUtil(
                     onByteMessage?.invoke(bytes.toByteArray())
                 }
 
+                override fun onClosing(ws: WebSocket, code: Int, reason: String) {
+                    CoreLog.d("WS onClosing: code=$code reason=$reason")
+                    // OkHttp 不会替应用自动回复服务端的关闭握手；若只等 onClosed，连接会
+                    // 长时间停在 CLOSING，弹幕无下行且不会触发重连。
+                    ws.close(code, reason)
+                    if (established.get() && terminalCallbackHandled.compareAndSet(false, true)) {
+                        onConnectionLost("closing($code): $reason")
+                    }
+                }
+
                 override fun onClosed(ws: WebSocket, code: Int, reason: String) {
                     CoreLog.d("WS onClosed: code=$code reason=$reason")
-                    if (established) onDone()
+                    if (established.get() && terminalCallbackHandled.compareAndSet(false, true)) {
+                        onConnectionLost("closed($code): $reason")
+                    }
                 }
 
                 override fun onFailure(ws: WebSocket, t: Throwable, response: Response?) {
                     CoreLog.w("WS onFailure: ${t.message}")
-                    if (established) {
-                        onError(t.message ?: "WebSocket failure")
+                    if (established.get()) {
+                        if (terminalCallbackHandled.compareAndSet(false, true)) {
+                            onConnectionLost(t.message ?: "WebSocket failure")
+                        }
                     } else if (cont.isActive) {
                         cont.resumeWithException(t)
                     }
@@ -185,6 +213,7 @@ class WebSocketUtil(
         CoreLog.d("WS 已连接：$url")
         heartBeatJob?.cancel()
         startHeartBeat()
+        startFirstMessageWatchdog()
         onReady?.invoke()
     }
 
@@ -202,7 +231,24 @@ class WebSocketUtil(
     private fun logFirstRx() {
         if (!firstRxLogged) {
             firstRxLogged = true
+            firstMessageJob?.cancel()
+            firstMessageJob = null
             CoreLog.d("WS 首条下行消息到达")
+        }
+    }
+
+    private fun startFirstMessageWatchdog() {
+        firstMessageJob?.cancel()
+        if (firstMessageTimeoutMs <= 0) return
+        firstMessageJob = scope.launch {
+            delay(firstMessageTimeoutMs)
+            if (!firstRxLogged && status == SocketStatus.connected && !_manualClosed.get()) {
+                CoreLog.w("WS 首条下行等待超时：${firstMessageTimeoutMs}ms")
+                val staleSocket = webSocket
+                webSocket = null
+                staleSocket?.cancel()
+                onConnectionLost("first message timeout")
+            }
         }
     }
 
@@ -219,26 +265,39 @@ class WebSocketUtil(
     }
 
     fun close() {
-        _manualClosed.set(true)
+        if (!_manualClosed.compareAndSet(false, true)) return
         status = SocketStatus.closed
         reconnectJob?.cancel()
         reconnectJob = null
         connectionJob?.cancel()
-        webSocket?.close(1000, null)
+        // cancel() 会立即释放 socket；close() 需等待对端关闭握手，退出/切房时可能继续占用线程。
+        webSocket?.cancel()
         webSocket = null
         heartBeatJob?.cancel()
         heartBeatJob = null
+        firstMessageJob?.cancel()
+        firstMessageJob = null
+        client.dispatcher.cancelAll()
+        client.connectionPool.evictAll()
+        client.dispatcher.executorService.shutdown()
+        scope.cancel()
     }
 
-    private fun onError(e: String) {
+    private fun onConnectionLost(reason: String) {
+        if (_manualClosed.get() || reconnectJob != null) return
         status = SocketStatus.failed
-        onClose?.invoke(e)
+        heartBeatJob?.cancel()
+        heartBeatJob = null
+        firstMessageJob?.cancel()
+        firstMessageJob = null
+        webSocket = null
+        CoreLog.w("WS 连接失效：$reason")
+        onReconnect?.invoke()
+        reconnect()
     }
 
     fun onDone() {
-        if (status == SocketStatus.closed) return
-        onReconnect?.invoke()
-        reconnect()
+        onConnectionLost("connection closed")
     }
 
     fun reconnect() {

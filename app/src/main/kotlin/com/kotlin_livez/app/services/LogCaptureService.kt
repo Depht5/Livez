@@ -46,7 +46,15 @@ object LogCaptureService {
                 val clear = Runtime.getRuntime().exec(arrayOf("logcat", "-c"))
                 clear.waitFor()
             }
-            val p = Runtime.getRuntime().exec(arrayOf("logcat", "-v", "threadtime", "*:V"))
+            // 只采集应用诊断标签。原来的 *:V 会把部分厂商解码器“每帧一条”的日志
+            // 同步写入公共存储（本次样本中 C2AllocatorGralloc 约 60 条/秒、占 92%），
+            // 既迅速淹没弹幕连接证据，也会让日志采集本身产生额外 CPU/IO 功耗。
+            val p = Runtime.getRuntime().exec(
+                arrayOf(
+                    "logcat", "-v", "threadtime",
+                    "Livez:V", "CoreLog:V", "LogCapture:V", "LiveApp:V", "AndroidRuntime:E", "*:S",
+                )
+            )
             process = p
             displayPath = target.first
             writerThread = Thread({

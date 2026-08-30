@@ -617,7 +617,7 @@ class DouyinDanmaku : LiveDanmaku() {
         webSocketUtil?.sendBytes(obj.writeToBuffer())
     }
 
-    override suspend fun stop() {
+    override fun stop() {
         synchronized(chatLock) {
             flushChatJob?.cancel()
             flushChatJob = null
@@ -627,6 +627,7 @@ class DouyinDanmaku : LiveDanmaku() {
         onClose = null
         onReady = null
         webSocketUtil?.close()
+        webSocketUtil = null
     }
 
     /** 构建带查询参数的 URL（okhttp 编码，与 Dart Uri.replace(queryParameters:) 对齐）。 */

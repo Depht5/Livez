@@ -59,6 +59,8 @@ class HuyaDanmaku : LiveDanmaku() {
         webSocketUtil = WebSocketUtil(
             url = serverUrl,
             heartBeatTime = heartbeatTime.toLong(),
+            // 正常虎牙进房后会很快返回订阅/在线帧；若完全无下行，视为进房失败并重连。
+            firstMessageTimeoutMs = 15_000,
             onByteMessage = { decodeMessage(it) },
             onReady = {
                 onReady?.invoke()
@@ -109,10 +111,12 @@ class HuyaDanmaku : LiveDanmaku() {
         webSocketUtil?.sendBytes(heartbeatData)
     }
 
-    override suspend fun stop() {
+    override fun stop() {
         onMessage = null
         onClose = null
+        onReady = null
         webSocketUtil?.close()
+        webSocketUtil = null
     }
 
     /**
@@ -132,11 +136,11 @@ class HuyaDanmaku : LiveDanmaku() {
                 stream = TarsInputStream(stream.readBytes(1, false))
                 val wSPushMessage = HYPushMessage()
                 wSPushMessage.readFrom(stream)
-                if (!first1400Logged) {
-                    first1400Logged = true
-                    CoreLog.d("Huya 首条聊天推送 uri=1400")
-                }
                 if (wSPushMessage.uri == 1400) {
+                    if (!first1400Logged) {
+                        first1400Logged = true
+                        CoreLog.d("Huya 首条聊天推送 uri=1400")
+                    }
                     val messageNotice = HYMessage()
                     messageNotice.readFrom(TarsInputStream(wSPushMessage.msg))
                     val uname = messageNotice.userInfo.nickName

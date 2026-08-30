@@ -70,10 +70,12 @@ class DouyuDanmaku : LiveDanmaku() {
         webSocketUtil?.sendBytes(serializeDouyu("type@=mrkl/"))
     }
 
-    override suspend fun stop() {
+    override fun stop() {
         onMessage = null
         onClose = null
+        onReady = null
         webSocketUtil?.close()
+        webSocketUtil = null
     }
 
     /** 解析二进制帧并分派消息（对应 Dart decodeMessage）。 */

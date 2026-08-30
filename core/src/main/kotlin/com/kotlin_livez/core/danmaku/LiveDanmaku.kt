@@ -29,5 +29,5 @@ open class LiveDanmaku {
     open suspend fun start(args: Any? = null) {}
 
     /** 停止接收信息 */
-    open suspend fun stop() {}
+    open fun stop() {}
 }

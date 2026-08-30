@@ -91,10 +91,12 @@ class BiliBiliDanmaku : LiveDanmaku() {
         webSocketUtil?.sendBytes(encodeData("", action = 2))
     }
 
-    override suspend fun stop() {
+    override fun stop() {
         onMessage = null
         onClose = null
+        onReady = null
         webSocketUtil?.close()
+        webSocketUtil = null
     }
 
     /** 编码一帧：16 字节包头 + 载荷（对应 Dart encodeData）。 */

@@ -652,7 +652,7 @@ class LiveRoomController(
         superChatFingerprints.clear()
         clearContributionRankState()
         clearDanmuReplayHistory()
-        scope.launch { liveDanmaku?.stop() }
+        liveDanmaku?.stop()
         loadData()
     }
 
@@ -702,7 +702,10 @@ class LiveRoomController(
             }
             _messages.value = _messages.value + msg
             wsChatReceivedCount++
-            Log.d("聊天入列 #${wsChatReceivedCount} size=${_messages.value.size} user=${msg.userName.take(12)}")
+            // 热门房间逐条写 Log 会触发日志列表复制与 Logcat I/O；仅按百条采样。
+            if (wsChatReceivedCount % 100 == 0) {
+                Log.d("聊天入列 #$wsChatReceivedCount size=${_messages.value.size}")
+            }
             if (!_liveStatus.value || (_isBackground && !allowBackgroundPlayback())) {
                 return
             }
@@ -1275,7 +1278,8 @@ class LiveRoomController(
         reopenPendingFuture()
         // 不在控制器清理中调用全局 player.stop()：正常退出由 leaveRoom 在 pop 前先停流；
         // 非常规 onDispose 则紧接着按会话号释放引擎。这样迟到的旧控制器不会停止新页面。
-        scope.launch { liveDanmaku?.stop() }
+        liveDanmaku?.stop()
+        liveDanmaku = null
         scope.coroutineContext[Job]?.cancel()
     }
 

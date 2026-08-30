@@ -15,6 +15,7 @@ val signingProps = Properties().apply {
     val f = rootProject.file("local.properties")
     if (f.exists()) f.inputStream().use { load(it) }
 }
+val releaseStoreFile = signingProps.getProperty("storeFile", "").takeIf { it.isNotBlank() }
 
 android {
     namespace = "com.kotlin_livez.app"
@@ -45,11 +46,13 @@ android {
     }
 
     signingConfigs {
-        create("release") {
-            storeFile = rootProject.file(signingProps.getProperty("storeFile", ""))
-            storePassword = signingProps.getProperty("storePassword", "")
-            keyAlias = signingProps.getProperty("keyAlias", "")
-            keyPassword = signingProps.getProperty("keyPassword", "")
+        if (releaseStoreFile != null) {
+            create("release") {
+                storeFile = rootProject.file(releaseStoreFile)
+                storePassword = signingProps.getProperty("storePassword", "")
+                keyAlias = signingProps.getProperty("keyAlias", "")
+                keyPassword = signingProps.getProperty("keyPassword", "")
+            }
         }
     }
 
@@ -60,9 +63,7 @@ android {
             applicationIdSuffix = ".debug"
         }
         release {
-            if (signingProps.getProperty("storeFile", "").isNotEmpty()) {
-                signingConfig = signingConfigs.getByName("release")
-            }
+            signingConfigs.findByName("release")?.let { signingConfig = it }
             isMinifyEnabled = false
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
