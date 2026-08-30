@@ -12,12 +12,15 @@ class TarsInputStream(bytes: ByteArray, startPos: Int = 0) {
     private val br = BinaryReader(bytes)
 
     init {
-        if (startPos > 0) br.position = startPos
+        if (startPos < 0 || startPos > bytes.size) {
+            throw TarsDecodeException("start position out of bounds: $startPos/${bytes.size}")
+        }
+        br.position = startPos
     }
 
     /** 跳过指定字节数（不解析）。 */
     fun skipBytes(len: Int) {
-        br.position += len
+        moveForward(len, "skip bytes")
     }
 
     /** 字段头部。 */
@@ -29,21 +32,65 @@ class TarsInputStream(bytes: ByteArray, startPos: Int = 0) {
     companion object {
         /** 字符串最大长度（对应 Dart TarsStruct.TARS_MAX_STRING_LENGTH）。 */
         private const val TARS_MAX_STRING_LENGTH = 100 * 1024 * 1024
+
+        /** 防止畸形容器声明巨量元素后长期占用网络解码线程。 */
+        private const val TARS_MAX_COLLECTION_SIZE = 1_000_000
+
+        /** 防止恶意嵌套结构触发栈溢出。 */
+        private const val TARS_MAX_NESTING_DEPTH = 64
     }
 
     /** 可读总长度。 */
     val length: Int
         get() = br.length
 
+    private val remaining: Int
+        get() = br.length - br.position
+
+    private fun requireAvailable(len: Int, field: String) {
+        if (len < 0 || len > remaining) {
+            throw TarsDecodeException(
+                "$field length out of bounds: len=$len, remaining=$remaining, position=${br.position}",
+            )
+        }
+    }
+
+    private fun moveForward(len: Int, field: String) {
+        requireAvailable(len, field)
+        br.position += len
+    }
+
+    private fun readCollectionSize(
+        field: String,
+        maxSize: Int = TARS_MAX_COLLECTION_SIZE,
+    ): Int {
+        val raw = readLong(0, true)
+        if (raw < 0L || raw > maxSize.toLong()) {
+            throw TarsDecodeException("$field size invalid: $raw")
+        }
+        return raw.toInt()
+    }
+
+    private fun readIntegerBytes(len: Int, field: String): Long {
+        requireAvailable(len, field)
+        return br.readInt(len)
+    }
+
+    private fun readFloatBytes(len: Int, field: String): Double {
+        requireAvailable(len, field)
+        return br.readFloat(len)
+    }
+
     /** 读取一个字段头，返回头消耗的字节数（1 或 2）。 */
     private fun readHead(hd: HeadData): Int {
-        if (br.position >= br.length) {
+        if (remaining <= 0) {
             throw TarsDecodeException("read file to end")
         }
         val b = br.read()
         hd.type = b and 15
         hd.tag = (b and (15 shl 4)) shr 4
         if (hd.tag == 15) {
+            requireAvailable(1, "extended tag")
             hd.tag = br.read()
             return 2
         }
@@ -53,9 +100,11 @@ class TarsInputStream(bytes: ByteArray, startPos: Int = 0) {
     /** 预览下一个字段头（不移动位置），返回头消耗字节数。 */
     private fun peakHead(hd: HeadData): Int {
         val curPos = br.position
-        val len = readHead(hd)
-        br.position = curPos
-        return len
+        return try {
+            readHead(hd)
+        } finally {
+            br.position = curPos
+        }
     }
 
     /**
@@ -63,63 +112,97 @@ class TarsInputStream(bytes: ByteArray, startPos: Int = 0) {
      * 返回是否找到 tag 对应的字段（对应 Dart skipToTag）。
      */
     fun skipToTag(tag: Int): Boolean {
-        try {
-            while (true) {
-                val hd = HeadData()
-                val len = peakHead(hd)
-                if (tag <= hd.tag || hd.type == TarsStructType.STRUCT_END.index) {
-                    return tag == hd.tag
-                }
-                br.position += len
-                skipFieldWithType(hd.type)
+        while (remaining > 0) {
+            val start = br.position
+            val hd = HeadData()
+            val len = peakHead(hd)
+            // STRUCT_END 不是 tag0 的普通字段。空嵌套结构中读 optional tag0
+            // 必须返回“不存在”，否则紧接着会把 STRUCT_END 当整数解码。
+            if (hd.type == TarsStructType.STRUCT_END.index) return false
+            if (tag <= hd.tag) return tag == hd.tag
+            moveForward(len, "field head")
+            skipFieldWithType(hd.type, 0)
+            if (br.position <= start) {
+                throw TarsDecodeException(
+                    "decoder made no progress while seeking tag=$tag at position=$start",
+                )
             }
-        } catch (e: Exception) {
-            return false
         }
+        return false
     }
 
     /** 跳到当前结构的结束标记（STRUCT_END）。 */
     fun skipToStructEnd() {
-        val hd = HeadData()
-        do {
+        skipToStructEnd(0)
+    }
+
+    private fun skipToStructEnd(depth: Int) {
+        if (depth > TARS_MAX_NESTING_DEPTH) {
+            throw TarsDecodeException("Tars struct nesting is too deep: $depth")
+        }
+        while (remaining > 0) {
+            val start = br.position
+            val hd = HeadData()
             readHead(hd)
-            skipFieldWithType(hd.type)
-        } while (hd.type != TarsStructType.STRUCT_END.index)
+            if (hd.type == TarsStructType.STRUCT_END.index) return
+            skipFieldWithType(hd.type, depth)
+            if (br.position <= start) {
+                throw TarsDecodeException(
+                    "decoder made no progress while seeking struct end at position=$start",
+                )
+            }
+        }
+        throw TarsDecodeException("struct end not found")
     }
 
     /** 跳过一个字段（含头）。 */
-    private fun skipField() {
+    private fun skipField(depth: Int) {
         val hd = HeadData()
         readHead(hd)
-        skipFieldWithType(hd.type)
+        skipFieldWithType(hd.type, depth)
     }
 
     /** 按类型跳过字段数据（对应 Dart skipFieldWithType）。 */
-    private fun skipFieldWithType(type: Int) {
+    private fun skipFieldWithType(type: Int, depth: Int) {
+        if (depth > TARS_MAX_NESTING_DEPTH) {
+            throw TarsDecodeException("Tars container nesting is too deep: $depth")
+        }
         when (TarsStructType.fromIndex(type)) {
-            TarsStructType.BYTE -> br.position += 1
-            TarsStructType.SHORT -> br.position += 2
-            TarsStructType.INT -> br.position += 4
-            TarsStructType.LONG -> br.position += 8
-            TarsStructType.FLOAT -> br.position += 4
-            TarsStructType.DOUBLE -> br.position += 8
+            TarsStructType.BYTE -> moveForward(1, "byte")
+            TarsStructType.SHORT -> moveForward(2, "short")
+            TarsStructType.INT -> moveForward(4, "int")
+            TarsStructType.LONG -> moveForward(8, "long")
+            TarsStructType.FLOAT -> moveForward(4, "float")
+            TarsStructType.DOUBLE -> moveForward(8, "double")
             TarsStructType.STRING1 -> {
+                requireAvailable(1, "string1 size")
                 val len = br.read()
-                br.position += len
+                moveForward(len, "string1")
             }
             TarsStructType.STRING4 -> {
-                br.position += br.readInt(4).toInt()
+                requireAvailable(4, "string4 size")
+                val len = br.readInt(4)
+                if (len < 0L || len > TARS_MAX_STRING_LENGTH.toLong()) {
+                    throw TarsDecodeException("string4 size invalid: $len")
+                }
+                moveForward(len.toInt(), "string4")
             }
             TarsStructType.MAP -> {
-                val size = readLong(0, true).toInt()
+                val size = readCollectionSize("map")
+                if (size > remaining / 2) {
+                    throw TarsDecodeException("map size exceeds remaining payload: $size")
+                }
                 for (i in 0 until size * 2) {
-                    skipField()
+                    skipField(depth + 1)
                 }
             }
             TarsStructType.LIST -> {
-                val size = readLong(0, true).toInt()
+                val size = readCollectionSize("list")
+                if (size > remaining) {
+                    throw TarsDecodeException("list size exceeds remaining payload: $size")
+                }
                 for (i in 0 until size) {
-                    skipField()
+                    skipField(depth + 1)
                 }
             }
             TarsStructType.SIMPLE_LIST -> {
@@ -128,10 +211,10 @@ class TarsInputStream(bytes: ByteArray, startPos: Int = 0) {
                 if (hd.type != TarsStructType.BYTE.index) {
                     throw TarsDecodeException("skipField with invalid type, type value: $type,${hd.type}")
                 }
-                val size = readLong(0, true).toInt()
-                br.position += size
+                val size = readCollectionSize("simple list")
+                moveForward(size, "simple list")
             }
-            TarsStructType.STRUCT_BEGIN -> skipToStructEnd()
+            TarsStructType.STRUCT_BEGIN -> skipToStructEnd(depth + 1)
             TarsStructType.STRUCT_END, TarsStructType.ZERO_TAG -> {
                 // 无数据
             }
@@ -149,10 +232,11 @@ class TarsInputStream(bytes: ByteArray, startPos: Int = 0) {
             readHead(hd)
             when (hd.type) {
                 TarsStructType.ZERO_TAG.index -> n = 0
-                TarsStructType.BYTE.index -> n = br.readInt(1)
-                TarsStructType.SHORT.index -> n = br.readInt(2)
-                TarsStructType.INT.index -> n = br.readInt(4)
-                TarsStructType.LONG.index -> n = br.readInt(8)
+                // Tars int1 是有符号字节；头部仍通过 BinaryReader.read() 按无符号读取。
+                TarsStructType.BYTE.index -> n = readIntegerBytes(1, "int1").toByte().toLong()
+                TarsStructType.SHORT.index -> n = readIntegerBytes(2, "int2")
+                TarsStructType.INT.index -> n = readIntegerBytes(4, "int4")
+                TarsStructType.LONG.index -> n = readIntegerBytes(8, "int8")
                 else -> throw TarsDecodeException("type mismatch.")
             }
         } else if (isRequire) {
@@ -185,16 +269,21 @@ class TarsInputStream(bytes: ByteArray, startPos: Int = 0) {
     }
 
     private fun readString1(): String {
+        requireAvailable(1, "string1 size")
         val len = br.read()
+        requireAvailable(len, "string1")
         val ss = br.readBytes(len)
         return String(ss, Charsets.UTF_8)
     }
 
     private fun readString4(): String {
-        val len = br.readInt(4).toInt()
-        if (len > TARS_MAX_STRING_LENGTH || len < 0) {
-            throw TarsDecodeException("string too long: $len")
+        requireAvailable(4, "string4 size")
+        val rawLen = br.readInt(4)
+        if (rawLen > TARS_MAX_STRING_LENGTH || rawLen < 0) {
+            throw TarsDecodeException("string too long: $rawLen")
         }
+        val len = rawLen.toInt()
+        requireAvailable(len, "string4")
         val ss = br.readBytes(len)
         return String(ss, Charsets.UTF_8)
     }
@@ -207,8 +296,8 @@ class TarsInputStream(bytes: ByteArray, startPos: Int = 0) {
             readHead(hd)
             when (hd.type) {
                 TarsStructType.ZERO_TAG.index -> n = 0.0
-                TarsStructType.FLOAT.index -> n = br.readFloat(4)
-                TarsStructType.DOUBLE.index -> n = br.readFloat(8)
+                TarsStructType.FLOAT.index -> n = readFloatBytes(4, "float")
+                TarsStructType.DOUBLE.index -> n = readFloatBytes(8, "double")
                 else -> throw TarsDecodeException("type mismatch.")
             }
         } else if (isRequire) {
@@ -230,19 +319,15 @@ class TarsInputStream(bytes: ByteArray, startPos: Int = 0) {
                     if (hh.type != TarsStructType.BYTE.index) {
                         throw TarsDecodeException("type mismatch, tag: $tag,type:${hd.type},${hh.type}")
                     }
-                    val size = readLong(0, true).toInt()
-                    if (size < 0) {
-                        throw TarsDecodeException("invalid size, tag: $tag, size:$size")
-                    }
-                    lr = try {
-                        br.readBytes(size)
-                    } catch (e: Exception) {
-                        ByteArray(0)
-                    }
+                    val size = readCollectionSize("byte array")
+                    requireAvailable(size, "byte array")
+                    lr = br.readBytes(size)
                 }
                 TarsStructType.LIST.index -> {
-                    val size = readLong(0, true).toInt()
-                    if (size < 0) throw TarsDecodeException("size invalid: $size")
+                    val size = readCollectionSize("byte list")
+                    if (size > remaining) {
+                        throw TarsDecodeException("byte list size exceeds remaining payload: $size")
+                    }
                     lr = ByteArray(size)
                     for (i in 0 until size) {
                         lr[i] = readLong(0, true).toByte()
@@ -257,14 +342,21 @@ class TarsInputStream(bytes: ByteArray, startPos: Int = 0) {
     }
 
     /** 读结构体列表（对应 Tars List<Struct>）。 */
-    fun <T : TarsStruct> readStructList(tag: Int, isRequire: Boolean, factory: () -> T): List<T> {
+    fun <T : TarsStruct> readStructList(
+        tag: Int,
+        isRequire: Boolean,
+        maxSize: Int = TARS_MAX_COLLECTION_SIZE,
+        factory: () -> T,
+    ): List<T> {
         val ls = mutableListOf<T>()
         if (skipToTag(tag)) {
             val hd = HeadData()
             readHead(hd)
             if (hd.type == TarsStructType.LIST.index) {
-                val size = readLong(0, true).toInt()
-                if (size < 0) throw TarsDecodeException("size invalid: $size")
+                val size = readCollectionSize("struct list", maxSize)
+                if (size > remaining) {
+                    throw TarsDecodeException("struct list size exceeds remaining payload: $size")
+                }
                 for (i in 0 until size) {
                     @Suppress("UNCHECKED_CAST")
                     ls.add(readTarsStruct(factory(), 0, true) as T)
@@ -285,8 +377,10 @@ class TarsInputStream(bytes: ByteArray, startPos: Int = 0) {
             val hd = HeadData()
             readHead(hd)
             if (hd.type == TarsStructType.MAP.index) {
-                val size = readLong(0, true).toInt()
-                if (size < 0) throw TarsDecodeException("size invalid:$size")
+                val size = readCollectionSize("string map")
+                if (size > remaining / 2) {
+                    throw TarsDecodeException("string map size exceeds remaining payload: $size")
+                }
                 for (i in 0 until size) {
                     val k = readString(0, true)
                     val v = readString(1, true)
@@ -308,8 +402,10 @@ class TarsInputStream(bytes: ByteArray, startPos: Int = 0) {
             val hd = HeadData()
             readHead(hd)
             if (hd.type == TarsStructType.MAP.index) {
-                val size = readLong(0, true).toInt()
-                if (size < 0) throw TarsDecodeException("size invalid:$size")
+                val size = readCollectionSize("byte array map")
+                if (size > remaining / 2) {
+                    throw TarsDecodeException("byte array map size exceeds remaining payload: $size")
+                }
                 for (i in 0 until size) {
                     val k = readString(0, true)
                     val v = readBytes(1, true)

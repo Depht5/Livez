@@ -6,6 +6,7 @@ import com.kotlin_livez.core.common.HttpClient
 import com.kotlin_livez.core.common.at
 import com.kotlin_livez.core.common.bool
 import com.kotlin_livez.core.common.intv
+import com.kotlin_livez.core.common.longv
 import com.kotlin_livez.core.common.str
 import com.kotlin_livez.core.danmaku.HuyaDanmaku
 import com.kotlin_livez.core.danmaku.HuyaDanmakuArgs
@@ -333,8 +334,8 @@ class HuyaSite : LiveSite() {
         val roomInfoObj = roomInfo["roomInfo"]?.jsonObject
         val tLiveInfo = roomInfoObj?.get("tLiveInfo")?.jsonObject
         val tProfileInfo = roomInfoObj?.get("tProfileInfo")?.jsonObject
-        val topSid = _asPositiveInt(roomInfo["topSid"])
-        val subSid = _asPositiveInt(roomInfo["subSid"])
+        val topSid = _asPositiveLong(roomInfo["topSid"])
+        val subSid = _asPositiveLong(roomInfo["subSid"])
 
         var title = tLiveInfo?.get("sIntroduction").str()
         if (title.isEmpty()) {
@@ -357,7 +358,7 @@ class HuyaSite : LiveSite() {
                         hlsAntiCode = obj["sHlsAntiCode"].str(),
                         streamName = obj["sStreamName"].str(),
                         cdnType = obj["sCdnType"].str(),
-                        presenterUid = if (topSid > 0) topSid.toLong() else subSid.toLong(),
+                        presenterUid = if (topSid > 0) topSid else subSid,
                     )
                 )
             }
@@ -403,9 +404,9 @@ class HuyaSite : LiveSite() {
                 uid = getUid(t = 13, e = 10),
             ),
             danmakuData = HuyaDanmakuArgs(
-                ayyuid = tLiveInfo?.get("lYyid").intv().toLong(),
-                topSid = topSid.toLong(),
-                subSid = subSid.toLong(),
+                ayyuid = tLiveInfo?.get("lYyid").longv(),
+                topSid = topSid,
+                subSid = subSid,
             ),
             url = "https://www.huya.com/$roomId",
             categoryId = categoryId,
@@ -434,12 +435,12 @@ class HuyaSite : LiveSite() {
             .replace("</script>", "")
             .replace(Regex("""function.*?\(.*?\)\.\{[\s\S]*?\}""")) { "\"\"" }
         val jsonObj = HttpClient.json.parseToJsonElement(jsonText).jsonObject
-        var topSid = Regex("""lChannelId":([0-9]+)""").find(resultText)
-            ?.groupValues?.get(1)?.toIntOrNull() ?: 0
-        var subSid = Regex("""lSubChannelId":([0-9]+)""").find(resultText)
-            ?.groupValues?.get(1)?.toIntOrNull() ?: 0
-        topSid = if (topSid > 0) topSid else _firstPositiveIntByKeys(jsonObj, setOf("lchannelid", "channelid"))
-        subSid = if (subSid > 0) subSid else _firstPositiveIntByKeys(jsonObj, setOf("lsubchannelid", "subchannelid"))
+        var topSid = Regex("""lChannelId"\s*:\s*"?([0-9]+)"?""").find(resultText)
+            ?.groupValues?.get(1)?.toLongOrNull() ?: 0L
+        var subSid = Regex("""lSubChannelId"\s*:\s*"?([0-9]+)"?""").find(resultText)
+            ?.groupValues?.get(1)?.toLongOrNull() ?: 0L
+        topSid = if (topSid > 0) topSid else _firstPositiveLongByKeys(jsonObj, setOf("lchannelid", "channelid"))
+        subSid = if (subSid > 0) subSid else _firstPositiveLongByKeys(jsonObj, setOf("lsubchannelid", "subchannelid"))
         val mutable = LinkedHashMap(jsonObj)
         mutable["topSid"] = JsonPrimitive(topSid)
         mutable["subSid"] = JsonPrimitive(subSid)
@@ -549,26 +550,26 @@ class HuyaSite : LiveSite() {
         roomId: String,
         detail: LiveRoomDetail?,
     ): List<LiveSuperChatMessage> {
-        val pidCandidates = LinkedHashSet<Int>()
+        val pidCandidates = LinkedHashSet<Long>()
         val danmakuArgs = detail?.danmakuData as? HuyaDanmakuArgs
         if (danmakuArgs != null) {
             if (danmakuArgs.topSid > 0) {
-                pidCandidates.add(danmakuArgs.topSid.toInt())
+                pidCandidates.add(danmakuArgs.topSid)
             }
             if (danmakuArgs.subSid > 0) {
-                pidCandidates.add(danmakuArgs.subSid.toInt())
+                pidCandidates.add(danmakuArgs.subSid)
             }
         }
         val urlData = detail?.data as? HuyaUrlDataModel
         if (urlData != null) {
             for (line in urlData.lines) {
                 if (line.presenterUid > 0) {
-                    pidCandidates.add(line.presenterUid.toInt())
+                    pidCandidates.add(line.presenterUid)
                 }
             }
         }
 
-        val profileRoomId = roomId.toIntOrNull() ?: 0
+        val profileRoomId = roomId.toLongOrNull() ?: 0L
         if (profileRoomId > 0) {
             pidCandidates.add(profileRoomId)
         }
@@ -577,8 +578,8 @@ class HuyaSite : LiveSite() {
             (pidCandidates.size == 1 && pidCandidates.contains(profileRoomId))
         ) {
             val roomInfo = _getRoomInfo(roomId)
-            val topSid = _asPositiveInt(roomInfo["topSid"])
-            val subSid = _asPositiveInt(roomInfo["subSid"])
+            val topSid = _asPositiveLong(roomInfo["topSid"])
+            val subSid = _asPositiveLong(roomInfo["subSid"])
             if (topSid > 0) {
                 pidCandidates.add(topSid)
             }
@@ -597,7 +598,7 @@ class HuyaSite : LiveSite() {
                 continue
             }
             try {
-                val messages = _fetchHeadLineMessages(pid.toLong())
+                val messages = _fetchHeadLineMessages(pid)
                 if (messages.isNotEmpty()) {
                     return messages
                 }
@@ -610,7 +611,7 @@ class HuyaSite : LiveSite() {
     }
 
     /** 留言板空结果日志防刷（对应 Dart _logHeadlineEmpty）。 */
-    private fun _logHeadlineEmpty(roomId: String, pidCandidates: Set<Int>, reason: String) {
+    private fun _logHeadlineEmpty(roomId: String, pidCandidates: Set<Long>, reason: String) {
         val now = System.currentTimeMillis()
         val last = lastHeadlineEmptyLogAt
         if (last != null && now - last < 60 * 1000) {
@@ -713,49 +714,50 @@ class HuyaSite : LiveSite() {
         return bussTypeNames[bussType]
     }
 
-    /** 取正整数，否则 0（对应 Dart _asPositiveInt）。 */
-    private fun _asPositiveInt(value: Any?): Int {
-        if (value is Int) {
-            return if (value > 0) value else 0
+    /** 取正 64 位整数，否则 0（虎牙频道 ID 已超过 Int 上限）。 */
+    private fun _asPositiveLong(value: Any?): Long {
+        val parsed = when (value) {
+            is JsonPrimitive -> value.content.trim().toLongOrNull()
+            is Number -> value.toLong()
+            else -> value?.toString()?.trim()?.toLongOrNull()
         }
-        val parsed = value?.toString()?.trim()?.toIntOrNull()
-        return if (parsed != null && parsed > 0) parsed else 0
+        return if (parsed != null && parsed > 0L) parsed else 0L
     }
 
-    /** 递归查找指定键（忽略大小写）的正整数值（对应 Dart _firstPositiveIntByKeys）。 */
-    private fun _firstPositiveIntByKeys(
+    /** 递归查找指定键（忽略大小写）的正 64 位整数值。 */
+    private fun _firstPositiveLongByKeys(
         source: JsonElement?,
         keys: Set<String>,
         depth: Int = 0,
-    ): Int {
+    ): Long {
         if (source == null || source is JsonNull || depth > 8) {
-            return 0
+            return 0L
         }
         if (source is JsonObject) {
             for ((k, v) in source) {
                 val key = k.lowercase()
                 if (key in keys) {
-                    val value = _asPositiveInt(v)
+                    val value = _asPositiveLong(v)
                     if (value > 0) {
                         return value
                     }
                 }
             }
             for (v in source.values) {
-                val result = _firstPositiveIntByKeys(v, keys, depth + 1)
+                val result = _firstPositiveLongByKeys(v, keys, depth + 1)
                 if (result > 0) {
                     return result
                 }
             }
         } else if (source is JsonArray) {
             for (item in source) {
-                val result = _firstPositiveIntByKeys(item, keys, depth + 1)
+                val result = _firstPositiveLongByKeys(item, keys, depth + 1)
                 if (result > 0) {
                     return result
                 }
             }
         }
-        return 0
+        return 0L
     }
 
     /**

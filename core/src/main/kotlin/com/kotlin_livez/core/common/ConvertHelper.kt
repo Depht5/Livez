@@ -35,6 +35,15 @@ fun JsonElement?.str(): String {
 fun JsonElement?.intv(): Int =
     (this as? JsonPrimitive)?.content?.trim()?.toIntOrNull() ?: 0
 
+/**
+ * 取 64 位整型：带容错，解析失败返回 0。
+ *
+ * 直播平台的用户/频道 ID 已普遍超过 Int 上限，不能先经过 [intv] 再转 Long，
+ * 否则解析失败会静默变成 0，网络层仍可能返回“注册成功”但不会订阅到目标房间。
+ */
+fun JsonElement?.longv(): Long =
+    (this as? JsonPrimitive)?.content?.trim()?.toLongOrNull() ?: 0L
+
 /** 取布尔：容错解析。 */
 fun JsonElement?.bool(): Boolean {
     val content = (this as? JsonPrimitive)?.content ?: return false

@@ -37,6 +37,14 @@ class ConvertHelperTest {
     }
 
     @Test
+    fun longv_preservesPlatformIdsAboveIntRange() {
+        assertEquals(35_184_606_802_579L, JsonPrimitive("35184606802579").longv())
+        assertEquals(2_272_348_727L, JsonPrimitive(2_272_348_727L).longv())
+        assertEquals(0L, JsonPrimitive("invalid").longv())
+        assertEquals(0L, JsonNull.longv())
+    }
+
+    @Test
     fun bool_parsesVariants() {
         assertEquals(true, JsonPrimitive("true").bool())
         assertEquals(true, JsonPrimitive("1").bool())

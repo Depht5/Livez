@@ -5,8 +5,10 @@ import com.kotlin_livez.core.common.WebSocketUtil
 import com.kotlin_livez.core.model.LiveMessage
 import com.kotlin_livez.core.model.LiveMessageColor
 import com.kotlin_livez.core.model.LiveMessageType
+import com.kotlin_livez.core.model.tars.HYMsgItem
 import com.kotlin_livez.core.model.tars.HYMessage
 import com.kotlin_livez.core.model.tars.HYPushMessage
+import com.kotlin_livez.core.model.tars.HYPushMessageV2
 import com.kotlin_livez.core.model.tars.TarsInputStream
 import com.kotlin_livez.core.model.tars.TarsOutputStream
 
@@ -44,6 +46,10 @@ class HuyaDanmaku : LiveDanmaku() {
     // 每次连接仅记录一次的首帧/首推日志标志（start 时重置）
     private var firstPushLogged = false
     private var first1400Logged = false
+    private var emptyChatDroppedLogged = false
+    private val loggedCommandTypes = mutableSetOf<Long>()
+    private var decodeErrorWindowStartedAt = 0L
+    private var decodeErrorCount = 0
     private lateinit var danmakuArgs: HuyaDanmakuArgs
 
     /** 心跳数据：Dart 端 base64.decode("ABQdAAwsNgBM") 的预编码字节，原样发送。 */
@@ -52,19 +58,36 @@ class HuyaDanmaku : LiveDanmaku() {
     )
 
     override suspend fun start(arg: Any?) {
-        danmakuArgs = arg as? HuyaDanmakuArgs ?: return
+        val rawArgs = arg as? HuyaDanmakuArgs ?: reportInvalidArgs("missing HuyaDanmakuArgs")
+        val tid = if (rawArgs.topSid > 0L) rawArgs.topSid else rawArgs.subSid
+        val sid = if (rawArgs.subSid > 0L) rawArgs.subSid else tid
+        if (rawArgs.ayyuid <= 0L || tid <= 0L || sid <= 0L) {
+            reportInvalidArgs(rawArgs.toString())
+        }
+        danmakuArgs = rawArgs.copy(topSid = tid, subSid = sid)
         CoreLog.d("HuyaDanmaku start: $danmakuArgs")
         firstPushLogged = false
         first1400Logged = false
+        emptyChatDroppedLogged = false
+        loggedCommandTypes.clear()
+        decodeErrorWindowStartedAt = 0L
+        decodeErrorCount = 0
+        webSocketUtil?.close()
         webSocketUtil = WebSocketUtil(
             url = serverUrl,
             heartBeatTime = heartbeatTime.toLong(),
-            // 正常虎牙进房后会很快返回订阅/在线帧；若完全无下行，视为进房失败并重连。
-            firstMessageTimeoutMs = 15_000,
+            // type 2 注册响应和 type 21 心跳 ACK 即使进房参数错误也会返回，不能视为
+            // 弹幕订阅健康。只有 type 7/22 业务推送才能解除 watchdog/重置重连计数。
+            autoMarkHealthyOnMessage = false,
+            firstMessageTimeoutMs = 75_000,
+            messageIdleTimeoutMs = 150_000,
             onByteMessage = { decodeMessage(it) },
             onReady = {
-                onReady?.invoke()
-                joinRoom()
+                if (joinRoom()) {
+                    onReady?.invoke()
+                } else {
+                    webSocketUtil?.forceReconnect("Huya join packet send failed")
+                }
             },
             onHeartBeat = { heartbeat() },
             onReconnect = { onClose?.invoke("与服务器断开连接，正在尝试重连") },
@@ -73,12 +96,22 @@ class HuyaDanmaku : LiveDanmaku() {
         webSocketUtil?.connect()
     }
 
-    /** 进房（对应 Dart joinRoom，tid 与 sid 均使用 topSid）。 */
-    private fun joinRoom() {
-        val joinData = getJoinData(danmakuArgs.ayyuid, danmakuArgs.topSid, danmakuArgs.topSid)
-        CoreLog.d("Huya joinRoom: ayyuid=${danmakuArgs.ayyuid} topSid=${danmakuArgs.topSid} subSid=${danmakuArgs.subSid} bytes=${joinData.size}")
-        webSocketUtil?.sendBytes(joinData)
+    private fun reportInvalidArgs(detail: String): Nothing {
+        CoreLog.w("Huya 弹幕参数无效，拒绝发送空注册包: $detail")
+        onClose?.invoke("虎牙弹幕参数无效，请刷新直播间")
+        throw IllegalArgumentException("Invalid Huya danmaku args: $detail")
     }
+
+    /** 进房：tag4 使用顶级频道 tid，tag5 使用实际子频道 sid。 */
+    private fun joinRoom(): Boolean {
+        val joinData = buildJoinData(danmakuArgs)
+        CoreLog.d("Huya joinRoom: ayyuid=${danmakuArgs.ayyuid} topSid=${danmakuArgs.topSid} subSid=${danmakuArgs.subSid} bytes=${joinData.size}")
+        return joinData.isNotEmpty() && webSocketUtil?.sendBytes(joinData) == true
+    }
+
+    /** 暴露给同模块测试，确保超过 Int 上限的 ID 仍按 int64 原值编码。 */
+    internal fun buildJoinData(args: HuyaDanmakuArgs): ByteArray =
+        getJoinData(args.ayyuid, args.topSid, args.subSid)
 
     /**
      * 构造进房数据（对应 Dart getJoinData）。
@@ -108,7 +141,10 @@ class HuyaDanmaku : LiveDanmaku() {
     }
 
     override fun heartbeat() {
-        webSocketUtil?.sendBytes(heartbeatData)
+        val socket = webSocketUtil ?: return
+        if (!socket.sendBytes(heartbeatData)) {
+            socket.forceReconnect("Huya heartbeat send failed")
+        }
     }
 
     override fun stop() {
@@ -124,7 +160,14 @@ class HuyaDanmaku : LiveDanmaku() {
      * 外层：{type=0, payload=1}；type==7 时 payload 为 HYPushMessage（Tars 结构）。
      * 其中 uri==1400 为聊天弹幕，uri==8006 为在线人数。
      */
-    private fun decodeMessage(data: ByteArray) {
+    internal fun decodeMessage(data: ByteArray) {
+        if (data.size > 4 * 1024 * 1024) {
+            logDecodeError(
+                "Huya 弹幕帧超过 4MiB 应用上限: bytes=${data.size}",
+                IllegalArgumentException("oversized Huya WebSocket frame"),
+            )
+            return
+        }
         try {
             if (!firstPushLogged) {
                 firstPushLogged = true
@@ -132,48 +175,116 @@ class HuyaDanmaku : LiveDanmaku() {
             }
             var stream = TarsInputStream(data)
             val type = stream.readLong(0, false)
-            if (type == 7L) {
-                stream = TarsInputStream(stream.readBytes(1, false))
-                val wSPushMessage = HYPushMessage()
-                wSPushMessage.readFrom(stream)
-                if (wSPushMessage.uri == 1400) {
-                    if (!first1400Logged) {
-                        first1400Logged = true
-                        CoreLog.d("Huya 首条聊天推送 uri=1400")
+            when (type) {
+                7L -> {
+                    stream = TarsInputStream(stream.readBytes(1, true))
+                    val push = HYPushMessage().apply { readFrom(stream) }
+                    // 容器完整即证明房间业务订阅在推流；URI 是否为客户端已支持类型
+                    // 只决定是否产出 UI 消息，不能将合法的未知 URI 误判为僵尸连接。
+                    webSocketUtil?.markMessageHealthy()
+                    decodePushItem(push.uri, push.msg)
+                }
+
+                22L -> {
+                    stream = TarsInputStream(stream.readBytes(1, true))
+                    val push = HYPushMessageV2().apply { readFrom(stream) }
+                    webSocketUtil?.markMessageHealthy()
+                    for (item: HYMsgItem in push.msgItems) {
+                        try {
+                            decodePushItem(item.uri, item.msg)
+                        } catch (e: Exception) {
+                            // type 22 是批量帧：单条损坏不应丢掉整批其余弹幕。
+                            logDecodeError(
+                                "Huya 批量推送子项解析失败: uri=${item.uri} bytes=${item.msg.size}",
+                                e,
+                            )
+                        }
                     }
-                    val messageNotice = HYMessage()
-                    messageNotice.readFrom(TarsInputStream(wSPushMessage.msg))
-                    val uname = messageNotice.userInfo.nickName
-                    val content = messageNotice.content
-                    val color = messageNotice.bulletFormat.fontColor
-                    onMessage?.invoke(
-                        LiveMessage(
-                            type = LiveMessageType.chat,
-                            color = if (color <= 0) {
-                                LiveMessageColor.white
-                            } else {
-                                LiveMessageColor.numberToColor(color)
-                            },
-                            message = content,
-                            userName = uname,
-                        )
-                    )
-                } else if (wSPushMessage.uri == 8006) {
-                    val s = TarsInputStream(wSPushMessage.msg)
-                    val online = s.readLong(0, false).toInt()
-                    onMessage?.invoke(
-                        LiveMessage(
-                            type = LiveMessageType.online,
-                            data = online,
-                            color = LiveMessageColor.white,
-                            message = "",
-                            userName = "",
-                        )
-                    )
+                }
+
+                else -> {
+                    if (loggedCommandTypes.size < 16 && loggedCommandTypes.add(type)) {
+                        CoreLog.d("Huya 控制帧 commandType=$type")
+                    }
                 }
             }
         } catch (e: Exception) {
-            CoreLog.error(e)
+            // 解析失败必须返回 OkHttp reader 线程；TarsInputStream 自身也保证游标单调前进，
+            // 避免畸形帧形成无法被 close() 中断的永久忙循环。
+            logDecodeError("Huya 弹幕帧解析失败: bytes=${data.size}", e)
         }
+    }
+
+    /** 坏 schema 若持续到达，限制堆栈格式化/logcat I/O，避免日志本身变成功耗源。 */
+    private fun logDecodeError(message: String, error: Exception) {
+        val now = System.currentTimeMillis()
+        if (decodeErrorWindowStartedAt == 0L || now - decodeErrorWindowStartedAt >= 60_000L) {
+            if (decodeErrorCount > 1) {
+                CoreLog.w("Huya 上一解析错误窗口已抑制 ${decodeErrorCount - 1} 条重复日志")
+            }
+            decodeErrorWindowStartedAt = now
+            decodeErrorCount = 1
+            CoreLog.e(message, error)
+        } else {
+            decodeErrorCount++
+            if (decodeErrorCount == 2) {
+                CoreLog.w("Huya 持续解析错误，同一 60s 窗口的后续堆栈已抑制")
+            }
+        }
+    }
+
+    private fun decodePushItem(uri: Long, payload: ByteArray) {
+        when (uri) {
+            1400L -> {
+                if (!first1400Logged) {
+                    first1400Logged = true
+                    CoreLog.d("Huya 首条聊天推送 uri=1400")
+                }
+                val messageNotice = HYMessage().apply {
+                    readFrom(TarsInputStream(payload))
+                }
+                if (!hasVisibleText(messageNotice.content)) {
+                    if (!emptyChatDroppedLogged) {
+                        emptyChatDroppedLogged = true
+                        CoreLog.w("Huya 已丢弃空白/零宽聊天推送")
+                    }
+                    return
+                }
+                val color = messageNotice.bulletFormat.fontColor
+                onMessage?.invoke(
+                    LiveMessage(
+                        type = LiveMessageType.chat,
+                        color = if (color <= 0) {
+                            LiveMessageColor.white
+                        } else {
+                            LiveMessageColor.numberToColor(color)
+                        },
+                        message = messageNotice.content,
+                        userName = messageNotice.userInfo.nickName,
+                    ),
+                )
+            }
+
+            8006L -> {
+                val online = TarsInputStream(payload).readLong(0, false)
+                onMessage?.invoke(
+                    LiveMessage(
+                        type = LiveMessageType.online,
+                        data = online,
+                        color = LiveMessageColor.white,
+                        message = "",
+                        userName = "",
+                    ),
+                )
+            }
+
+            // 6111/6892 等其他合法房间事件暂无 UI 模型，忽略内容即可。
+            else -> Unit
+        }
+    }
+
+    private fun hasVisibleText(text: String): Boolean = text.any { char ->
+        !char.isWhitespace() &&
+            char != '\u200B' && char != '\u200C' && char != '\u200D' && char != '\u2060' && char != '\uFEFF'
     }
 }

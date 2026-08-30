@@ -23,15 +23,18 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.time.Instant
 import java.util.LinkedList
+import java.util.concurrent.atomic.AtomicBoolean
+
+/** 突发批量弹幕的主线程排队上限；满载时宁可丢弃新消息，也不能拖垮整个应用。 */
+private const val DANMAKU_CALLBACK_BUFFER_SIZE = 2_048
 
 /**
  * 直播间控制器 —— 对应 Dart `LiveRoomController`
@@ -164,8 +167,6 @@ class LiveRoomController(
     private val recentDanmuFingerprints = LinkedList<String>()
     private val recentDanmuCounts = HashMap<String, Int>()
     private var recentDanmuEventsSincePrune = 0
-    private val danmuFingerprintMutex = Mutex()
-
     /** 累计收到的 chat 消息数（诊断日志采样用；诊断日志，定位后移除）。 */
     private var wsChatReceivedCount = 0
 
@@ -195,7 +196,9 @@ class LiveRoomController(
 
     private var superChatRefreshJob: Job? = null
     private var onlineRefreshJob: Job? = null
+    private var onlineRefreshRequestJob: Job? = null
     private var liveDurationJob: Job? = null
+    private var danmakuCallbackJob: Job? = null
     private var autoExitTickerJob: Job? = null
     private var autoExitDeadlineJob: Job? = null
     private var countdownJob: Job? = null
@@ -233,15 +236,28 @@ class LiveRoomController(
         val targetSite = site ?: return
         val targetRoomId = roomId
         scope.launch {
+            var candidateDanmaku: LiveDanmaku? = null
+            var keepCandidate = false
             try {
+                // 进入 Main scope 时已经过期的排队任务不得先 stop 新轮已接管的实例。
+                if (!isCurrentLoad(restarted)) return@launch
                 _loadError.value = false
                 _error.value = null
                 errorStackTrace = null
-                liveDanmaku?.stop()
-                if (!isCurrentLoad(restarted)) return@launch
+                cancelRoomBoundJobs()
+                // 先摘除所有权再 stop，防止另一轮 load 将迟到的旧实例当成当前实例。
+                liveDanmaku?.also {
+                    liveDanmaku = null
+                    runCatching { it.stop() }
+                        .onFailure { error -> Log.e("重载时停止旧弹幕失败: $error") }
+                }
                 val danmaku = withContext(Dispatchers.IO) { targetSite.liveSite.danmaku() }
+                candidateDanmaku = danmaku
+                // danmaku() 在 IO 线程执行。两轮加载若反序恢复，旧轮绝不能
+                // 覆盖新轮的 liveDanmaku；否则新 socket 无回调且切房时无法被 stop。
+                if (!isCurrentLoad(restarted)) return@launch
                 liveDanmaku = danmaku
-                clearDanmakuReplayHistory()
+                clearDanmakuSessionState()
                 addSysMsg("正在读取直播间信息")
                 val loadedDetail = withContext(Dispatchers.IO) {
                     targetSite.liveSite.roomDetail(targetRoomId)
@@ -251,6 +267,7 @@ class LiveRoomController(
 
                 // 抖音 WebRid 纠偏（对应 Dart 1.6.0 前的收藏兼容处理）
                 reconcileRoomId(targetSite, loadedDetail)
+                if (!isCurrentLoad(restarted)) return@launch
 
                 appSettings.saveLastLiveRoom(siteId = targetSite.id, roomId = roomId)
                 getSuperChatMessage(silent = true)
@@ -260,11 +277,14 @@ class LiveRoomController(
                 if (!isCurrentLoad(restarted)) return@launch
 
                 addHistory()
-                _followed.value = dbService.getFollowExist("${targetSite.id}_$roomId")
+                val followed = dbService.getFollowExist("${targetSite.id}_$roomId")
+                // Room 查询是挂起点；只有在恢复后仍持有当前代际才能提交 UI/定时器状态。
+                if (!isCurrentLoad(restarted)) return@launch
+                _followed.value = followed
                 _online.value = loadedDetail.online
                 _liveStatus.value = loadedDetail.status || loadedDetail.isRecord
-                restartSuperChatRefreshTimer()
-                restartOnlineRefreshTimer()
+                restartSuperChatRefreshTimer(restarted)
+                restartOnlineRefreshTimer(restarted)
                 if (_liveStatus.value) {
                     getPlayQualites()
                 }
@@ -273,15 +293,29 @@ class LiveRoomController(
                 }
                 addSysMsg("正在连接弹幕服务器")
                 if (!isCurrentLoad(restarted)) return@launch
-                initDanmaku()
+                initDanmaku(danmaku, restarted)
                 danmaku.start(loadedDetail.danmakuData)
-                startLiveDurationTimer()
+                if (!isCurrentLoad(restarted) || liveDanmaku !== danmaku) return@launch
+                keepCandidate = true
+                startLiveDurationTimer(restarted)
             } catch (e: Exception) {
                 Log.logPrint(e)
                 if (!isCurrentLoad(restarted)) return@launch
                 _loadError.value = true
                 _error.value = e
                 errorStackTrace = e.stackTraceToString()
+            } finally {
+                if (!keepCandidate) {
+                    candidateDanmaku?.let { stale ->
+                        // stop 必须针对局部实例；不能误停已经接管字段的新一轮连接。
+                        runCatching { stale.stop() }
+                            .onFailure { Log.e("停止过期弹幕实例失败: $it") }
+                        if (liveDanmaku === stale) liveDanmaku = null
+                    }
+                    // 当前轮启动失败后不应留下 SC/在线刷新等空转任务；旧轮则绝不能
+                    // 取消新房间刚创建的任务。
+                    if (isCurrentLoad(restarted)) cancelRoomBoundJobs()
+                }
             }
         }
     }
@@ -647,25 +681,60 @@ class LiveRoomController(
     fun refreshRoom() {
         Log.d("refreshRoom")
         if (_roomDisposed) return
+        cancelRoomBoundJobs()
         // 清空 SC/贡献榜/去重状态（对应 Dart refreshRoom）
         _superChats.value = emptyList()
         superChatFingerprints.clear()
         clearContributionRankState()
-        clearDanmuReplayHistory()
-        liveDanmaku?.stop()
+        clearDanmakuSessionState()
+        liveDanmaku?.also {
+            liveDanmaku = null
+            runCatching { it.stop() }.onFailure { error -> Log.e("刷新时停止弹幕失败: $error") }
+        }
         loadData()
     }
 
     /* ---------- 弹幕 ---------- */
 
     /** 初始化弹幕回调（对应 Dart initDanmau）。 */
-    private fun initDanmaku() {
-        val danmaku = liveDanmaku ?: return
+    private fun initDanmaku(danmaku: LiveDanmaku, loadGeneration: Int) {
         Log.d("弹幕回调接线")
-        danmaku.onMessage = { msg -> onWSMessage(msg) }
-        danmaku.onClose = { msg -> onWSClose(msg) }
-        danmaku.onReady = { onWSReady() }
+        danmakuCallbackJob?.cancel()
+        val callbackJob = SupervisorJob(scope.coroutineContext[Job])
+        danmakuCallbackJob = callbackJob
+        val callbackScope = CoroutineScope(callbackJob + Dispatchers.Main.immediate)
+        val messageQueue = Channel<LiveMessage>(DANMAKU_CALLBACK_BUFFER_SIZE)
+        val overflowLogged = AtomicBoolean(false)
+        callbackJob.invokeOnCompletion { messageQueue.close() }
+        // 单消费者保持弹幕顺序，同时避免 type22 批量帧为每条消息各建一个协程。
+        callbackScope.launch {
+            for (msg in messageQueue) {
+                if (!isCurrentDanmaku(loadGeneration, danmaku)) break
+                onWSMessage(msg)
+            }
+        }
+        // OkHttp 在 reader 线程回调。统一切回控制器的 Main scope，并同时校验加载代际和
+        // danmaku 实例身份；这样已经进入回调的旧连接也不能在切房后污染新房间状态。
+        danmaku.onMessage = { msg ->
+            val result = messageQueue.trySend(msg)
+            if (result.isFailure && callbackJob.isActive && overflowLogged.compareAndSet(false, true)) {
+                Log.w("弹幕回调队列已满，开始丢弃突发消息以保护主线程")
+            }
+        }
+        danmaku.onClose = { msg ->
+            callbackScope.launch {
+                if (isCurrentDanmaku(loadGeneration, danmaku)) onWSClose(msg)
+            }
+        }
+        danmaku.onReady = {
+            callbackScope.launch {
+                if (isCurrentDanmaku(loadGeneration, danmaku)) onWSReady()
+            }
+        }
     }
+
+    private fun isCurrentDanmaku(loadGeneration: Int, danmaku: LiveDanmaku): Boolean =
+        isCurrentLoad(loadGeneration) && liveDanmaku === danmaku
 
     /** 接收 WebSocket 消息（对应 Dart onWSMessage）。 */
     fun onWSMessage(raw: LiveMessage) {
@@ -850,18 +919,20 @@ class LiveRoomController(
         recentDanmuEventsSincePrune = recentDanmuFingerprints.size
     }
 
-    private fun clearDanmuReplayHistory() {
+    /** 房间级弹幕状态不得跨房间/刷新继承，否则新房相同文案会被误判重复。 */
+    private fun clearDanmakuSessionState() {
         danmakuReplayHistory.clear()
-    }
-
-    private fun clearDanmakuReplayHistory() {
-        danmakuReplayHistory.clear()
+        recentDanmuFingerprints.clear()
+        recentDanmuCounts.clear()
+        recentDanmuEventsSincePrune = 0
+        wsChatReceivedCount = 0
     }
 
     /* ---------- 超级留言（SC） ---------- */
 
     /** 读取 SC（对应 Dart getSuperChatMessage）。 */
     fun getSuperChatMessage(silent: Boolean = false) {
+        val loadGeneration = _loadGeneration
         val roomDetail = _detail.value ?: return
         val currentSite = site ?: return
         scope.launch {
@@ -869,6 +940,7 @@ class LiveRoomController(
                 val sc = withContext(Dispatchers.IO) {
                     currentSite.liveSite.superChatMessage(roomDetail.roomId, roomDetail)
                 }
+                if (!isCurrentLoad(loadGeneration)) return@launch
                 val filtered = sc.filter { item ->
                     !isUserShielded(item.userName) &&
                         !isTempMutedUser(item.userName) &&
@@ -878,7 +950,7 @@ class LiveRoomController(
                 removeSuperChats()
             } catch (e: Exception) {
                 Log.logPrint(e)
-                if (!silent) addSysMsg("SC 读取失败")
+                if (!silent && isCurrentLoad(loadGeneration)) addSysMsg("SC 读取失败")
             }
         }
     }
@@ -926,12 +998,28 @@ class LiveRoomController(
         }
     }
 
-    private fun restartSuperChatRefreshTimer() {
+    /** 取消所有绑定于旧房间的定时/请求任务。 */
+    private fun cancelRoomBoundJobs() {
+        superChatRefreshJob?.cancel()
+        superChatRefreshJob = null
+        onlineRefreshJob?.cancel()
+        onlineRefreshJob = null
+        onlineRefreshRequestJob?.cancel()
+        onlineRefreshRequestJob = null
+        liveDurationJob?.cancel()
+        liveDurationJob = null
+        danmakuCallbackJob?.cancel()
+        danmakuCallbackJob = null
+        _onlineRefreshInFlight = false
+        onlineStatusRefreshPolicy.reset()
+    }
+
+    private fun restartSuperChatRefreshTimer(loadGeneration: Int) {
         superChatRefreshJob?.cancel()
         superChatRefreshJob = scope.launch {
-            while (true) {
+            while (isCurrentLoad(loadGeneration)) {
                 delay(60 * 1000L)
-                if (_roomDisposed) break
+                if (!isCurrentLoad(loadGeneration)) break
                 getSuperChatMessage(silent = true)
             }
         }
@@ -939,12 +1027,12 @@ class LiveRoomController(
 
     /* ---------- 在线人数/状态定时刷新（对应 Dart _restartOnlineRefreshTimer） ---------- */
 
-    private fun restartOnlineRefreshTimer() {
+    private fun restartOnlineRefreshTimer(loadGeneration: Int) {
         onlineRefreshJob?.cancel()
         onlineRefreshJob = scope.launch {
-            while (true) {
+            while (isCurrentLoad(loadGeneration)) {
                 delay(60 * 1000L)
-                if (_roomDisposed) break
+                if (!isCurrentLoad(loadGeneration)) break
                 refreshOnlineStatus()
             }
         }
@@ -952,35 +1040,39 @@ class LiveRoomController(
 
     private fun refreshOnlineStatus() {
         if (_onlineRefreshInFlight) return
+        val loadGeneration = _loadGeneration
         val currentSite = site ?: return
         val currentRoomId = roomId
         _onlineRefreshInFlight = true
-        scope.launch {
+        onlineRefreshRequestJob = scope.launch {
             try {
                 val detail = withContext(Dispatchers.IO) {
                     currentSite.liveSite.liveStatus(currentRoomId)
                 }
-                if (_onlineRefreshInFlight) {
-                    val detailObj = _detail.value ?: return@launch
-                    if (detail) {
-                        onlineStatusRefreshPolicy.reset()
-                    } else if (onlineStatusRefreshPolicy.confirmOffline(
-                            reportedLive = false,
-                            hasActivePlaybackEvidence = player.state.value.playing,
-                        )
-                    ) {
-                        _liveStatus.value = false
-                        addSysMsg("主播已下播")
-                    }
-                    val refreshed = withContext(Dispatchers.IO) {
-                        currentSite.liveSite.roomDetail(currentRoomId)
-                    }
-                    _online.value = refreshed.online
+                if (!isCurrentLoad(loadGeneration) || !_onlineRefreshInFlight) return@launch
+                if (_detail.value == null) return@launch
+                if (detail) {
+                    onlineStatusRefreshPolicy.reset()
+                } else if (onlineStatusRefreshPolicy.confirmOffline(
+                        reportedLive = false,
+                        hasActivePlaybackEvidence = player.state.value.playing,
+                    )
+                ) {
+                    _liveStatus.value = false
+                    addSysMsg("主播已下播")
                 }
+                val refreshed = withContext(Dispatchers.IO) {
+                    currentSite.liveSite.roomDetail(currentRoomId)
+                }
+                if (!isCurrentLoad(loadGeneration) || !_onlineRefreshInFlight) return@launch
+                _online.value = refreshed.online
             } catch (e: Exception) {
-                Log.logPrint(e)
+                if (isCurrentLoad(loadGeneration)) Log.logPrint(e)
             } finally {
-                _onlineRefreshInFlight = false
+                if (loadGeneration == _loadGeneration) {
+                    _onlineRefreshInFlight = false
+                    onlineRefreshRequestJob = null
+                }
             }
         }
     }
@@ -988,6 +1080,7 @@ class LiveRoomController(
     /* ---------- 贡献榜（对应 Dart fetchContributionRank/清理） ---------- */
 
     fun fetchContributionRank() {
+        val loadGeneration = _loadGeneration
         val roomDetail = _detail.value ?: return
         val currentSite = site ?: return
         if (_contributionRankLoading.value || !_contributionRankFetched.value) {
@@ -998,12 +1091,15 @@ class LiveRoomController(
                 val users = withContext(Dispatchers.IO) {
                     currentSite.liveSite.contributionRank(roomDetail.roomId, roomDetail)
                 }
+                if (!isCurrentLoad(loadGeneration)) return@launch
                 _contributionRankLoading.value = false
                 _contributionRankFetched.value = true
                 contributionRankUsers.value = users
             } catch (e: Exception) {
-                Log.logPrint(e)
-                _contributionRankLoading.value = false
+                if (isCurrentLoad(loadGeneration)) {
+                    Log.logPrint(e)
+                    _contributionRankLoading.value = false
+                }
             }
         }
     }
@@ -1022,19 +1118,20 @@ class LiveRoomController(
     fun addHistory() {
         val roomDetail = _detail.value ?: return
         val currentSite = site ?: return
-        val id = "${currentSite.id}_$roomId"
+        val currentRoomId = roomId
+        val id = "${currentSite.id}_$currentRoomId"
         scope.launch {
             val now = System.currentTimeMillis()
             val existing = dbService.getHistory(id)
             val history = existing?.copy(
-                roomId = roomId,
+                roomId = currentRoomId,
                 siteId = currentSite.id,
                 userName = roomDetail.userName,
                 face = roomDetail.userAvatar,
                 updateTime = now,
             ) ?: com.kotlin_livez.app.models.History(
                 id = id,
-                roomId = roomId,
+                roomId = currentRoomId,
                 siteId = currentSite.id,
                 userName = roomDetail.userName,
                 face = roomDetail.userAvatar,
@@ -1132,18 +1229,21 @@ class LiveRoomController(
                     _loadGeneration += 1
                     clearTempMutedUsers()
 
-                    liveDanmaku?.stop()
+                    cancelRoomBoundJobs()
+                    liveDanmaku?.also {
+                        liveDanmaku = null
+                        runCatching { it.stop() }
+                            .onFailure { error -> Log.e("切房时停止弹幕失败: $error") }
+                    }
                     _messages.value = emptyList()
                     superChatFingerprints.clear()
                     _superChats.value = emptyList()
                     clearContributionRankState()
-                    danmakuReplayHistory.clear()
-
-                    val danmaku = withContext(Dispatchers.IO) { targetSite.liveSite.danmaku() }
-                    liveDanmaku = danmaku
+                    clearDanmakuSessionState()
 
                     // 停止当前播放（对应 Dart player.stop()）
-                    player.stop()
+                    runCatching { player.stop() }
+                        .onFailure { error -> Log.e("切房时停止播放器失败: $error") }
 
                     loadData()
 
@@ -1218,7 +1318,7 @@ class LiveRoomController(
 
     /* ---------- 直播时长（对应 Dart startLiveDurationTimer：主播已开播时长） ---------- */
 
-    private fun startLiveDurationTimer() {
+    private fun startLiveDurationTimer(loadGeneration: Int) {
         // 先取消旧计时器（切换房间/状态变化时避免旧 job 继续推进）
         liveDurationJob?.cancel()
         val detailObj = _detail.value
@@ -1235,8 +1335,9 @@ class LiveRoomController(
             return
         }
         liveDurationJob = scope.launch {
-            while (!_roomDisposed) {
+            while (isCurrentLoad(loadGeneration)) {
                 delay(1000)
+                if (!isCurrentLoad(loadGeneration)) break
                 val currentSeconds = System.currentTimeMillis() / 1000
                 var seconds = (currentSeconds - startTimeStamp).coerceAtLeast(0L)
                 val h = seconds / 3600
@@ -1268,9 +1369,7 @@ class LiveRoomController(
         _loadGeneration += 1
         currentRoom.clearRoom()
         stopAutoExit()
-        superChatRefreshJob?.cancel()
-        onlineRefreshJob?.cancel()
-        liveDurationJob?.cancel()
+        cancelRoomBoundJobs()
         countdownJob?.cancel()
         onlineStatusRefreshPolicy.reset()
         mediaEventSubJobs.forEach { it.cancel() }
@@ -1278,7 +1377,8 @@ class LiveRoomController(
         reopenPendingFuture()
         // 不在控制器清理中调用全局 player.stop()：正常退出由 leaveRoom 在 pop 前先停流；
         // 非常规 onDispose 则紧接着按会话号释放引擎。这样迟到的旧控制器不会停止新页面。
-        liveDanmaku?.stop()
+        runCatching { liveDanmaku?.stop() }
+            .onFailure { Log.e("销毁时停止弹幕失败: $it") }
         liveDanmaku = null
         scope.coroutineContext[Job]?.cancel()
     }
