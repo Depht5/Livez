@@ -169,6 +169,11 @@ class LiveRoomController(
     /** 累计收到的 chat 消息数（诊断日志采样用；诊断日志，定位后移除）。 */
     private var wsChatReceivedCount = 0
 
+    /** 每轮 load 仅记录一次的首条聊天到达日志标志（loadData 重置）。 */
+    private var wsChatLogged = false
+    private var keywordDropLogged = false
+    private var dupDropLogged = false
+
     /** 临时静音用户（对应 Dart tempMutedUsers） */
     private val _tempMutedUsers = MutableStateFlow<Set<String>>(emptySet())
     val tempMutedUsers: StateFlow<Set<String>> = _tempMutedUsers
@@ -208,6 +213,7 @@ class LiveRoomController(
     /* ---------- 初始化与生命周期 ---------- */
 
     fun create(site: Site, roomId: String) {
+        Log.d("房间 create: site=${site.id} roomId=$roomId")
         this.site = site
         _rxSite.value = site
         _rxRoomId.value = roomId
@@ -220,6 +226,10 @@ class LiveRoomController(
     /** 加载直播间信息（对应 Dart loadData）。 */
     fun loadData() {
         val restarted = ++_loadGeneration
+        Log.d("loadData: generation=$restarted")
+        wsChatLogged = false
+        keywordDropLogged = false
+        dupDropLogged = false
         val targetSite = site ?: return
         val targetRoomId = roomId
         scope.launch {
@@ -635,6 +645,7 @@ class LiveRoomController(
 
     /** 重新加载直播间数据（对应 Dart loadData 前的清场）。 */
     fun refreshRoom() {
+        Log.d("refreshRoom")
         if (_roomDisposed) return
         // 清空 SC/贡献榜/去重状态（对应 Dart refreshRoom）
         _superChats.value = emptyList()
@@ -650,6 +661,7 @@ class LiveRoomController(
     /** 初始化弹幕回调（对应 Dart initDanmau）。 */
     private fun initDanmaku() {
         val danmaku = liveDanmaku ?: return
+        Log.d("弹幕回调接线")
         danmaku.onMessage = { msg -> onWSMessage(msg) }
         danmaku.onClose = { msg -> onWSClose(msg) }
         danmaku.onReady = { onWSReady() }
@@ -659,6 +671,10 @@ class LiveRoomController(
     fun onWSMessage(raw: LiveMessage) {
         val msg = sanitizeLiveMessage(raw)
         if (msg.type == LiveMessageType.chat) {
+            if (!wsChatLogged) {
+                wsChatLogged = true
+                Log.d("onWSMessage: 首条聊天消息到达")
+            }
             // 顺序修正（弹幕持续性排查候选 1 的结论）：原先「先 drop(1) 裁剪、后过滤」
             // 会让被屏蔽/重复的消息造成列表净缩短——聊天列表无故丢行 + StateFlow 多一次
             // 无意义发射。引用游标本身不受影响（不可变列表，元素引用不变），但语义上
@@ -668,9 +684,17 @@ class LiveRoomController(
                 return
             }
             if (isKeywordShielded(msg)) {
+                if (!keywordDropLogged) {
+                    keywordDropLogged = true
+                    Log.d("onWSMessage: 关键词屏蔽丢弃")
+                }
                 return
             }
             if (isDuplicateDanmu(msg)) {
+                if (!dupDropLogged) {
+                    dupDropLogged = true
+                    Log.d("onWSMessage: 重复弹幕丢弃")
+                }
                 return
             }
             if (_messages.value.size > 200 && !_disableAutoScroll.value) {
@@ -678,6 +702,7 @@ class LiveRoomController(
             }
             _messages.value = _messages.value + msg
             wsChatReceivedCount++
+            Log.d("聊天入列 #${wsChatReceivedCount} size=${_messages.value.size} user=${msg.userName.take(12)}")
             if (!_liveStatus.value || (_isBackground && !allowBackgroundPlayback())) {
                 return
             }
@@ -1082,6 +1107,7 @@ class LiveRoomController(
     /* ---------- 房间切换（对应 Dart resetRoom） ---------- */
 
     fun resetRoom(newSite: Site, newRoomId: String) {
+        Log.d("resetRoom: ${newSite.id}/$newRoomId")
         val currentSite = site
         if (currentSite == newSite && roomId == newRoomId) return
         if (_roomSwitching) {

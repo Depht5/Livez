@@ -75,6 +75,10 @@ class WebSocketUtil(
         private set
 
     private val _manualClosed = AtomicBoolean(true)
+
+    /** 每条连接仅记录一次「首条下行消息」，用于诊断「连上但无推送」。 */
+    @Volatile
+    private var firstRxLogged = false
     private val _connecting = AtomicBoolean(false)
 
     /** 去重后的候选地址（诊断/测试用）。 */
@@ -106,6 +110,7 @@ class WebSocketUtil(
             var lastError: String? = null
             for (wsUrl in limited) {
                 if (_manualClosed.get()) return@launch
+                CoreLog.d("WS 连接：$wsUrl (重连第 $reconnectTime 次)")
                 try {
                     val client = OkHttpClient.Builder()
                         .connectTimeout(connectTimeoutMs, TimeUnit.MILLISECONDS)
@@ -145,19 +150,23 @@ class WebSocketUtil(
 
                 override fun onMessage(ws: WebSocket, text: String) {
                     reconnectTime = 0
+                    logFirstRx()
                     onMessage?.invoke(text)
                 }
 
                 override fun onMessage(ws: WebSocket, bytes: okio.ByteString) {
                     reconnectTime = 0
+                    logFirstRx()
                     onByteMessage?.invoke(bytes.toByteArray())
                 }
 
                 override fun onClosed(ws: WebSocket, code: Int, reason: String) {
+                    CoreLog.d("WS onClosed: code=$code reason=$reason")
                     if (established) onDone()
                 }
 
                 override fun onFailure(ws: WebSocket, t: Throwable, response: Response?) {
+                    CoreLog.w("WS onFailure: ${t.message}")
                     if (established) {
                         onError(t.message ?: "WebSocket failure")
                     } else if (cont.isActive) {
@@ -172,6 +181,8 @@ class WebSocketUtil(
     /** 连接完成 */
     private fun ready() {
         status = SocketStatus.connected
+        firstRxLogged = false
+        CoreLog.d("WS 已连接：$url")
         heartBeatJob?.cancel()
         startHeartBeat()
         onReady?.invoke()
@@ -182,8 +193,16 @@ class WebSocketUtil(
         heartBeatJob = scope.launch {
             while (true) {
                 delay(heartBeatTime)
+                CoreLog.d("WS 心跳发送")
                 onHeartBeat?.invoke()
             }
+        }
+    }
+
+    private fun logFirstRx() {
+        if (!firstRxLogged) {
+            firstRxLogged = true
+            CoreLog.d("WS 首条下行消息到达")
         }
     }
 
@@ -233,6 +252,7 @@ class WebSocketUtil(
                 connect()
             }
         } else {
+            CoreLog.w("WS 重连超过 $maxReconnectTime 次，与服务器断开连接")
             onClose?.invoke("重连超过最大次数，与服务器断开连接")
             reconnectJob?.cancel()
             reconnectJob = null

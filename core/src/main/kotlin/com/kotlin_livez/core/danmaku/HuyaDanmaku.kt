@@ -40,6 +40,10 @@ class HuyaDanmaku : LiveDanmaku() {
     val serverUrl: String = "wss://cdnws.api.huya.com"
 
     private var webSocketUtil: WebSocketUtil? = null
+
+    // 每次连接仅记录一次的首帧/首推日志标志（start 时重置）
+    private var firstPushLogged = false
+    private var first1400Logged = false
     private lateinit var danmakuArgs: HuyaDanmakuArgs
 
     /** 心跳数据：Dart 端 base64.decode("ABQdAAwsNgBM") 的预编码字节，原样发送。 */
@@ -49,6 +53,9 @@ class HuyaDanmaku : LiveDanmaku() {
 
     override suspend fun start(arg: Any?) {
         danmakuArgs = arg as? HuyaDanmakuArgs ?: return
+        CoreLog.d("HuyaDanmaku start: $danmakuArgs")
+        firstPushLogged = false
+        first1400Logged = false
         webSocketUtil = WebSocketUtil(
             url = serverUrl,
             heartBeatTime = heartbeatTime.toLong(),
@@ -67,6 +74,7 @@ class HuyaDanmaku : LiveDanmaku() {
     /** 进房（对应 Dart joinRoom，tid 与 sid 均使用 topSid）。 */
     private fun joinRoom() {
         val joinData = getJoinData(danmakuArgs.ayyuid, danmakuArgs.topSid, danmakuArgs.topSid)
+        CoreLog.d("Huya joinRoom: ayyuid=${danmakuArgs.ayyuid} topSid=${danmakuArgs.topSid} subSid=${danmakuArgs.subSid} bytes=${joinData.size}")
         webSocketUtil?.sendBytes(joinData)
     }
 
@@ -114,12 +122,20 @@ class HuyaDanmaku : LiveDanmaku() {
      */
     private fun decodeMessage(data: ByteArray) {
         try {
+            if (!firstPushLogged) {
+                firstPushLogged = true
+                CoreLog.d("Huya 首条下行 Tars 帧到达")
+            }
             var stream = TarsInputStream(data)
             val type = stream.readLong(0, false)
             if (type == 7L) {
                 stream = TarsInputStream(stream.readBytes(1, false))
                 val wSPushMessage = HYPushMessage()
                 wSPushMessage.readFrom(stream)
+                if (!first1400Logged) {
+                    first1400Logged = true
+                    CoreLog.d("Huya 首条聊天推送 uri=1400")
+                }
                 if (wSPushMessage.uri == 1400) {
                     val messageNotice = HYMessage()
                     messageNotice.readFrom(TarsInputStream(wSPushMessage.msg))
