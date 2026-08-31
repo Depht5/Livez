@@ -10,6 +10,7 @@ import android.media.AudioManager
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import android.provider.Settings
 import android.view.View
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.core.tween
@@ -96,9 +97,13 @@ import com.kotlin_livez.app.ui.components.DanmuSettingsSidePanel
 import com.kotlin_livez.app.ui.components.DanmuShieldSheet
 import com.kotlin_livez.app.ui.components.LineDialog
 import com.kotlin_livez.app.ui.components.LiveSettingsSheet
+import com.kotlin_livez.app.ui.components.LiveSettingsSidePanel
 import com.kotlin_livez.app.ui.components.NetImage
 import com.kotlin_livez.app.ui.components.PlayerControlsOverlay
 import com.kotlin_livez.app.ui.components.QualityDialog
+import com.kotlin_livez.app.ui.components.ROOM_MENU_ITEMS_FULLSCREEN
+import com.kotlin_livez.app.ui.components.ROOM_MENU_ITEMS_PORTRAIT
+import com.kotlin_livez.app.ui.components.RoomMenuAction
 import com.kotlin_livez.app.ui.components.RoomMenuDialog
 import com.kotlin_livez.app.ui.components.RoomSheet
 import com.kotlin_livez.app.ui.theme.CustomIcons
@@ -543,10 +548,14 @@ fun LiveRoomScreen(
 
     var activeSheet by rememberSaveable { mutableStateOf(RoomSheet.None) }
 
-    // 全屏弹幕设置右侧小窗打开时 BACK 仅关小窗（不退全屏/不退出直播间）。注册位置
+    // 全屏弹幕设置/直播设置右侧小窗打开时 BACK 仅关小窗（不退全屏/不退出直播间）。注册位置
     // 晚于上方两个 BackHandler：同组合内后注册的启用回调优先生效（task 08-29-nav-anim-danmu-panel）。
+    // 直播设置小窗（task 08-31-live-room-menu-brightness-fix）与弹幕设置共用同一拦截条件。
     // 竖屏时的 ModalBottomSheet 是独立窗口、自行拦截 BACK，无需此处处理。
-    BackHandler(enabled = isFullScreen && activeSheet == RoomSheet.DanmuSettings) {
+    BackHandler(
+        enabled = isFullScreen &&
+            (activeSheet == RoomSheet.DanmuSettings || activeSheet == RoomSheet.LiveSettings),
+    ) {
         activeSheet = RoomSheet.None
     }
 
@@ -605,9 +614,12 @@ fun LiveRoomScreen(
                     // 一次性快照（详见上方根因说明）
                     volumeStartY = offset.y
                     gestureVolumeExtent = maxOf(size.height * 0.5f, 1f)
-                    startBrightness01 =
-                        (context as? Activity)?.window?.attributes?.screenBrightness
-                            ?.takeIf { it in 0f..1f } ?: 0.5f
+                    // 亮度起始快照（task 08-31-live-room-menu-brightness-fix）：
+                    // 窗口亮度覆盖值（screenBrightness）默认 -1（BRIGHTNESS_OVERRIDE_NONE =
+                    // 跟随系统），原 takeIf ?: 0.5f 恒回退 0.5 → 首次手势总从 50% 起步。
+                    // 对齐 Dart ScreenBrightness.instance.application：覆盖值合法(0..1)用覆盖值，
+                    // 否则读系统亮度 Settings.System.SCREEN_BRIGHTNESS（0-255）换算 0..1。
+                    startBrightness01 = readStartBrightness(context)
                     val am = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
                     val amax = am.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
                     startVolume01 = if (amax > 0) {
@@ -951,6 +963,19 @@ fun LiveRoomScreen(
                     onDismiss = { activeSheet = RoomSheet.None },
                 )
             }
+            // 全屏直播设置右侧小窗（task 08-31-live-room-menu-brightness-fix：
+            // 形态对齐弹幕设置——全屏不再弹底部 ModalBottomSheet，改右侧小窗）。
+            // 与弹幕设置小窗同款壳层/动画/遮罩；两者经 activeSheet 互斥，不会同时显示。
+            androidx.compose.animation.AnimatedVisibility(
+                visible = isFullScreen && activeSheet == RoomSheet.LiveSettings,
+                enter = slideInHorizontally(animationSpec = tween(200)) { fullX -> fullX },
+                exit = slideOutHorizontally(animationSpec = tween(200)) { fullX -> fullX },
+            ) {
+                LiveSettingsSidePanel(
+                    controller = controller,
+                    onDismiss = { activeSheet = RoomSheet.None },
+                )
+            }
         }
 
         // 信息区（对应 Dart buildUserProfile）：头像/名称/平台 + 人气 —— 全屏时隐藏
@@ -1088,26 +1113,30 @@ fun LiveRoomScreen(
         RoomSheet.None -> {}
 
         RoomSheet.Menu -> RoomMenuDialog(
-            onAction = { index ->
+            // 全屏/非全屏菜单项集合不同（task 08-31-live-room-menu-brightness-fix）：
+            // 全屏去掉 清晰度/播放线路/弹幕设置（控制层底栏已有入口），
+            // 非全屏去掉 刷新直播间/清晰度/弹幕设置（竖屏底栏有刷新，清晰度/弹幕设置与控制层重复）。
+            items = if (isFullScreen) ROOM_MENU_ITEMS_FULLSCREEN else ROOM_MENU_ITEMS_PORTRAIT,
+            onAction = { action ->
                 activeSheet = RoomSheet.None
-                when (index) {
-                    0 -> if (controller.qualites.value.isEmpty()) {
+                when (action) {
+                    RoomMenuAction.Quality -> if (controller.qualites.value.isEmpty()) {
                         Router.toast("暂无清晰度信息")
                     } else {
                         activeSheet = RoomSheet.Quality
                     }
-                    1 -> if (controller.playUrls.value.isEmpty()) {
+                    RoomMenuAction.Line -> if (controller.playUrls.value.isEmpty()) {
                         Router.toast("暂无播放线路")
                     } else {
                         activeSheet = RoomSheet.Line
                     }
-                    2 -> activeSheet = RoomSheet.DanmuSettings
-                    3 -> activeSheet = RoomSheet.LiveSettings
-                    4 -> activeSheet = RoomSheet.DanmuShield
-                    5 -> copyToClipboard(controller.copyUrl() ?: "", "已复制直播间链接")
-                    6 -> copyPlayUrlToClipboard()
-                    7 -> shareRoom()
-                    8 -> controller.refreshRoom()
+                    RoomMenuAction.DanmuSettings -> activeSheet = RoomSheet.DanmuSettings
+                    RoomMenuAction.LiveSettings -> activeSheet = RoomSheet.LiveSettings
+                    RoomMenuAction.DanmuShield -> activeSheet = RoomSheet.DanmuShield
+                    RoomMenuAction.CopyLink -> copyToClipboard(controller.copyUrl() ?: "", "已复制直播间链接")
+                    RoomMenuAction.CopyPlayUrl -> copyPlayUrlToClipboard()
+                    RoomMenuAction.Share -> shareRoom()
+                    RoomMenuAction.Refresh -> controller.refreshRoom()
                 }
             },
             onDismiss = { activeSheet = RoomSheet.None },
@@ -1159,10 +1188,15 @@ fun LiveRoomScreen(
             )
         }
 
-        RoomSheet.LiveSettings -> LiveSettingsSheet(
-            controller = controller,
-            onDismiss = { activeSheet = RoomSheet.None },
-        )
+        RoomSheet.LiveSettings -> if (!isFullScreen) {
+            // 竖屏 = 底部弹窗；全屏形态由视频区内 AnimatedVisibility 右侧小窗渲染
+            //（见 PlayerControlsOverlay 之后）。守卫防止全屏/竖屏切换瞬间双渲染
+            //（对齐 RoomSheet.DanmuSettings 同款处理，task 08-31-live-room-menu-brightness-fix）。
+            LiveSettingsSheet(
+                controller = controller,
+                onDismiss = { activeSheet = RoomSheet.None },
+            )
+        }
 
         RoomSheet.DanmuShield -> DanmuShieldSheet(onDismiss = { activeSheet = RoomSheet.None })
     }
@@ -1199,6 +1233,27 @@ private class VolumeSetThrottle(
         apply(level)
         mainHandler.postDelayed(tailRunnable, delayMs)
     }
+}
+
+/**
+ * 亮度手势起始快照（0..1）—— task 08-31-live-room-menu-brightness-fix：
+ * 窗口亮度覆盖值（screenBrightness）在 0..1 时用它；否则（默认 -1 = 跟随系统）
+ * 读系统亮度 `Settings.System.SCREEN_BRIGHTNESS`（0-255，只读无需权限）换算 0..1，
+ * 读失败回退 0.5。语义对齐 Dart `ScreenBrightness.instance.application`。
+ */
+private fun readStartBrightness(context: Context): Float {
+    val windowBrightness = (context as? Activity)?.window?.attributes?.screenBrightness
+    if (windowBrightness != null && windowBrightness in 0f..1f) {
+        return windowBrightness
+    }
+    val sys = runCatching {
+        Settings.System.getInt(
+            context.contentResolver,
+            Settings.System.SCREEN_BRIGHTNESS,
+            255,
+        )
+    }.getOrDefault(255)
+    return (sys.coerceIn(0, 255) / 255f).coerceIn(0f, 1f)
 }
 
 /* ---------- 标签集合（对应 Dart 默认标签顺序 + 条件过滤）---------- */

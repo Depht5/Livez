@@ -51,17 +51,43 @@ import com.kotlin_livez.app.ui.Router
 import com.kotlin_livez.app.ui.theme.CustomIcons
 import kotlin.math.roundToInt
 
-/** ⋮ 菜单条目（对齐旧 LiveRoomSheets.showMenuSheet 的 items 顺序与文案）。 */
-val ROOM_MENU_ITEMS = listOf(
-    "清晰度",
-    "播放线路",
-    "弹幕设置",
-    "直播设置",
-    "弹幕屏蔽",
-    "复制链接",
-    "复制播放直链",
-    "分享",
-    "刷新直播间",
+/** ⋮ 菜单动作（对齐旧 LiveRoomSheets.showMenuSheet 的 items 顺序与文案）。 */
+enum class RoomMenuAction(val label: String) {
+    Quality("清晰度"),
+    Line("播放线路"),
+    DanmuSettings("弹幕设置"),
+    LiveSettings("直播设置"),
+    DanmuShield("弹幕屏蔽"),
+    CopyLink("复制链接"),
+    CopyPlayUrl("复制播放直链"),
+    Share("分享"),
+    Refresh("刷新直播间"),
+}
+
+/**
+ * 全屏 ⋮ 菜单（task 08-31-live-room-menu-brightness-fix：去掉清晰度/播放线路/弹幕设置——
+ * 全屏控制层底栏已有这三个入口，菜单不再重复）。
+ */
+val ROOM_MENU_ITEMS_FULLSCREEN = listOf(
+    RoomMenuAction.LiveSettings,
+    RoomMenuAction.DanmuShield,
+    RoomMenuAction.CopyLink,
+    RoomMenuAction.CopyPlayUrl,
+    RoomMenuAction.Share,
+    RoomMenuAction.Refresh,
+)
+
+/**
+ * 非全屏 ⋮ 菜单（同一任务：去掉刷新直播间/清晰度/弹幕设置——竖屏底栏刷新按钮与
+ * 控制层清晰度/弹幕设置入口已覆盖，菜单不再重复；播放线路竖屏无入口，保留）。
+ */
+val ROOM_MENU_ITEMS_PORTRAIT = listOf(
+    RoomMenuAction.Line,
+    RoomMenuAction.LiveSettings,
+    RoomMenuAction.DanmuShield,
+    RoomMenuAction.CopyLink,
+    RoomMenuAction.CopyPlayUrl,
+    RoomMenuAction.Share,
 )
 
 /**
@@ -79,10 +105,14 @@ enum class RoomSheet { None, Menu, Quality, Line, DanmuSettings, LiveSettings, D
 
 /* ---------- ⋮ 菜单 ---------- */
 
-/** `⋮` 菜单：条目点击经 [onAction] 上抛（index 对应 ROOM_MENU_ITEMS），动作由宿主分发。 */
+/**
+ * `⋮` 菜单：条目点击经 [onAction] 上抛（action 对应列表项），动作由宿主分发。
+ * 菜单项列表由宿主按全屏/非全屏传入（[ROOM_MENU_ITEMS_FULLSCREEN] / [ROOM_MENU_ITEMS_PORTRAIT]）。
+ */
 @Composable
 fun RoomMenuDialog(
-    onAction: (Int) -> Unit,
+    items: List<RoomMenuAction>,
+    onAction: (RoomMenuAction) -> Unit,
     onDismiss: () -> Unit,
 ) {
     AlertDialog(
@@ -91,14 +121,14 @@ fun RoomMenuDialog(
         confirmButton = {},
         text = {
             Column {
-                ROOM_MENU_ITEMS.forEachIndexed { index, item ->
+                items.forEach { action ->
                     Text(
-                        text = item,
+                        text = action.label,
                         fontSize = 15.sp,
                         color = MaterialTheme.colorScheme.onSurface,
                         modifier = Modifier
                             .fillMaxWidth()
-                            .clickable { onAction(index) }
+                            .clickable { onAction(action) }
                             .padding(vertical = 12.dp),
                     )
                 }
@@ -432,45 +462,135 @@ fun DanmuSettingsSidePanel(
 
 /* ---------- 直播设置 ---------- */
 
-/** 直播设置：自动退出开关 + 分钟数（5–180，房间级时长）+ 刷新。 */
+/**
+ * 直播设置行内容（自动退出开关 + 退出分钟数滑条）—— 竖屏底部弹窗与全屏右侧小窗共用
+ * （对齐弹幕设置的双形态：DanmuSettingsSheet / DanmuSettingsSidePanel 共用 DanmuSettingsRows）。
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun LiveSettingsRows(controller: LiveRoomController) {
+    val settings = ServiceContainer.appSettings
+    val autoExitEnable by controller.autoExitEnable.collectAsStateWithLifecycle()
+    val minutes by settings.roomAutoExitDuration.collectAsStateWithLifecycle()
+
+    // 自动退出开关
+    SheetSwitchRow(label = "自动退出直播间", checked = autoExitEnable) {
+        controller.setAutoExitEnabled(it)
+    }
+    // 退出分钟数（5–180；同时写全局两项 + 房间级时长，对齐旧实现三连调用）
+    Text(
+        text = "退出时长：${minutes.coerceIn(5, 180)} 分钟",
+        fontSize = 13.sp,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier.padding(top = 12.dp),
+    )
+    // 连续量滑条（task 08-31-live-room-menu-brightness-fix：去掉 steps 刻度小点；
+    // 对齐项目连续量滑条惯例：steps=0 + 自定义 track 去端点圆点/刻度/thumb 缺口，
+    // 整数取值由 roundToInt 保证——见 ui-compose.md gotcha #16）
+    Slider(
+        value = minutes.coerceIn(5, 180).toFloat(),
+        onValueChange = { v ->
+            val m = v.roundToInt()
+            settings.setRoomAutoExitDuration(m)
+            settings.setAutoExitDuration(m)
+            controller.setAutoExitMinutes(m)
+        },
+        valueRange = 5f..180f,
+        steps = 0,
+        modifier = Modifier.fillMaxWidth(),
+        track = { state ->
+            SliderDefaults.Track(
+                sliderState = state,
+                drawStopIndicator = null,
+                drawTick = { _, _ -> },
+                thumbTrackGapSize = 0.dp,
+            )
+        },
+    )
+}
+
+/** 直播设置（竖屏底部弹窗）：壳层 + 标题 + 共用行内容。全屏时由 LiveRoomScreen 挂 [LiveSettingsSidePanel]。 */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun LiveSettingsSheet(
     controller: LiveRoomController,
     onDismiss: () -> Unit,
 ) {
-    val settings = ServiceContainer.appSettings
-    val autoExitEnable by controller.autoExitEnable.collectAsStateWithLifecycle()
-    val minutes by settings.roomAutoExitDuration.collectAsStateWithLifecycle()
-
     ModalBottomSheet(onDismissRequest = onDismiss) {
         Column(modifier = Modifier.padding(start = 20.dp, end = 20.dp, bottom = 24.dp)) {
             SheetTitle(text = "直播设置")
-            // 自动退出开关
-            SheetSwitchRow(label = "自动退出直播间", checked = autoExitEnable) {
-                controller.setAutoExitEnabled(it)
+            LiveSettingsRows(controller)
+        }
+    }
+}
+
+/**
+ * 全屏直播设置右侧小窗 —— 对齐原项目 Utils.showRightDialog(直播设置, width=400) 与
+ * [DanmuSettingsSidePanel] 同款壳层：topRight 全高面板、透明遮罩点外部关闭、头部
+ * back+标题+分隔线；行内容与竖屏底部弹窗共用 [LiveSettingsRows]。
+ * 滑入/滑出动画由宿主 AnimatedVisibility 承担（200ms，右缘进/出），本组件只负责静态布局。
+ */
+@Composable
+fun LiveSettingsSidePanel(
+    controller: LiveRoomController,
+    onDismiss: () -> Unit,
+) {
+    Box(modifier = Modifier.fillMaxSize()) {
+        // 透明遮罩：点外部关闭 + 挡住下层手势（对齐原项目 maskColor transparent）
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .pointerInput(Unit) { detectTapGestures { onDismiss() } },
+        )
+        // 面板：全高、宽 400dp（对齐原项目 width=400）、左侧圆角 4dp、surface 底色
+        Column(
+            modifier = Modifier
+                .align(Alignment.CenterEnd)
+                .fillMaxHeight()
+                .width(400.dp)
+                .background(
+                    MaterialTheme.colorScheme.surface,
+                    shape = RoundedCornerShape(topStart = 4.dp, bottomStart = 4.dp),
+                ),
+        ) {
+            // 头部：返回箭头 + 标题（对齐原 ListTile leading arrow_back + title）
+            Row(
+                modifier = Modifier.fillMaxWidth().height(48.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(48.dp)
+                        .clickable(
+                            interactionSource = remember { MutableInteractionSource() },
+                            indication = null,
+                            onClick = onDismiss,
+                        ),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        imageVector = CustomIcons.Back,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurface,
+                        modifier = Modifier.size(24.dp),
+                    )
+                }
+                Text(
+                    text = "直播设置",
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.Medium,
+                    color = MaterialTheme.colorScheme.onSurface,
+                )
             }
-            // 退出分钟数（5–180；同时写全局两项 + 房间级时长，对齐旧实现三连调用）
-            Text(
-                text = "退出时长：${minutes.coerceIn(5, 180)} 分钟",
-                fontSize = 13.sp,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(top = 12.dp),
-            )
-            Slider(
-                value = minutes.coerceIn(5, 180).toFloat(),
-                onValueChange = { v ->
-                    val m = v.roundToInt()
-                    settings.setRoomAutoExitDuration(m)
-                    settings.setAutoExitDuration(m)
-                    controller.setAutoExitMinutes(m)
-                },
-                valueRange = 5f..180f,
-                steps = 174, // 整数步进（180-5-1 个中间档）
-                modifier = Modifier.fillMaxWidth(),
-            )
-            // 刷新
-            SheetClickRow(label = "刷新直播间", onClick = { controller.refreshRoom() })
+            HorizontalDivider(thickness = 1.dp, color = MaterialTheme.colorScheme.outlineVariant)
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState())
+                    .padding(12.dp),
+            ) {
+                LiveSettingsRows(controller)
+            }
         }
     }
 }
