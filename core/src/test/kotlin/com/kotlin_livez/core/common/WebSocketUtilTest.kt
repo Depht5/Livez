@@ -8,6 +8,7 @@ import okhttp3.mockwebserver.MockWebServer
 import okhttp3.mockwebserver.SocketPolicy
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.util.concurrent.CountDownLatch
@@ -169,6 +170,29 @@ class WebSocketUtilTest {
     }
 
     @Test
+    fun compressionCanBeDisabledForHandshake() {
+        val server = MockWebServer().also {
+            servers += it
+            it.enqueue(webSocketResponse(null))
+            it.start()
+        }
+        val socket = newSocket(
+            url = server.url("/").toString(),
+            webSocketCompressionEnabled = false,
+            onMessage = {},
+        )
+
+        socket.connect()
+
+        val request = server.takeRequest(1, TimeUnit.SECONDS)
+        assertTrue("The WebSocket handshake should reach the server", request != null)
+        assertNull(
+            "Disabling compression must remove OkHttp's automatic permessage-deflate offer",
+            request?.getHeader("Sec-WebSocket-Extensions"),
+        )
+    }
+
+    @Test
     fun closeCancelsScheduledReconnectAndCannotBeRevived() {
         val server = MockWebServer().also {
             servers += it
@@ -204,6 +228,7 @@ class WebSocketUtilTest {
         firstMessageTimeoutMs: Long = 0,
         messageIdleTimeoutMs: Long = 0,
         autoMarkHealthyOnMessage: Boolean = true,
+        webSocketCompressionEnabled: Boolean = true,
         reconnectDelayMs: Long = 20,
         onReconnect: (() -> Unit)? = null,
         onMessage: (String) -> Unit,
@@ -219,6 +244,7 @@ class WebSocketUtilTest {
             firstMessageTimeoutMs = firstMessageTimeoutMs,
             messageIdleTimeoutMs = messageIdleTimeoutMs,
             autoMarkHealthyOnMessage = autoMarkHealthyOnMessage,
+            webSocketCompressionEnabled = webSocketCompressionEnabled,
         ).also { sockets += it }
 
     private fun webSocketResponse(message: String?): MockResponse =

@@ -52,6 +52,15 @@ class WebSocketUtil(
     val reconnectDelayMs: Long = 5_000,
     var maxReconnectTime: Int = 5,
     val pingIntervalMs: Long = 30_000,
+    /**
+     * 是否协商 RFC 7692 permessage-deflate。
+     *
+     * OkHttp 4.x 会无条件为 WebSocket 握手添加 `Sec-WebSocket-Extensions: permessage-deflate`，
+     * 且公开 API 只能关闭出站压缩，不能关闭入站解压。部分服务端会返回使 Inflater 无法推进的
+     * 压缩帧；此时 reader 线程会永久占满 CPU，连 cancel/切房也无法及时结束。关闭时在真正
+     * 发往网络前移除该握手头，让服务端发送未压缩帧。
+     */
+    val webSocketCompressionEnabled: Boolean = true,
     /** 建连后首条业务下行的等待上限；0 表示禁用。 */
     val firstMessageTimeoutMs: Long = 0,
     /** 已收到业务下行后允许的最长静默时间；0 表示禁用。 */
@@ -79,6 +88,17 @@ class WebSocketUtil(
         .connectTimeout(connectTimeoutMs, TimeUnit.MILLISECONDS)
         .apply {
             if (pingIntervalMs > 0) pingInterval(pingIntervalMs, TimeUnit.MILLISECONDS)
+            if (!webSocketCompressionEnabled) {
+                // RealWebSocket 在创建 Call 之前注入扩展头。应用拦截器位于该 Call 的最外层，
+                // 可以在 Retry/Bridge/Connect 写出请求头之前可靠移除；WebSocket 升级不会走
+                // 普通的 network interceptor 链，因此不能在这里使用 addNetworkInterceptor。
+                addInterceptor { chain ->
+                    val request = chain.request().newBuilder()
+                        .removeHeader("Sec-WebSocket-Extensions")
+                        .build()
+                    chain.proceed(request)
+                }
+            }
         }
         .build()
     private val started = AtomicBoolean(false)

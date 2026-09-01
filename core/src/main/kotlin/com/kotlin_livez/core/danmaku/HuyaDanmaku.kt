@@ -79,8 +79,16 @@ class HuyaDanmaku : LiveDanmaku() {
             // type 2 注册响应和 type 21 心跳 ACK 即使进房参数错误也会返回，不能视为
             // 弹幕订阅健康。只有 type 7/22 业务推送才能解除 watchdog/重置重连计数。
             autoMarkHealthyOnMessage = false,
-            firstMessageTimeoutMs = 75_000,
+            // 现场复现中成功订阅会在 3s 内收到业务帧，失败订阅则始终只有 type 2。
+            // 尽快替换这种“传输已开、房间业务未订阅”的僵尸连接。
+            firstMessageTimeoutMs = 20_000,
             messageIdleTimeoutMs = 150_000,
+            // 虎牙使用自己的 Tars 心跳且不回复标准 WebSocket pong。OkHttp ping 会把每条
+            // 健康连接在约 60s 后误杀，反复 TLS/进房并随机落入无业务订阅。
+            pingIntervalMs = 0,
+            // 设备采样确认坏会话 70%+ CPU 卡在 OkHttp MessageInflater.inflate；禁用虎牙
+            // permessage-deflate 后由服务端发送原始 Tars 二进制帧，避免解压自旋无法退出。
+            webSocketCompressionEnabled = false,
             onByteMessage = { decodeMessage(it) },
             onReady = {
                 if (joinRoom()) {
