@@ -397,6 +397,10 @@ class PlayerEngine private constructor() {
             val joined = httpHeaders.entries.joinToString(",") { "${it.key}: ${it.value}" }
             runCatching { MPVLib.setPropertyString("http-header-fields", joined) }
         }
+        // 对齐 media_kit open(play: true)：mpv 的 pause 属性跨 loadfile 持久保留，
+        // 暂停中刷新/切线/重试会让新流以暂停态启动，且 START_FILE 乐观置位使按钮
+        // 显示"播放中"（需点两次才能恢复）。open 即视为开始播放，显式清除 pause。
+        MPVLib.setPropertyBoolean("pause", false)
         MPVLib.command(arrayOf("loadfile", url))
     }
 
