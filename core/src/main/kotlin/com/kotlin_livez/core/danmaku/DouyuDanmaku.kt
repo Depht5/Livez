@@ -45,6 +45,12 @@ class DouyuDanmaku : LiveDanmaku() {
             connectTimeoutMs = 3_000,
             reconnectDelayMs = 5_000,
             heartBeatTime = heartbeatTime.toLong(),
+            // danmuproxy 不实现 RFC 6455 ping/pong（对传输层 ping 的回应帧碎片化，
+            // okio 报 "Control frames must be final" 并判死连接）：5f16784 引入的默认
+            // 30s ping 使斗鱼每 ~35s 断开重连（真机 logcat 佐证）。业务层 mrkl 心跳
+            // （45s）足以维持连接，与 Dart 参照一致（dart:io WebSocket 无传输层 ping）；
+            // 对齐虎牙 a63fdfa 的处理。
+            pingIntervalMs = 0,
             onByteMessage = { decodeMessage(it) },
             onReady = {
                 onReady?.invoke()
