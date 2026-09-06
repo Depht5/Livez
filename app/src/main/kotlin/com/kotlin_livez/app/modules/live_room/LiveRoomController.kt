@@ -8,6 +8,7 @@ import com.kotlin_livez.app.app.Sites
 import com.kotlin_livez.app.app.controller.AppSettingsController
 import com.kotlin_livez.app.models.FollowUser
 import com.kotlin_livez.app.player.PlayerEngine
+import com.kotlin_livez.app.service.BackgroundPlayback
 import com.kotlin_livez.app.services.CurrentRoomService
 import com.kotlin_livez.app.services.DBService
 import com.kotlin_livez.app.services.FollowService
@@ -27,8 +28,11 @@ import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import android.os.SystemClock
 import java.time.Instant
 import java.util.LinkedList
 import java.util.concurrent.atomic.AtomicBoolean
@@ -144,6 +148,10 @@ class LiveRoomController(
     /** 是否后台（对应 Dart isBackground） */
     val isBackground: Boolean get() = _isBackground
     private var _isBackground = false
+
+    /** 切后台快照（对应 Dart _backgroundedAt/_positionBeforeBackground）：回前台恢复判停滞用。 */
+    private var backgroundedAtElapsedMs: Long? = null
+    private var positionBeforeBackgroundMs: Long? = null
 
     /* ---------- 内部状态（无界面对应的镜像字段） ---------- */
 
@@ -559,8 +567,21 @@ class LiveRoomController(
         val errorJob = scope.launch {
             player.errorEvents.collect { error -> mediaError(error) }
         }
+        // 随播放状态启停后台保活前台服务（对应 Dart _syncBackgroundPlaybackService）：
+        // 用 state.playing 的 distinct 流而非 playingEvents——后者在 paused-for-cache
+        // 事件里会误发 false（缓冲抖动导致服务反复启停）。
+        val playingJob = scope.launch {
+            player.state.map { it.playing }.distinctUntilChanged().collect { playing ->
+                if (playing && allowBackgroundPlayback()) {
+                    BackgroundPlayback.start()
+                } else {
+                    BackgroundPlayback.stop()
+                }
+            }
+        }
         mediaEventSubJobs.add(completedJob)
         mediaEventSubJobs.add(errorJob)
+        mediaEventSubJobs.add(playingJob)
     }
 
     private val shouldRefreshUrlsOnPlaybackRetry: Boolean
@@ -574,6 +595,7 @@ class LiveRoomController(
         val loadGeneration = _loadGeneration
         val mediaGeneration = _playbackMediaGeneration
         if (!isPlaybackEventCurrent(loadGeneration, mediaGeneration)) return
+        BackgroundPlayback.stop()
         scope.launch {
             if (mediaErrorRetryCount < 2) {
                 Log.d("播放结束，尝试第${mediaErrorRetryCount + 1}次刷新")
@@ -608,6 +630,7 @@ class LiveRoomController(
         val loadGeneration = _loadGeneration
         val mediaGeneration = _playbackMediaGeneration
         if (!isPlaybackEventCurrent(loadGeneration, mediaGeneration)) return
+        BackgroundPlayback.stop()
         scope.launch {
             if (mediaErrorRetryCount < 2) {
                 Log.d("播放失败，尝试第${mediaErrorRetryCount + 1}次刷新")
@@ -794,8 +817,9 @@ class LiveRoomController(
     }
 
     private fun allowBackgroundPlayback(): Boolean {
-        // 对应 Dart _allowBackgroundPlayback（背景播放设置）；默认关闭
-        return false
+        // 对应 Dart _allowBackgroundPlayback：读真实设置项。
+        // （修复：原硬编码 return false 使"后台播放"设置与切后台逻辑整体失效）
+        return appSettings.allowBackgroundPlayback.value
     }
 
     /** 添加系统消息（对应 Dart addSysMsg）。 */
@@ -1353,12 +1377,51 @@ class LiveRoomController(
 
     fun onAppBackground() {
         _isBackground = true
+        backgroundedAtElapsedMs = SystemClock.elapsedRealtime()
+        positionBeforeBackgroundMs = player.state.value.positionMs
+        // 后台播放关闭 = 切后台立即暂停（设置对 _playerAutoPause 的互补语义，亦为用户预期；
+        // Dart 原行为是"不启动保活、任由系统冻结进程"，Kotlin 改为确定性暂停）
+        if (!allowBackgroundPlayback() && player.state.value.playing) {
+            player.pause()
+        }
         onAppLifecycleBackground?.invoke()
     }
 
     fun onAppForeground() {
         _isBackground = false
+        val sinceMs = backgroundedAtElapsedMs
+        val beforeMs = positionBeforeBackgroundMs
+        backgroundedAtElapsedMs = null
+        positionBeforeBackgroundMs = null
+        recoverPlaybackAfterForeground(sinceMs, beforeMs)
         onAppLifecycleForeground?.invoke()
+    }
+
+    /**
+     * 返回前台播放恢复（对应 Dart _recoverPlaybackAfterForeground）：后台超过 3s 且
+     * 检测到停滞（位置未推进 / 未播放 / 缓冲中）→ 延迟 1.2s 重新拉流。画面本身的
+     * 恢复依赖 MpvVideoView 的 surfaceCreated → attachSurface 链路（进程保活前提下）。
+     */
+    private fun recoverPlaybackAfterForeground(sinceMs: Long?, beforeMs: Long?) {
+        if (sinceMs == null || beforeMs == null) return
+        if (SystemClock.elapsedRealtime() - sinceMs < 3_000) return
+        // 仅后台播放开启时自动恢复：关闭场景切后台已被确定性暂停（见 onAppBackground），
+        // 回前台保持暂停由用户手动续播，若自动重拉会违背暂停意图。
+        if (!allowBackgroundPlayback()) return
+        val loadGeneration = _loadGeneration
+        if (!isCurrentLoad(loadGeneration)) return
+        if (!_liveStatus.value || currentLineIndex < 0 || _playUrls.value.isEmpty()) return
+        scope.launch {
+            delay(1_200)
+            if (!isCurrentLoad(loadGeneration) || _isBackground) return@launch
+            val s = player.state.value
+            val stalled = s.positionMs <= beforeMs || s.pausedForCache || s.completed || !s.playing
+            if (!stalled) return@launch
+            Log.d("返回前台后检测到播放停滞，尝试恢复")
+            if (reloadPlayUrls(silent = true, resetLine = shouldRefreshUrlsOnPlaybackRetry)) {
+                initPlaylist()
+            }
+        }
     }
 
     /* ---------- 清理 ---------- */
@@ -1370,6 +1433,7 @@ class LiveRoomController(
         currentRoom.clearRoom()
         stopAutoExit()
         cancelRoomBoundJobs()
+        BackgroundPlayback.stop()
         countdownJob?.cancel()
         onlineStatusRefreshPolicy.reset()
         mediaEventSubJobs.forEach { it.cancel() }

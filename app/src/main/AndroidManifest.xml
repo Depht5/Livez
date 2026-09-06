@@ -7,6 +7,10 @@
     <!-- 日志抓取写共享存储（仅 Android 9- 需要；10+ 走 MediaStore 免权限） -->
     <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"
         android:maxSdkVersion="28" />
+    <!-- 后台播放保活（镜像 Dart 版 manifest：mediaPlayback 前台服务三件套） -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <application
         android:name=".LiveApp"
@@ -33,6 +37,13 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!-- 后台播放保活前台服务（对应 Dart 版同名服务；启停由 BackgroundPlayback
+             按播放状态与 allowBackgroundPlayback 设置驱动，见 LiveRoomController） -->
+        <service
+            android:name=".service.BackgroundPlaybackService"
+            android:exported="false"
+            android:foregroundServiceType="mediaPlayback" />
     </application>
 
 </manifest>

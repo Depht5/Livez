@@ -14,6 +14,8 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
+import androidx.lifecycle.DefaultLifecycleObserver
+import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.compose.rememberNavController
 import com.kotlin_livez.app.di.ServiceContainer
@@ -39,6 +41,21 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
 
         Router.install(applicationContext)
+
+        // 前后台切换转发（task fullscreen-status-follow-style-background-play）：镜像 Dart
+        // didChangeAppLifecycleState——ON_STOP/ON_START 转发给当前直播间控制器（后台播放
+        // 快照 + 回前台停滞恢复）；无活跃直播间时为 no-op。
+        lifecycle.addObserver(
+            object : DefaultLifecycleObserver {
+                override fun onStart(owner: LifecycleOwner) {
+                    ServiceContainer.activeLiveRoom?.onAppForeground()
+                }
+
+                override fun onStop(owner: LifecycleOwner) {
+                    ServiceContainer.activeLiveRoom?.onAppBackground()
+                }
+            },
+        )
 
         setContent {
             // ===== 主题状态（task 08-29-dark-mode）=====

@@ -13,6 +13,8 @@ import android.os.Looper
 import android.provider.Settings
 import android.view.View
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
@@ -76,6 +78,7 @@ import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.core.content.ContextCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -256,6 +259,21 @@ fun LiveRoomScreen(
             }
         }
     }
+    // 通知权限（后台保活通知可见性）：Android 13+ POST_NOTIFICATIONS 为运行时权限，
+    // 未授予时前台服务仍运行但通知被系统抑制——用户以通知为保活生效的依据，进入直播间时请求一次。
+    val notificationPermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission(),
+    ) { }
+    LaunchedEffect(Unit) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            ContextCompat.checkSelfPermission(
+                context,
+                android.Manifest.permission.POST_NOTIFICATIONS,
+            ) != android.content.pm.PackageManager.PERMISSION_GRANTED
+        ) {
+            notificationPermissionLauncher.launch(android.Manifest.permission.POST_NOTIFICATIONS)
+        }
+    }
     /* ---------- 控制层显隐 + 自动隐藏计时 ---------- */
 
     // 控制层显隐（等价旧 PlayerControlsOverlay.show()/hide()/toggle()）
@@ -364,7 +382,15 @@ fun LiveRoomScreen(
             Router.toast("播放器初始化失败：${e.message ?: e.javaClass.simpleName}")
         }
         controller.create(site, roomId)
+        // 订阅播放器事件（播放结束/失败重试 + 后台保活服务随播放状态启停）。
+        // 修复：原实现漏调此入口，媒体事件与后台播放同步从未生效。
+        controller.subscribePlayerEvents()
+        // 注册当前直播间（后台播放接线：MainActivity 前后台切换转发到此控制器）
+        ServiceContainer.activeLiveRoom = controller
         onDispose {
+            if (ServiceContainer.activeLiveRoom === controller) {
+                ServiceContainer.activeLiveRoom = null
+            }
             controller.dispose()
             videoView.destroy()
         }

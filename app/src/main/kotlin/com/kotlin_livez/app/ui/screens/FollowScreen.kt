@@ -133,7 +133,9 @@ fun FollowScreen(
     // 任一变化驱动本组合重组，此处随重组重算（平台分组的站点项随之增减）。
     val groupOptions = effectiveController.groupOptions
 
-    Column(modifier = modifier.fillMaxSize().background(MaterialTheme.colorScheme.surfaceContainerLow).statusBarsPadding()) {
+    // 根背景用 surface：与顶栏白条、列表区底一致——原 surfaceContainerLow 会在
+    // 分组按钮行与状态栏区域露出灰底，与页面其他区域形成色差（用户反馈）。
+    Column(modifier = modifier.fillMaxSize().background(MaterialTheme.colorScheme.surface).statusBarsPadding()) {
         FollowTopBar(
             modeLabel = if (groupMode == FollowGroupMode.liveStatus) "状态分组" else "平台分组",
             onToggleMode = {
@@ -285,7 +287,7 @@ private fun FollowTopBar(
             fontSize = 13.sp,
             color = MaterialTheme.colorScheme.surface,
             modifier = Modifier
-                .background(MaterialTheme.colorScheme.primary)
+                .background(MaterialTheme.colorScheme.primary, RoundedCornerShape(14.dp))
                 .clickable(onClick = onRefreshAll)
                 .padding(horizontal = 10.dp, vertical = 6.dp),
         )
@@ -319,7 +321,8 @@ private fun TagChipBar(
                 color = if (selected) MaterialTheme.colorScheme.surface else MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier
                     .background(
-                        if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceContainerHigh
+                        if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceContainerHigh,
+                        RoundedCornerShape(14.dp),
                     )
                     .clickable { onSelect(option) }
                     .padding(horizontal = 14.dp, vertical = 6.dp),

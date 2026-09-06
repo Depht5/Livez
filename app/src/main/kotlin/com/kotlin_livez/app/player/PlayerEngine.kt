@@ -380,6 +380,16 @@ class PlayerEngine private constructor() {
         com.kotlin_livez.app.app.Log.i(
             "Surface 已销毁：session=$sessionId surface=${System.identityHashCode(surface)}",
         )
+        // 后台播放关键（task fullscreen-status-follow-style-background-play）：Activity 停止
+        // 时 SurfaceView 的 surface 被系统销毁，mediacodec_embed 继续向失效 surface 送帧会让
+        // 解码器报错并在 ~10s 后中止整个播放（切后台"声音必停"的根因）。切 vo=null 后 mpv
+        // 以纯音频续播（mpv-android 同款处理）；surfaceCreated → attachSurface 会重挂新
+        // surface 并恢复 vo，画面随之恢复。
+        if (surfaceAttached) {
+            runCatching { MPVLib.setPropertyString("vo", "null") }
+                .onFailure { com.kotlin_livez.app.app.Log.e("切 vo=null 失败", it) }
+            surfaceAttached = false
+        }
     }
 
     private fun isActiveSession(sessionId: Long, op: String): Boolean {

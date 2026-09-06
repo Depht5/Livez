@@ -7,6 +7,7 @@ import com.kotlin_livez.app.services.FollowService
 import com.kotlin_livez.app.services.CurrentRoomService
 import com.kotlin_livez.app.services.DBService
 import com.kotlin_livez.app.services.DouyinAccountService
+import com.kotlin_livez.app.modules.live_room.LiveRoomController
 import com.kotlin_livez.app.services.LocalStorageService
 import com.kotlin_livez.core.LiveSiteRegistry
 import com.kotlin_livez.core.interfaces.LiveSite
@@ -56,6 +57,10 @@ object ServiceContainer {
     }
 
     fun context(): Context = app
+
+    /** 当前活跃直播间控制器（若在直播间内）：MainActivity 生命周期转发与后台播放逻辑的接线点，
+     *  由 LiveRoomScreen 的 DisposableEffect 注册/注销（仿 Router 持有 navController 模式）。 */
+    var activeLiveRoom: LiveRoomController? = null
 
     fun allSites(): List<LiveSite> = sites
 

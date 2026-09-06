@@ -1,5 +1,9 @@
 package com.kotlin_livez.app.ui.components
 
+import android.content.BroadcastReceiver
+import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -13,19 +17,30 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.content.ContextCompat
 import com.kotlin_livez.app.ui.theme.CustomIcons
+import kotlinx.coroutines.delay
+import java.time.LocalTime
+import java.time.format.DateTimeFormatter
 
 /**
  * 播放器控制层（Compose 版，竖屏/全屏共用）—— 替换旧 View 体系
@@ -84,6 +99,33 @@ fun PlayerControlsOverlay(
 
         /* ---- 顶栏（仅全屏显示，对应旧 topBar + updateFullScreen）---- */
         if (fullScreen) {
+            // 时间/电量（task fullscreen-status-follow-style-background-play）：
+            // 顶部右侧显示「时间 电量」，控制层可见期间每 30s 刷新时间、注册
+            // ACTION_BATTERY_CHANGED 广播随电量变化更新；控制层隐藏即停止（组件
+            // visible=false 不参与组合，effect 随之取消）。
+            val context = LocalContext.current
+            var timeText by remember { mutableStateOf(currentClockText()) }
+            var batteryPercent by remember { mutableIntStateOf(readBatteryPercent(context, null)) }
+            LaunchedEffect(Unit) {
+                while (true) {
+                    delay(30_000)
+                    timeText = currentClockText()
+                }
+            }
+            DisposableEffect(context) {
+                val receiver = object : BroadcastReceiver() {
+                    override fun onReceive(receiveContext: Context?, intent: Intent?) {
+                        if (intent != null) batteryPercent = readBatteryPercent(receiveContext ?: context, intent)
+                    }
+                }
+                ContextCompat.registerReceiver(
+                    context,
+                    receiver,
+                    IntentFilter(Intent.ACTION_BATTERY_CHANGED),
+                    ContextCompat.RECEIVER_NOT_EXPORTED,
+                )
+                onDispose { context.unregisterReceiver(receiver) }
+            }
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -104,6 +146,18 @@ fun PlayerControlsOverlay(
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.weight(1f).padding(horizontal = 4.dp),
+                )
+                Text(
+                    text = timeText,
+                    fontSize = 13.sp,
+                    color = Color.White,
+                    modifier = Modifier.padding(end = 10.dp),
+                )
+                Text(
+                    text = "$batteryPercent%",
+                    fontSize = 13.sp,
+                    color = Color.White,
+                    modifier = Modifier.padding(end = 6.dp),
                 )
                 OverlayIconButton(icon = CustomIcons.Menu, onClick = onMenuClick)
             }
@@ -249,4 +303,22 @@ private fun OverlayIconButton(
             .padding(horizontal = paddingH, vertical = paddingV)
             .size(size),
     )
+}
+
+/** 全屏顶栏时钟文本（task fullscreen-status-follow-style-background-play）。 */
+private fun currentClockText(): String =
+    LocalTime.now().format(DateTimeFormatter.ofPattern("HH:mm"))
+
+/**
+ * 读取设备电量百分比：传入广播 intent（ACTION_BATTERY_CHANGED 回调）优先；
+ * 传 null 时读 sticky 广播（组合初始化用）。level/scale 由系统保证非零，仍做守卫。
+ */
+private fun readBatteryPercent(context: Context?, intent: Intent?): Int {
+    val sticky = intent ?: context
+        ?.registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
+        ?: return 0
+    val level = sticky.getIntExtra("level", -1)
+    val scale = sticky.getIntExtra("scale", -1)
+    if (level < 0 || scale <= 0) return 0
+    return (level * 100 / scale).coerceIn(0, 100)
 }
