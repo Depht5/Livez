@@ -739,11 +739,14 @@ fun LiveRoomScreen(
     }
     // 每条消息到达 → 贴底。门控仅 disableAutoScroll（位置不参与）：全屏/切 Tab 恢复组合
     // 时本 effect 随之启动执行，下一条消息即贴底——与原项目完全一致。
-    // requestScrollToItem 非挂起、无互斥（弹幕连发不丢滚动），index 取实时布局条数、
-    // clamp 到绝对末尾，等价原项目 jumpTo(maxScrollExtent)。
+    // requestScrollToItem 非挂起、无互斥（弹幕连发不丢滚动），index 取数据条数
+    // （列表与 messages 严格 1:1、无头部项），等价原项目 jumpTo(maxScrollExtent)。
+    // 根因说明（真机闪退：跟随系统主题切深色重建 Activity，重组时本 effect 先于
+    // 首次布局执行）：原取 layoutInfo.totalItemsCount-1，未布局时总数为 0 → 传 -1
+    // 崩溃；数据索引不依赖布局时序，isNotEmpty 守卫保证非负。
     LaunchedEffect(messages) {
         if (messages.isNotEmpty() && !disableAutoScroll) {
-            chatListState.requestScrollToItem(chatListState.layoutInfo.totalItemsCount - 1)
+            chatListState.requestScrollToItem(messages.size - 1)
             val size = messages.size
             if (size == 1 || size % 20 == 0) {
                 Log.d("UI 跟随: size=$size disable=$disableAutoScroll atBottom=$chatAtBottom")
