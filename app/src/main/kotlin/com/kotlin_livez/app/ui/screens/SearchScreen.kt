@@ -177,6 +177,7 @@ fun SearchScreen(modifier: Modifier = Modifier) {
                                     item = item,
                                     onClick = { openRoom(sites[siteIndex], item.roomId) },
                                     modifier = Modifier.fillMaxSize(),
+                                    sharedElementSiteId = sites[siteIndex].id,
                                 )
                             }
                         }

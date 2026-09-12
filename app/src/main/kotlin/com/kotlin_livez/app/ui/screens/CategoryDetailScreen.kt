@@ -93,6 +93,7 @@ fun CategoryDetailScreen(
             // 错误/空态文案对齐现版 CategoryDetailActivity（区别于 HomeScreen 默认文案）
             errorTextBuilder = { msg -> "加载失败：" + msg.trim().ifEmpty { "未知错误" } + "\n点击刷新" },
             emptyText = "暂无内容\n点击刷新",
+            siteId = site.id,
             modifier = Modifier.weight(1f),
         )
     }

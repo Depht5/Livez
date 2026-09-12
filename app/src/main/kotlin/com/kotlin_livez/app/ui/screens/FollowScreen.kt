@@ -60,6 +60,8 @@ import com.kotlin_livez.app.modules.follow_user.FollowGroupOption
 import com.kotlin_livez.app.modules.follow_user.FollowUserController
 import com.kotlin_livez.app.ui.Router
 import com.kotlin_livez.app.ui.components.NetImage
+import com.kotlin_livez.app.ui.nav.liveRoomContainerSharedElement
+import com.kotlin_livez.app.ui.nav.liveRoomCoverSharedElement
 import com.kotlin_livez.app.ui.components.resolveLiveRoomGrid
 import com.kotlin_livez.app.ui.theme.ImagePlaceholder
 import com.kotlin_livez.app.ui.theme.cardContainerColor
@@ -396,7 +398,9 @@ private fun FollowItemCard(
 ) {
     val site = Sites.allSites[item.siteId]
     Column(
-        modifier = modifier
+        modifier = Modifier
+            .liveRoomContainerSharedElement(item.siteId, item.roomId)
+            .then(modifier)
             .shadow(elevation = 2.dp, shape = RoundedCornerShape(8.dp))
             .background(cardContainerColor(), RoundedCornerShape(8.dp))
             .combinedClickable(
@@ -408,6 +412,7 @@ private fun FollowItemCard(
             NetImage(
                 url = item.roomCover,
                 modifier = Modifier
+                    .liveRoomCoverSharedElement(item.siteId, item.roomId)
                     .fillMaxSize()
                     .background(ImagePlaceholder),
                 shape = RoundedCornerShape(topStart = 8.dp, topEnd = 8.dp),

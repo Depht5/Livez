@@ -77,6 +77,8 @@ fun PagedRoomGrid(
     errorTextBuilder: (errorMsg: String) -> String =
         { msg -> msg.trim().ifEmpty { "加载失败" } + "\n点击刷新" },
     emptyText: String = "这里什么都没有\n点击刷新",
+    /** 站点 id：非空时卡片封面参与一镜到底共享元素（task 09-12-shared-element-transition） */
+    siteId: String? = null,
 ) {
     PagedRoomGridCore(
         listController = listController,
@@ -92,6 +94,7 @@ fun PagedRoomGrid(
                     item = item,
                     onClick = { onOpenRoom(item.roomId) },
                     modifier = Modifier.fillMaxSize(),
+                    sharedElementSiteId = siteId,
                 )
             }
         },

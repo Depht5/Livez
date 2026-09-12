@@ -77,6 +77,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import androidx.core.view.WindowInsetsCompat
@@ -109,6 +110,8 @@ import com.kotlin_livez.app.ui.components.ROOM_MENU_ITEMS_PORTRAIT
 import com.kotlin_livez.app.ui.components.RoomMenuAction
 import com.kotlin_livez.app.ui.components.RoomMenuDialog
 import com.kotlin_livez.app.ui.components.RoomSheet
+import com.kotlin_livez.app.ui.nav.liveRoomContainerSharedElement
+import com.kotlin_livez.app.ui.nav.liveRoomCoverSharedElement
 import com.kotlin_livez.app.ui.theme.CustomIcons
 import com.kotlin_livez.app.ui.theme.LocalAppDarkTheme
 import com.kotlin_livez.app.ui.theme.appThemeResolvedDark
@@ -788,6 +791,9 @@ fun LiveRoomScreen(
     // 竖屏维持白色不变。
     Column(
         modifier = modifier
+            // 容器展开：与来源卡片根容器 sharedBounds 配对（卡片矩形连续扩张为全屏，
+            // 内容交叉淡化；返回反向）——一镜到底的容器变换层
+            .liveRoomContainerSharedElement(siteId, roomId)
             .fillMaxSize()
             // 沉浸（M3 任务）：根容器背景延伸覆盖状态栏区（背景先应用铺满，再收缩内容）；
             // statusBarsPadding 让标题栏等内容避开状态栏；全屏时系统栏隐藏 insets=0，
@@ -875,6 +881,7 @@ fun LiveRoomScreen(
             } else {
                 Modifier.fillMaxWidth().aspectRatio(16f / 9f)
             })
+                .liveRoomCoverSharedElement(siteId, roomId)
                 .then(videoGestureModifier)
                 .background(Color.Black),
         ) {
@@ -892,6 +899,19 @@ fun LiveRoomScreen(
                     Modifier.fillMaxSize()
                 },
             ) {
+                // 封面占位（一镜到底，task 09-12-shared-element-transition）：转场期间与
+                // 卡片封面同图连续显示（SurfaceView 内容不参与 View 过渡，PDF 结论），
+                // mpv 首帧渲染（video-params 到达 → width 非空）后隐藏，视频淡入接棒。
+                // 注意必须放在 AndroidView 之前：SurfaceView 图层位于窗口之下，占位图
+                // 在其渲染前显示、渲染后必须移除，否则会永久盖住视频。
+                val roomCover = detail?.cover.orEmpty()
+                if (roomCover.isNotEmpty() && playerState.width == null) {
+                    NetImage(
+                        url = roomCover,
+                        modifier = Modifier.fillMaxSize(),
+                        contentScale = ContentScale.Crop,
+                    )
+                }
                 // mpv 渲染内核（互操作白名单）：Surface 附加由 MpvVideoView 的
                 // SurfaceHolder.Callback 自动处理（surfaceCreated → attachSurface）
                 AndroidView(

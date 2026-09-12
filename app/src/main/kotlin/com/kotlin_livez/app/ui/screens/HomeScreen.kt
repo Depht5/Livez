@@ -152,6 +152,7 @@ fun HomeScreen(
                     onOpenRoom = { roomId -> onOpenLiveRoom(pageSite, roomId) },
                     indicatorColor = MaterialTheme.colorScheme.secondary,
                     modifier = Modifier.fillMaxSize(),
+                    siteId = pageSite.id,
                 )
             } else {
                 // 控制器尚未就绪的兜底空页（正常流程不会出现）

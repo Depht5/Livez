@@ -1,6 +1,9 @@
 package com.kotlin_livez.app.ui.nav
 
 import android.net.Uri
+import androidx.compose.animation.ExperimentalSharedTransitionApi
+import androidx.compose.animation.SharedTransitionLayout
+import androidx.compose.animation.SharedTransitionScope
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -18,6 +21,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -61,6 +65,7 @@ import com.kotlin_livez.app.ui.screens.WebLoginScreen
  * search（搜索）、account（账号管理）、weblogin/{siteId}（网页登录）、qrlogin（B 站扫码）、
  * follow（关注用户）、livertoom/{siteId}/{roomId}（直播间，Batch 7a）。
  */
+@OptIn(ExperimentalSharedTransitionApi::class)
 @Composable
 fun AppNavHost(navController: NavHostController, modifier: Modifier = Modifier) {
     // 壳层状态提升到 NavHost 层：路由切换只销毁目的地内容，本组合始终存活——
@@ -71,6 +76,23 @@ fun AppNavHost(navController: NavHostController, modifier: Modifier = Modifier) 
         onDispose { shell.dispose() }
     }
 
+    // 一镜到底共享元素（task 09-12-shared-element-transition）：SharedTransitionLayout
+    // 包裹 NavHost，卡片封面 ↔ 直播间视频容器经 LocalSharedTransitionScope 配对；
+    // 各路由经 LocalNavAnimatedVisibilityScope 下发 AnimatedContentScope（见各 composable）。
+    SharedTransitionLayout {
+        CompositionLocalProvider(LocalSharedTransitionScope provides this) {
+            NavHostContent(navController, shell, modifier)
+        }
+    }
+}
+
+@OptIn(ExperimentalSharedTransitionApi::class)
+@Composable
+private fun SharedTransitionScope.NavHostContent(
+    navController: NavHostController,
+    shell: ShellState,
+    modifier: Modifier = Modifier,
+) {
     NavHost(
         navController = navController,
         startDestination = "main",
@@ -100,7 +122,12 @@ fun AppNavHost(navController: NavHostController, modifier: Modifier = Modifier) 
         },
     ) {
         // 三 Tab 壳（首页/分类/我的为内部状态切换，非独立路由）
-        composable("main") { MainShell(shell) }
+        // 参与一镜到底的路由将 AnimatedContentScope 下发给页面（卡片封面共享元素用）。
+        composable("main") {
+            CompositionLocalProvider(LocalNavAnimatedVisibilityScope provides this) {
+                MainShell(shell)
+            }
+        }
 
         // 分类详情：siteId 走 path 参数；categoryId/categoryName 为可选 query 参数
         //（导航时经 Uri.encode 编码，NavController 解析后自动解码）
@@ -120,12 +147,14 @@ fun AppNavHost(navController: NavHostController, modifier: Modifier = Modifier) 
                 },
             ),
         ) { entry ->
-            CategoryDetailScreen(
-                siteId = entry.arguments?.getString("siteId").orEmpty(),
-                categoryId = entry.arguments?.getString("categoryId").orEmpty(),
-                categoryName = entry.arguments?.getString("categoryName").orEmpty(),
-                onBack = { navController.popBackStack() },
-            )
+            CompositionLocalProvider(LocalNavAnimatedVisibilityScope provides this) {
+                CategoryDetailScreen(
+                    siteId = entry.arguments?.getString("siteId").orEmpty(),
+                    categoryId = entry.arguments?.getString("categoryId").orEmpty(),
+                    categoryName = entry.arguments?.getString("categoryName").orEmpty(),
+                    onBack = { navController.popBackStack() },
+                )
+            }
         }
 
         // 设置（Batch 4）：条目绑定 AppSettingsController，无路由参数
@@ -135,7 +164,11 @@ fun AppNavHost(navController: NavHostController, modifier: Modifier = Modifier) 
         composable("history") { HistoryScreen() }
 
         // 搜索（Batch 5）：控制器在 Screen 内 remember 创建、出栈销毁
-        composable("search") { SearchScreen() }
+        composable("search") {
+            CompositionLocalProvider(LocalNavAnimatedVisibilityScope provides this) {
+                SearchScreen()
+            }
+        }
 
         // 账号管理（Batch 5）：对话框/登录入口在 Screen 内，无路由参数
         composable("account") { AccountScreen() }
@@ -168,19 +201,24 @@ fun AppNavHost(navController: NavHostController, modifier: Modifier = Modifier) 
         // 销毁（等价原 LiveRoomActivity onDestroy：controller.dispose() + videoView.destroy()）
         //
         // 转场动画：原直播间专用右滑转场已提升为 NavHost 全局默认（见上方 NavHost 参数，
-        // task 08-29-nav-anim-danmu-panel），本路由不再单独声明。
+        // task 08-29-nav-anim-danmu-panel）。一镜到底（task 09-12-shared-element-transition）：
+        // 本路由 enter/popExit 覆盖为 fade——共享元素封面飞行为主视觉，右滑与其叠加会打架。
         composable(
             route = "livertoom/{siteId}/{roomId}",
             arguments = listOf(
                 navArgument("siteId") { type = NavType.StringType },
                 navArgument("roomId") { type = NavType.StringType },
             ),
+            enterTransition = { fadeIn(animationSpec = tween(280)) },
+            popExitTransition = { fadeOut(animationSpec = tween(280)) },
         ) { entry ->
-            LiveRoomScreen(
-                siteId = entry.arguments?.getString("siteId").orEmpty(),
-                roomId = entry.arguments?.getString("roomId").orEmpty(),
-                onBack = { navController.popBackStack() },
-            )
+            CompositionLocalProvider(LocalNavAnimatedVisibilityScope provides this) {
+                LiveRoomScreen(
+                    siteId = entry.arguments?.getString("siteId").orEmpty(),
+                    roomId = entry.arguments?.getString("roomId").orEmpty(),
+                    onBack = { navController.popBackStack() },
+                )
+            }
         }
     }
 }

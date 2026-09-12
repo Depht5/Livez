@@ -22,6 +22,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.kotlin_livez.app.app.Utils
+import com.kotlin_livez.app.ui.nav.liveRoomContainerSharedElement
+import com.kotlin_livez.app.ui.nav.liveRoomCoverSharedElement
 import com.kotlin_livez.app.ui.theme.ImagePlaceholder
 import com.kotlin_livez.app.ui.theme.cardContainerColor
 import com.kotlin_livez.core.model.LiveRoomItem
@@ -37,15 +39,31 @@ import com.kotlin_livez.core.model.LiveRoomItem
  *
  * @param item 直播间数据（core 的 [LiveRoomItem]）
  * @param onClick 卡片点击回调（进直播间）
+ * @param sharedElementSiteId 一镜到底共享元素用站点 id（task 09-12-shared-element-transition）：
+ *   非空时封面挂 `live_cover_{siteId}_{roomId}` 共享 key 与直播间视频容器配对；null 不参与
  */
 @Composable
 fun LiveRoomCard(
     item: LiveRoomItem,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
+    sharedElementSiteId: String? = null,
 ) {
+    // 封面共享元素 modifier（null 安全：不参与一镜到底的调用方保持原状）
+    val coverSharedModifier = if (sharedElementSiteId != null) {
+        Modifier.liveRoomCoverSharedElement(sharedElementSiteId, item.roomId)
+    } else {
+        Modifier
+    }
+    // 容器展开：卡片根容器 ↔ 直播间根容器 sharedBounds（封面在容器内同步飞入）
+    val containerSharedModifier = if (sharedElementSiteId != null) {
+        Modifier.liveRoomContainerSharedElement(sharedElementSiteId, item.roomId)
+    } else {
+        Modifier
+    }
     Column(
-        modifier = modifier
+        modifier = containerSharedModifier
+            .then(modifier)
             .fillMaxWidth()
             // 卡片容器色（task 08-29-chat-pin-bubble-follow-grid）：深色 = #1D1B20
             //（介于页面背景与底栏之间的灰）；浅色 = surface。8dp 圆角 + 2dp 阴影不变
@@ -56,7 +74,7 @@ fun LiveRoomCard(
         // 封面：16:9，顶部两角圆角（底部直角，由卡片整体裁剪配合）
         NetImage(
             url = item.cover,
-            modifier = Modifier
+            modifier = coverSharedModifier
                 .fillMaxWidth()
                 .aspectRatio(16f / 9f)
                 .background(ImagePlaceholder),
