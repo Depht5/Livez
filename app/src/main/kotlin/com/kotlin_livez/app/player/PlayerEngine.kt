@@ -131,6 +131,18 @@ class PlayerEngine private constructor() {
                     _state.value = _state.value.copy(pausedForCache = value)
                     _playingEvents.tryEmit(!_state.value.playing && !value)
                 }
+                "eof-reached" -> {
+                    // 仅真 EOF 视为播放结束（对应 media_kit 以 eof-reached 判定 completed）。
+                    // 根因说明（task 09-12-refresh-crash 无限刷新）：mpv loadfile 替换旧文件
+                    // 也会触发 END_FILE（reason=stop），而 MPVLib JNI 的事件回调不携带 reason
+                    // 载荷；若在 END_FILE 事件里一律按 completed 处理，刷新会被误判为"播放
+                    // 结束" → mediaEnd 无限重试重拉流。eof-reached 属性只在真 EOF 翻 true，
+                    // 替换/停止/错误型 END_FILE 不再误判。
+                    if (value) {
+                        _state.value = _state.value.copy(completed = true, playing = false)
+                        _completedEvents.tryEmit(true)
+                    }
+                }
             }
         }
 
@@ -159,24 +171,21 @@ class PlayerEngine private constructor() {
             when (eventId) {
                 MPVLib.MPV_EVENT_SHUTDOWN ->
                     com.kotlin_livez.app.app.Log.w("[mpv-event] shutdown")
-                MPVLib.MPV_EVENT_END_FILE -> {
-                    _state.value = _state.value.copy(completed = true, playing = false)
-                    _completedEvents.tryEmit(true)
+                MPVLib.MPV_EVENT_END_FILE ->
+                    // completed 判定改走 eof-reached 属性（见 eventProperty "eof-reached"
+                    // 根因说明）：此事件不区分 EOF/替换/停止/错误，不能直接当播放结束。
                     com.kotlin_livez.app.app.Log.i("[mpv-event] end-file")
-                }
                 MPVLib.MPV_EVENT_START_FILE -> {
                     // playing 同步（task player-ui-polish：刷新/重开流后按钮与播放状态一致）：
                     // 旧实现只复位 completed，playing 依赖 mpv pause 属性事件——刷新时 stop()
                     // 触发 END_FILE 已把 playing 置 false，新流 start-file 后若无 pause 属性
                     // 变化事件，按钮会停在「暂停态」而实际在播放。新文件开始即视为播放中，
                     // 后续 pause 事件仍可纠正。
-                    _state.value = _state.value.copy(
-                        completed = false,
-                        playing = true,
-                        width = null,
-                        height = null,
-                        aspect = null,
-                    )
+                    // 注意：不在此复位 width/height/aspect（task 09-12-refresh-crash）——
+                    // 置 null 会让全屏 letterbox 布局瞬间回退铺满再缩回（右侧黑条闪失）；
+                    // 同会话 loadfile 保留上一画尺寸，新流 video-params 变化时自然覆盖，
+                    // 会话级复位由 releaseSession 的整体 state 重置承担。
+                    _state.value = _state.value.copy(completed = false, playing = true)
                     _completedEvents.tryEmit(false)
                     com.kotlin_livez.app.app.Log.i("[mpv-event] start-file")
                 }
@@ -306,6 +315,7 @@ class PlayerEngine private constructor() {
             "duration" to MPVLib.MPV_FORMAT_DOUBLE,
             "pause" to MPVLib.MPV_FORMAT_FLAG,
             "paused-for-cache" to MPVLib.MPV_FORMAT_FLAG,
+            "eof-reached" to MPVLib.MPV_FORMAT_FLAG,
             "speed" to MPVLib.MPV_FORMAT_STRING,
             "media-title" to MPVLib.MPV_FORMAT_STRING,
             "video-params/w" to MPVLib.MPV_FORMAT_INT64,

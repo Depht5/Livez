@@ -9,6 +9,12 @@ import android.content.Intent
 import android.os.Build
 import android.os.IBinder
 import com.kotlin_livez.app.MainActivity
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 /**
  * 后台播放保活前台服务 —— 对应 Dart `BackgroundPlaybackService.kt`（Flutter 原生层照搬）。
@@ -79,14 +85,24 @@ class BackgroundPlaybackService : Service() {
 
 /**
  * 前台服务启停单例 —— 对应 Dart `BackgroundPlaybackService`（dart 单例 + MethodChannel start/stop）。
- * running 守卫避免重复 startService/stopService。
+ *
+ * stop 采用 400ms 可取消延迟（task 09-12-refresh-crash）：刷新/换线时 mpv loadfile 替换
+ * 旧文件会触发 END_FILE → playing 毫秒级假低谷 → 立即 stop 紧跟 start 会踩中 Android 12+
+ * 已知行为（startForegroundService 后、startForeground 前发生 stop → 系统抛
+ * ForegroundServiceDidNotStartInTimeException 闪退）。延迟期内的 start 取消挂起 stop，
+ * 假低谷被完全吸收；真实暂停/退出（低谷 >400ms）照常停服务。
  */
 object BackgroundPlayback {
 
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private var running = false
+    private var pendingStopJob: Job? = null
 
     /** 播放中且设置开启时调用（镜像 Dart _syncBackgroundPlaybackService 的 start 分支）。 */
     fun start() {
+        // 振荡保护：取消挂起的 stop——毫秒级 playing 低谷不产生任何服务启停系统调用
+        pendingStopJob?.cancel()
+        pendingStopJob = null
         if (running) return
         running = true
         val context = com.kotlin_livez.app.di.ServiceContainer.context()
@@ -101,10 +117,16 @@ object BackgroundPlayback {
     /** 暂停/播放结束/退出直播间时调用（镜像 Dart stop 分支）。 */
     fun stop() {
         if (!running) return
-        running = false
-        val context = com.kotlin_livez.app.di.ServiceContainer.context()
-        runCatching {
-            context.stopService(Intent(context, BackgroundPlaybackService::class.java))
+        pendingStopJob = scope.launch {
+            delay(STOP_DELAY_MS)
+            pendingStopJob = null
+            running = false
+            val context = com.kotlin_livez.app.di.ServiceContainer.context()
+            runCatching {
+                context.stopService(Intent(context, BackgroundPlaybackService::class.java))
+            }
         }
     }
+
+    private const val STOP_DELAY_MS = 400L
 }
