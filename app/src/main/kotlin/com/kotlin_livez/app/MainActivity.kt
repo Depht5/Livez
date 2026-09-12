@@ -4,7 +4,6 @@ import android.graphics.Color
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.SystemBarStyle
-import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.background
@@ -115,21 +114,11 @@ class MainActivity : ComponentActivity() {
                         .background(MaterialTheme.colorScheme.background),
                 )
 
-                // 预测性返回应用内开关（task 09-12-predictive-back 真机修正）：必须放在
-                // AppNavHost 之后注册——OnBackPressedDispatcher 按"最后注册的启用回调优先"，
-                // 注册早于 NavHost 内部预测性回调的拦截器永远抢不到事件（首版挂在 onCreate
-                // 即因此失效：开关关闭后预览仍播放，只是提交时被加速）。开关关闭时本回调
-                // 启用并拦截手势（无系统预览）立即 pop，根路由 pop 失败则 finish 对齐系统
-                // 默认退出；开启时回调禁用，系统预测性流程接管。页面级 BackHandler（全屏
-                // 退全屏、关弹层）随导航动态注册、时间上晚于本回调，优先级不受影响。
-                val predictiveBack by ServiceContainer.appSettings.predictiveBack
-                    .collectAsStateWithLifecycle()
-                BackHandler(enabled = !predictiveBack) {
-                    val nav = Router.navController
-                    if (nav == null || !nav.popBackStack()) {
-                        finish()
-                    }
-                }
+                // 预测性返回已整体移除（task 09-12-predictive-back 系列真机结论：seek 负载
+                // 结构性过高 + 系统默认提交动画叠加掉帧；Manifest 未设
+                // enableOnBackInvokedCallback，NavHost 内部处理器自然退化为无预览的直接
+                // pop，手势返回开销与按钮返回一致）。页面级 BackHandler（全屏退全屏、关
+                // 弹层）保留。
             }
         }
     }

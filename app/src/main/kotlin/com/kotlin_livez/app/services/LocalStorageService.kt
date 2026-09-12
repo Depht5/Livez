@@ -60,7 +60,6 @@ class LocalStorageService(private val appContext: Context) {
         const val kDanmuLineCount = "DanmuLineCount"
         const val kDanmuDelay = "DanmuDelay"
         const val kDanmuBubble = "DanmuBubble"
-        const val kPredictiveBack = "PredictiveBack"
         const val kDanmuOpacity = "DanmuOpacity"
         const val kDanmuStrokeWidth = "DanmuStrokeWidth"
         const val kDanmuHideScroll = "DanmuHideScroll"

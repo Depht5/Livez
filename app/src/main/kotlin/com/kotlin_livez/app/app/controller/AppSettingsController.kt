@@ -173,10 +173,6 @@ class AppSettingsController(
     private val _allowBackgroundPlayback = MutableStateFlow(true)
     val allowBackgroundPlayback: StateFlow<Boolean> = _allowBackgroundPlayback
 
-    /** 预测性返回手势（task 09-12-predictive-back）：开启=系统预览动画；关闭=返回直接出栈 */
-    private val _predictiveBack = MutableStateFlow(true)
-    val predictiveBack: StateFlow<Boolean> = _predictiveBack
-
     private val _autoFullScreen = MutableStateFlow(false)
     val autoFullScreen: StateFlow<Boolean> = _autoFullScreen
 
@@ -476,7 +472,6 @@ class AppSettingsController(
             localStorage.getValue(LocalStorageService.kPlayerCompatMode, false)
         _playerAutoPause.value = localStorage.getValue(LocalStorageService.kPlayerAutoPause, false)
         _allowBackgroundPlayback.value = _loadAllowBackgroundPlayback(_playerAutoPause.value)
-        _predictiveBack.value = localStorage.getValue(LocalStorageService.kPredictiveBack, true)
 
         _playerForceHttps.value =
             localStorage.getValue(LocalStorageService.kPlayerForceHttps, false)
@@ -870,11 +865,6 @@ class AppSettingsController(
         if (!e) {
             // 背景播放服务 Android 端策略由播放器层处理（TODO）
         }
-    }
-
-    fun setPredictiveBack(e: Boolean) {
-        _predictiveBack.value = e
-        localStorage.setValue(LocalStorageService.kPredictiveBack, e)
     }
 
     fun setAutoFullScreen(e: Boolean) {
