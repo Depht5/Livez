@@ -119,7 +119,9 @@ dependencies {
 
     // ===== Jetpack Compose（UI 迁移目标栈，对应 Dart Flutter widget 体系）=====
     // BOM 统一管理 Compose 各库版本
-    implementation(platform("androidx.compose:compose-bom:2024.09.03"))
+    // BOM 2025.06.00 = Compose 1.8.2（task 09-12-predictive-back：预测性手势返回与
+    // 共享元素转场的随手势回放需要 1.8；经阿里云 google 镜像分发，直连 google() 不可达）
+    implementation(platform("androidx.compose:compose-bom:2025.06.00"))
     // Material3 组件库（对应 Dart MaterialApp/Material 组件）
     implementation("androidx.compose.material3:material3")
     // foundation 基础能力（LazyVerticalGrid / 手势等，对应 Dart GridView/Listener）

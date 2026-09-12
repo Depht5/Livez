@@ -3,6 +3,7 @@ package com.kotlin_livez.app
 import android.graphics.Color
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.OnBackPressedCallback
 import androidx.activity.SystemBarStyle
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -17,7 +18,9 @@ import androidx.compose.ui.Modifier
 import androidx.lifecycle.DefaultLifecycleObserver
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.lifecycleScope
 import androidx.navigation.compose.rememberNavController
+import kotlinx.coroutines.launch
 import com.kotlin_livez.app.di.ServiceContainer
 import com.kotlin_livez.app.ui.Router
 import com.kotlin_livez.app.ui.nav.AppNavHost
@@ -56,6 +59,27 @@ class MainActivity : ComponentActivity() {
                 }
             },
         )
+
+        // 预测性返回应用内开关（task 09-12-predictive-back）：关闭时挂一个启用的
+        // OnBackPressedCallback 拦截手势并立即 pop——拦截行为会取消系统预测性预览，
+        // 即回到无动画的直接返回；开启时回调禁用，系统预测性流程（NavHost 预览 +
+        // 共享元素随手势回放）接管。Compose 页面级 BackHandler（全屏退全屏、关弹层
+        // 等）注册晚于本回调、优先级更高，不受影响。
+        val predictiveBackCallback = object : OnBackPressedCallback(false) {
+            override fun handleOnBackPressed() {
+                val navController = Router.navController
+                if (navController == null || !navController.popBackStack()) {
+                    // 已在根路由：对齐系统默认行为（退出应用）
+                    finish()
+                }
+            }
+        }
+        onBackPressedDispatcher.addCallback(this, predictiveBackCallback)
+        lifecycleScope.launch {
+            ServiceContainer.appSettings.predictiveBack.collect { enabled ->
+                predictiveBackCallback.isEnabled = !enabled
+            }
+        }
 
         setContent {
             // ===== 主题状态（task 08-29-dark-mode）=====

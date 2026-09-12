@@ -353,15 +353,16 @@ fun LiveRoomScreen(
         }
     }
 
-    // 全屏时 BACK 先退全屏再出栈（等价原 onBackPressedDispatcher callback）
+    // 全屏时 BACK 先退全屏再出栈（等价原 onBackPressedDispatcher callback）。
+    // 此拦截使全屏态下预测性返回不显示预览（页内状态切换无需手势预览），可接受。
     BackHandler(enabled = isFullScreen) {
         toggleFullScreen()
     }
-    // 非全屏的系统返回（手势/按键）也经由 leaveRoom 先藏 Surface 再出栈，
-    // 避免「页面已退、视频残留」；两者 enabled 条件互斥。
-    BackHandler(enabled = !isFullScreen && !leaving) {
-        leaveRoom()
-    }
+    // 非全屏手势返回不再拦截（task 09-12-predictive-back）：系统直接 pop，NavHost 预测性
+    // 预览生效（当前页缩放露出上一页、共享元素转场随手势回放）。清理走下方 DisposableEffect
+    // 的幂等兜底（controller.dispose + videoView.destroy）——原"先藏 Surface 等两帧再出栈"
+    // 是为旧右滑转场的视频残留准备，预测性预览中当前页整体缩放属预期表现，fade 收尾无残留。
+    // leaveRoom() 保留给显式调用方。
 
     /* ---------- 播放器接线 + 控制器生命周期 ---------- */
 

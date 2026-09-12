@@ -79,6 +79,8 @@ fun SettingsScreen(modifier: Modifier = Modifier) {
     val contributionRankEnable by settings.contributionRankEnable.collectAsStateWithLifecycle()
     // 弹幕气泡开关（其他分组；task 08-29-chat-pin-bubble-follow-grid）
     val danmuBubble by settings.danmuBubble.collectAsStateWithLifecycle()
+    // 预测性返回手势开关（其他分组；task 09-12-predictive-back）
+    val predictiveBack by settings.predictiveBack.collectAsStateWithLifecycle()
     // 动态取色开关（外观分组；API < 31 无 Monet，禁用并提示）
     val isDynamic by settings.isDynamic.collectAsStateWithLifecycle()
     // 深色模式三态（0 跟随系统/1 浅色/2 深色）+ 纯黑主题开关（task 08-29-dark-mode）
@@ -314,6 +316,13 @@ fun SettingsScreen(modifier: Modifier = Modifier) {
                 subtitle = "为聊天框中的弹幕添加气泡",
                 checked = danmuBubble,
                 onChange = { settings.setDanmuBubble(it) },
+            )
+
+            SettingSwitchRow(
+                title = "预测性返回手势",
+                subtitle = "返回手势实时预览上一页面与转场回放；关闭后返回直接出栈",
+                checked = predictiveBack,
+                onChange = { settings.setPredictiveBack(it) },
             )
         }
         }
