@@ -3,8 +3,8 @@ package com.kotlin_livez.app
 import android.graphics.Color
 import android.os.Bundle
 import androidx.activity.ComponentActivity
-import androidx.activity.OnBackPressedCallback
 import androidx.activity.SystemBarStyle
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.background
@@ -18,9 +18,7 @@ import androidx.compose.ui.Modifier
 import androidx.lifecycle.DefaultLifecycleObserver
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import androidx.lifecycle.lifecycleScope
 import androidx.navigation.compose.rememberNavController
-import kotlinx.coroutines.launch
 import com.kotlin_livez.app.di.ServiceContainer
 import com.kotlin_livez.app.ui.Router
 import com.kotlin_livez.app.ui.nav.AppNavHost
@@ -60,26 +58,10 @@ class MainActivity : ComponentActivity() {
             },
         )
 
-        // 预测性返回应用内开关（task 09-12-predictive-back）：关闭时挂一个启用的
-        // OnBackPressedCallback 拦截手势并立即 pop——拦截行为会取消系统预测性预览，
-        // 即回到无动画的直接返回；开启时回调禁用，系统预测性流程（NavHost 预览 +
-        // 共享元素随手势回放）接管。Compose 页面级 BackHandler（全屏退全屏、关弹层
-        // 等）注册晚于本回调、优先级更高，不受影响。
-        val predictiveBackCallback = object : OnBackPressedCallback(false) {
-            override fun handleOnBackPressed() {
-                val navController = Router.navController
-                if (navController == null || !navController.popBackStack()) {
-                    // 已在根路由：对齐系统默认行为（退出应用）
-                    finish()
-                }
-            }
-        }
-        onBackPressedDispatcher.addCallback(this, predictiveBackCallback)
-        lifecycleScope.launch {
-            ServiceContainer.appSettings.predictiveBack.collect { enabled ->
-                predictiveBackCallback.isEnabled = !enabled
-            }
-        }
+        // 预测性返回应用内开关的运行时拦截已移至 setContent 内 AppNavHost 之后的
+        // Compose BackHandler（见下方注释）：OnBackPressedDispatcher 按"最后注册的
+        // 启用回调优先"，onCreate 期注册的回调早于 NavHost 内部预测性回调、永远
+        // 抢不到事件（真机实证：开关关闭后预览仍播放）。
 
         setContent {
             // ===== 主题状态（task 08-29-dark-mode）=====
@@ -132,6 +114,22 @@ class MainActivity : ComponentActivity() {
                         .fillMaxSize()
                         .background(MaterialTheme.colorScheme.background),
                 )
+
+                // 预测性返回应用内开关（task 09-12-predictive-back 真机修正）：必须放在
+                // AppNavHost 之后注册——OnBackPressedDispatcher 按"最后注册的启用回调优先"，
+                // 注册早于 NavHost 内部预测性回调的拦截器永远抢不到事件（首版挂在 onCreate
+                // 即因此失效：开关关闭后预览仍播放，只是提交时被加速）。开关关闭时本回调
+                // 启用并拦截手势（无系统预览）立即 pop，根路由 pop 失败则 finish 对齐系统
+                // 默认退出；开启时回调禁用，系统预测性流程接管。页面级 BackHandler（全屏
+                // 退全屏、关弹层）随导航动态注册、时间上晚于本回调，优先级不受影响。
+                val predictiveBack by ServiceContainer.appSettings.predictiveBack
+                    .collectAsStateWithLifecycle()
+                BackHandler(enabled = !predictiveBack) {
+                    val nav = Router.navController
+                    if (nav == null || !nav.popBackStack()) {
+                        finish()
+                    }
+                }
             }
         }
     }
