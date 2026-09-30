@@ -1,5 +1,7 @@
 package com.kotlin_livez.app.services
 
+import com.kotlin_livez.app.app.Constant
+import com.kotlin_livez.app.app.Sites
 import com.kotlin_livez.core.site.DouyinSite
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -31,7 +33,9 @@ class DouyinAccountService(
     }
 
     fun setSite() {
-        val site = com.kotlin_livez.core.LiveSiteRegistry.find("douyin") as? DouyinSite ?: return
+        // 站点实例唯一源 = app 层 Sites（对齐 Dart `Sites.allSites[...].liveSite`）：
+        // 播放/搜索路径读的正是这一份实例，写别处会导致 Cookie 静默不生效。
+        val site = Sites.allSites[Constant.kDouyin]?.liveSite as? DouyinSite ?: return
         site.cookie = cookie
     }
 

@@ -7,10 +7,9 @@ import com.kotlin_livez.app.services.FollowService
 import com.kotlin_livez.app.services.CurrentRoomService
 import com.kotlin_livez.app.services.DBService
 import com.kotlin_livez.app.services.DouyinAccountService
+import com.kotlin_livez.app.services.DouyuAccountService
 import com.kotlin_livez.app.modules.live_room.LiveRoomController
 import com.kotlin_livez.app.services.LocalStorageService
-import com.kotlin_livez.core.LiveSiteRegistry
-import com.kotlin_livez.core.interfaces.LiveSite
 
 /**
  * 轻量服务容器（替代 GetX 的 GetxService 全局注册）。
@@ -20,8 +19,6 @@ import com.kotlin_livez.core.interfaces.LiveSite
 object ServiceContainer {
 
     private lateinit var app: Context
-
-    private val sites: List<LiveSite> by lazy { LiveSiteRegistry.allSites }
 
     /** 数据库服务（Room：follow / history / tag，对应 Dart DBService）。 */
     val dbService: DBService by lazy { DBService(app) }
@@ -38,6 +35,9 @@ object ServiceContainer {
     /** 抖音账号服务（对应 Dart DouyinAccountService）。 */
     val douyinAccount: DouyinAccountService by lazy { DouyinAccountService(localStorage) }
 
+    /** 斗鱼账号服务（对应 Dart DouyuAccountService）。 */
+    val douyuAccount: DouyuAccountService by lazy { DouyuAccountService(localStorage) }
+
     /** 应用设置控制器（对应 Dart AppSettingsController）。 */
     val appSettings: AppSettingsController by lazy { AppSettingsController(localStorage) }
 
@@ -52,6 +52,7 @@ object ServiceContainer {
         appSettings.init()
         biliBiliAccount.init()
         douyinAccount.init()
+        douyuAccount.init()
         followService.install()
         // 后续在此注册同步服务等
     }
@@ -61,8 +62,4 @@ object ServiceContainer {
     /** 当前活跃直播间控制器（若在直播间内）：MainActivity 生命周期转发与后台播放逻辑的接线点，
      *  由 LiveRoomScreen 的 DisposableEffect 注册/注销（仿 Router 持有 navController 模式）。 */
     var activeLiveRoom: LiveRoomController? = null
-
-    fun allSites(): List<LiveSite> = sites
-
-    fun findSite(id: String): LiveSite? = sites.firstOrNull { it.id == id }
 }

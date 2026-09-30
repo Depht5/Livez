@@ -1,5 +1,7 @@
 package com.kotlin_livez.app.services
 
+import com.kotlin_livez.app.app.Constant
+import com.kotlin_livez.app.app.Sites
 import com.kotlin_livez.app.models.account.BiliBiliUserInfoModel
 import com.kotlin_livez.core.common.CoreLog
 import com.kotlin_livez.core.common.HttpClient
@@ -89,5 +91,5 @@ class BiliBiliAccountService(
     }
 
     private fun findBiliSite(): BiliBiliSite? =
-        com.kotlin_livez.core.LiveSiteRegistry.find("bilibili") as? BiliBiliSite
+        Sites.allSites[Constant.kBiliBili]?.liveSite as? BiliBiliSite
 }
