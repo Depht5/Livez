@@ -4,6 +4,7 @@ import com.kotlin_livez.app.app.Constant
 import com.kotlin_livez.app.app.Log
 import com.kotlin_livez.app.services.BiliBiliAccountService
 import com.kotlin_livez.app.services.DouyinAccountService
+import com.kotlin_livez.app.services.DouyuAccountService
 import com.kotlin_livez.core.common.DouyinCookieHelper
 import com.kotlin_livez.core.site.DouyinSite
 import kotlinx.coroutines.CoroutineScope
@@ -29,6 +30,7 @@ import java.util.Locale
 class AccountController(
     private val bilibiliAccount: BiliBiliAccountService,
     private val douyinAccount: DouyinAccountService,
+    private val douyuAccount: DouyuAccountService,
 ) {
 
     companion object {
@@ -260,5 +262,36 @@ class AccountController(
             defaultValue = defaultValue.substring(6)
         }
         return defaultValue
+    }
+
+    /* ---------- 斗鱼 ---------- */
+
+    /**
+     * 保存/清除斗鱼 Cookie（对应 Dart `douyuTap` 的保存与清除分支：
+     * 归一化输入 → `setCookie`，空输入即清除并回落匿名播放）。
+     *
+     * @return 供 UI 层展示的提示文案（弹层/Toast 属 View 层职责）
+     */
+    fun applyDouyuCookieInput(input: String): String {
+        val cookie = normalizeCookieInput(input)
+        douyuAccount.setCookie(cookie)
+        return if (cookie.isEmpty()) "已清除斗鱼 Cookie，将使用匿名播放" else "斗鱼 Cookie 已保存"
+    }
+
+    /** 当前斗鱼 Cookie（供配置对话框预填，对应 Dart `TextEditingController(text: account.cookie)`）。 */
+    fun currentDouyuCookie(): String = douyuAccount.cookie
+
+    /**
+     * 斗鱼 Cookie 汇总文案（对应 Dart `getDouyuCookieSummaryText`）。
+     * 读取 `hasCookie` 而非仅 `cookie`，保证保存/清除后文案即时刷新。
+     */
+    fun getDouyuCookieSummaryText(): String {
+        val hasCookie = douyuAccount.hasCookie.value
+        val cookie = douyuAccount.cookie
+        return if (!hasCookie || cookie.isEmpty()) {
+            "未配置，匿名高画质可能约 10 分钟断流"
+        } else {
+            "已配置登录 Cookie（${cookie.length} 字符）"
+        }
     }
 }

@@ -111,6 +111,8 @@ class LocalStorageService(private val appContext: Context) {
         const val kDanmuDedupeStep = "DanmuDedupeStep"
         const val kBilibiliCookie = "BilibiliCookie"
         const val kDouyinCookie = "DouyinCookie"
+        // 斗鱼登录 Cookie（键名与 Dart LocalStorageService.kDouyuCookie 一致，保证备份/同步兼容）
+        const val kDouyuCookie = "DouyuCookie"
         const val kStyleColor = "kStyleColor"
         const val kIsDynamic = "kIsDynamic"
         const val kBilibiliLoginTip = "BilibiliLoginTip"

@@ -32,8 +32,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
-import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.kotlin_livez.app.di.ServiceContainer
 import com.kotlin_livez.app.services.LogCaptureService
 import com.kotlin_livez.app.ui.Router
 import com.kotlin_livez.app.ui.components.SettingGroupCard
@@ -42,26 +40,22 @@ import com.kotlin_livez.app.ui.components.SettingGroupCard
  * 我的页（Compose 版）—— 对应 Dart `mine_page.dart`（账号 + 功能入口列表），
  * 替换现版 View 体系 `ui/MineView.kt`，作为 MainShell 第三个 Tab 的内容。
  *
- * 结构镜像：白底纵向列表 + 行间分隔线；前两行为账号状态行（B 站 / 抖音，
- * 副标题实时反映登录状态），其余为功能入口行（点击跳转或提示）。
- * 账号登录状态直接订阅各账号服务 StateFlow（声明式重组替代旧版手动刷新）。
+ * 结构镜像：白底纵向列表 + 行间分隔线；账号入口已合并为单行「账号管理」
+ * （B 站 / 斗鱼 / 虎牙 / 抖音 的明细与状态移入账号管理页），其余为功能入口行（点击跳转或提示）。
+ * 行样式由 [MineMenuRow] 统一渲染，副标题可留空。
  *
  * 底栏「重复点击我的 Tab」事件：Dart 端 mine 页无 kBottomNavigationBarClicked
  * 订阅方（仅 home/follow/category 控制器监听），故本页不消费该事件、无需订阅。
  */
 @Composable
 fun MineScreen(modifier: Modifier = Modifier) {
-    // 账号登录状态订阅（对应旧版 MineView 的两个 collect 刷新）
-    val biliLogined by ServiceContainer.biliBiliAccount.logined.collectAsStateWithLifecycle()
-    val douyinHasCookie by ServiceContainer.douyinAccount.hasCookie.collectAsStateWithLifecycle()
-
     // 宿主 Activity（权限请求用；非 Activity 场景传 null 由工具函数跳过）
     val activity = LocalContext.current as? ComponentActivity
 
     // 「抓取日志」确认对话框显隐
     var showLogDialog by remember { mutableStateOf(false) }
 
-    val entries = buildMineEntries(biliLogined, douyinHasCookie)
+    val entries = buildMineEntries()
 
     // M3 单卡片列表（task m3-mine-settings 迭代：与设置页圆角卡片同风格，不分组/无顶栏）
     Column(
@@ -95,10 +89,9 @@ private data class MineEntry(
     val subtitle: String = "",
 )
 
-/** 构建条目清单（对齐旧版 MineView.refreshAccounts 的固定清单与副标题文案）。 */
-private fun buildMineEntries(biliLogined: Boolean, douyinHasCookie: Boolean): List<MineEntry> = listOf(
-    MineEntry("account", "B 站账号", if (biliLogined) "已登录" else "未登录"),
-    MineEntry("account_douyin", "抖音账号", if (douyinHasCookie) "已配置 Cookie" else "未配置"),
+/** 构建条目清单（对齐旧版 MineView.refreshAccounts 的固定清单；账号入口已合并为「账号管理」）。 */
+private fun buildMineEntries(): List<MineEntry> = listOf(
+    MineEntry("account", "账号管理"),
     MineEntry("history", "观看历史"),
     MineEntry("settings", "设置"),
     MineEntry("local_sync", "局域网同步"),
@@ -115,7 +108,7 @@ private fun handleEntryClick(
     onToggleLog: () -> Unit,
 ) {
     when (entry.key) {
-        "account", "account_douyin" -> Router.openFeature("account", "账号管理")
+        "account" -> Router.openFeature("account", "账号管理")
         "history" -> Router.openFeature("history", "观看历史")
         "settings" -> Router.openFeature("settings", "设置")
         "local_sync" -> Router.openFeature("local_sync", "局域网同步")

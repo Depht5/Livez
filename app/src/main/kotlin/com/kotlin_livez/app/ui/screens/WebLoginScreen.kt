@@ -6,33 +6,42 @@ import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.height
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import com.kotlin_livez.app.modules.mine.account.bilibili.BiliBiliWebLoginController
 import com.kotlin_livez.app.modules.mine.account.douyin.DouyinWebLoginController
 import com.kotlin_livez.app.ui.Router
+import com.kotlin_livez.app.ui.theme.CustomIcons
 import com.kotlin_livez.app.ui.theme.ImageError
 
 /**
  * 网页登录页（Compose 版）—— 对应 Dart `web_login_page.dart`（B 站/抖音复用），
  * 替换现版 View 体系 `ui/WebLoginActivity.kt`，注册为 "weblogin/{siteId}" 路由。
  *
- * 结构镜像：顶部 3dp 水平进度条 + WebView 填满剩余空间。WebView settings
+ * 结构镜像：M3 顶栏（标题居中 + 左上角返回）+ 顶部 3dp 水平进度条 + WebView 填满剩余空间。
+ * 标题按 siteId 区分（"登录哔哩哔哩账号" / "登录抖音账号"）。WebView settings
  * （JS/domStorage/LOAD_DEFAULT）、桌面 UA（抖音）、回调链路（onProgressChanged /
  * onPageFinished → 控制器 onLoadStop）与 CookieManager 读取行为全部照搬现版。
  *
@@ -121,6 +130,33 @@ fun WebLoginScreen(
     }
 
     Column(modifier = modifier.fillMaxSize().background(MaterialTheme.colorScheme.surface).statusBarsPadding()) {
+        // M3 顶栏：标题居中 + 左上角返回（从账号管理跳入，需明确可返回）
+        Box(
+            modifier = Modifier.fillMaxWidth().height(56.dp),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(
+                text = if (siteId == "douyin") "登录抖音账号" else "登录哔哩哔哩账号",
+                fontSize = 20.sp,
+                fontWeight = FontWeight.Medium,
+                color = MaterialTheme.colorScheme.onSurface,
+            )
+            Box(
+                modifier = Modifier
+                    .align(Alignment.CenterStart)
+                    .size(48.dp)
+                    .clickable { onBack() },
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    imageVector = CustomIcons.Back,
+                    contentDescription = "返回",
+                    tint = MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier.size(24.dp),
+                )
+            }
+        }
+
         // 顶部进度条：3dp 高度对齐现版 horizontal ProgressBar（红系进度 + 浅灰轨道）
         Box(modifier = Modifier.fillMaxWidth().height(3.dp).background(ImageError)) {
             Box(

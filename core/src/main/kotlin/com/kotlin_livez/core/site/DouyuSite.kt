@@ -38,10 +38,21 @@ class DouyuSite : LiveSite() {
     override var id: String = "douyu"
     override var name: String = "斗鱼直播"
 
+    /**
+     * 可选登录 Cookie（对应 Dart `DouyuSite.cookie`）。
+     * 匿名播放仍然可用，但斗鱼会对匿名高画质流做时长限制（约 10 分钟后断流）；
+     * 配置登录后的 www.douyu.com Cookie 可恢复高画质长期播放。
+     */
+    var cookie: String = ""
+
     override fun danmaku(): LiveDanmaku = DouyuDanmaku()
 
     companion object {
-        /** 房间相关请求的默认 UA（对应 Dart 常量）。 */
+        /** 播放/房间接口的 UA（对应 Dart `_requestHeaders` 的 Chrome/126 UA）。 */
+        private const val kPlayUserAgent =
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
+
+        /** betard 房间信息接口的 UA（对应 Dart `_getRoomInfo`）。 */
         private const val kDefaultUserAgent =
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36 Edg/114.0.1823.43"
 
@@ -53,12 +64,27 @@ class DouyuSite : LiveSite() {
         private const val kContributionUserAgent =
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
 
-        /** 房间相关请求头（对应 Dart 各接口的 referer/user-agent）。 */
-        private fun roomHeader(roomId: String): Map<String, Any?> = mapOf(
+        /** betard 房间信息请求头（匿名，不注入登录 Cookie —— 与 Dart `_getRoomInfo` 一致）。 */
+        private fun betardHeader(roomId: String): Map<String, Any?> = mapOf(
             "referer" to "https://www.douyu.com/$roomId",
             "user-agent" to kDefaultUserAgent,
         )
     }
+
+    /** 基础请求头（对应 Dart `_requestHeaders`）：referer/UA + Cookie 非空时注入登录 Cookie。 */
+    private fun requestHeaders(): Map<String, Any?> = buildMap<String, Any?> {
+        put("referer", "https://www.douyu.com/")
+        put("user-agent", kPlayUserAgent)
+        val trimmed = cookie.trim()
+        if (trimmed.isNotEmpty()) put("Cookie", trimmed)
+    }
+
+    /**
+     * 房间维度基础请求头 = 基础头 + 房间 referer
+     * （对应 Dart `{..._requestHeaders, 'referer': 'https://www.douyu.com/$roomId'}`）。
+     */
+    private fun roomRequestHeaders(roomId: String): Map<String, Any?> =
+        requestHeaders() + mapOf("referer" to "https://www.douyu.com/$roomId")
 
     override suspend fun categories(): List<LiveCategory> {
         val categories = mutableListOf<LiveCategory>()
@@ -121,11 +147,14 @@ class DouyuSite : LiveSite() {
 
     override suspend fun playQualities(detail: LiveRoomDetail): List<LivePlayQuality> {
         val qualities = mutableListOf<LivePlayQuality>()
-        var data = detail.data.toString()
+        // 签名参数每次请求重取：房间停留期间旧签名会过期，复用会让斗鱼对高画质流
+        // 返回 timestamp 错误（对应 Dart `_getFreshPlayArgs` 的动机注释）。
+        var data = freshPlayArgs(detail.roomId, detail.data?.toString().orEmpty())
         data += "&cdn=&rate=-1&ver=Douyu_223061205&iar=1&ive=1&hevc=0&fa=0"
         val result = HttpClient.postJson(
             "https://www.douyu.com/lapi/live/getH5Play/${detail.roomId}",
             data = formToParams(data),
+            header = requestHeaders(),
             formUrlEncoded = true,
         )
         val dataObj = result?.jsonObject?.get("data")?.jsonObject
@@ -151,7 +180,7 @@ class DouyuSite : LiveSite() {
     }
 
     override suspend fun playUrls(detail: LiveRoomDetail, quality: LivePlayQuality): LivePlayUrl {
-        val args = detail.data.toString()
+        val args = freshPlayArgs(detail.roomId, detail.data?.toString().orEmpty())
         val data = quality.data as? DouyuPlayData ?: DouyuPlayData(0, emptyList())
 
         val urls = mutableListOf<String>()
@@ -170,16 +199,42 @@ class DouyuSite : LiveSite() {
         val result = HttpClient.postJson(
             "https://www.douyu.com/lapi/live/getH5Play/$roomId",
             data = params,
-            header = mapOf(
-                "referer" to "https://www.douyu.com/$roomId",
-                "user-agent" to kDefaultUserAgent,
-            ),
+            header = roomRequestHeaders(roomId),
             formUrlEncoded = true,
         )
         val data = result?.jsonObject?.get("data")?.jsonObject
         val rtmpUrl = data?.get("rtmp_url").str()
         val rtmpLive = data?.get("rtmp_live").str()
         return "$rtmpUrl/${htmlUnescape(rtmpLive)}"
+    }
+
+    /**
+     * 取实时播放签名参数（对应 Dart `_getFreshPlayArgs`）。
+     *
+     * 斗鱼签名参数在房间停留期间会过期，重试时必须重新拉取服务器动态脚本并重签；
+     * 复用 [LiveRoomDetail.data] 会让斗鱼在约 10 分钟后对高画质流返回 timestamp 错误
+     * （匿名流尤其明显）。拉取或签名失败时回退 [fallback]，两者皆空则抛错。
+     */
+    private suspend fun freshPlayArgs(roomId: String, fallback: String): String {
+        try {
+            val jsEncResult = HttpClient.getText(
+                "https://www.douyu.com/swf_api/homeH5Enc?rids=$roomId",
+                query = emptyMap(),
+                header = roomRequestHeaders(roomId),
+            )
+            val script = runCatching {
+                HttpClient.json.parseToJsonElement(jsEncResult)
+                    .jsonObject["data"]?.jsonObject?.get("room$roomId").str()
+            }.getOrDefault("")
+            if (script.isNotEmpty()) {
+                val signed = DouyuSign.getSign(script, roomId)
+                if (signed.isNotEmpty()) return signed
+            }
+        } catch (_: Exception) {
+            // 瞬时故障：保留 fallback 兼容路径，后续播放响应仍会被校验
+        }
+        if (fallback.isEmpty()) throw CoreError("斗鱼播放签名刷新失败")
+        return fallback
     }
 
     override suspend fun recommendRooms(page: Int): LiveCategoryResult {
@@ -211,20 +266,15 @@ class DouyuSite : LiveSite() {
         val h5RoomInfo = HttpClient.getJson(
             "https://www.douyu.com/swf_api/h5room/$roomId",
             query = emptyMap(),
-            header = roomHeader(roomId),
+            header = roomRequestHeaders(roomId),
         )
         val showTime = h5RoomInfo?.jsonObject?.get("data")?.jsonObject
             ?.get("show_time").str().ifEmpty { null }
 
-        // 拉取签名用动态 JS（crptext），后续由 DouyuSign 执行
-        val jsEncResult = HttpClient.getText(
-            "https://www.douyu.com/swf_api/homeH5Enc?rids=$roomId",
-            query = emptyMap(),
-            header = roomHeader(roomId),
-        )
-        val crptext = runCatching {
-            val enc = HttpClient.json.parseToJsonElement(jsEncResult)
-            enc.jsonObject["data"]?.jsonObject?.get("room$roomId").str()
+        // 签名参数此处仅作 fallback：playQualities/playUrls 每次都会重取重签（见 freshPlayArgs）。
+        // 保持宽容（失败即空串）避免瞬时故障阻断进房；真正取流失败由 freshPlayArgs 抛错。
+        val playArgs = runCatching {
+            freshPlayArgs(roomInfo?.get("room_id").str(), "")
         }.getOrDefault("")
 
         return LiveRoomDetail(
@@ -240,7 +290,7 @@ class DouyuSite : LiveSite() {
             status = (roomInfo?.get("show_status").intv() ?: 0) == 1 &&
                 (roomInfo?.get("videoLoop").intv() ?: 0) != 1,
             danmakuData = roomInfo?.get("room_id").str(),
-            data = DouyuSign.getSign(crptext, roomInfo?.get("room_id").str()),
+            data = playArgs,
             url = "https://www.douyu.com/$roomId",
             isRecord = (roomInfo?.get("videoLoop").intv() ?: 0) == 1,
             showTime = showTime,
@@ -362,7 +412,7 @@ class DouyuSite : LiveSite() {
         val text = HttpClient.getText(
             "https://www.douyu.com/betard/$roomId",
             query = emptyMap(),
-            header = roomHeader(roomId),
+            header = betardHeader(roomId),
         )
         val json = runCatching { HttpClient.json.parseToJsonElement(text) }.getOrNull()
         return json?.jsonObject?.get("room")?.jsonObject
