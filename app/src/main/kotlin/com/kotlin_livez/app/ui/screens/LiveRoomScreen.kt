@@ -1190,16 +1190,15 @@ fun LiveRoomScreen(
                 // 分隔线与右列（主播信息栏 + 标签栏 + 消息区）**仅非全屏**组合：
                 // 既满足「全屏 = 播放器独占整屏」，又不为此切换分支（见上方根因说明）。
                 if (!isFullScreen) {
-                    // 竖分隔线：播放器 | 右栏（对齐原项目内容区左侧 1px 灰线）
-                    ThinDivider(modifier = Modifier.fillMaxHeight().width(1.dp))
                     Column(
                         modifier = Modifier
                             .width(panelWidth)
                             .fillMaxHeight()
                             .background(MaterialTheme.colorScheme.surface),
                     ) {
-                        // 信息栏上下各一条同款横细线（用户要求 2026-10-07）：
-                        // 上 = 顶栏与信息栏之间，下 = 信息栏与标签栏之间，与竖线同色同粗细。
+                        // 信息栏上下各一条横细线（用户要求 2026-10-07）：上 = 顶栏与信息栏之间，
+                        // 下 = 信息栏与标签栏之间。播放器与右栏之间**不做竖线**（用户要求删除，
+                        // 靠左右底色/内容边界区分）。
                         ThinDivider(modifier = Modifier.fillMaxWidth().height(1.dp))
                         roomInfoBar()
                         ThinDivider(modifier = Modifier.fillMaxWidth().height(1.dp))
@@ -1321,13 +1320,21 @@ fun LiveRoomScreen(
 }
 
 /**
- * 分栏细线（1px）—— 宽屏分栏态下播放器与右栏之间的竖线、信息栏上下的两条横线共用同一实现，
- * 保证颜色（`outlineVariant`）与粗细一致；尺寸由调用方以 [modifier] 传入
- * （竖线 `fillMaxHeight().width(1.dp)`、横线 `fillMaxWidth().height(1.dp)`）。
+ * 分栏细线（1px）—— 宽屏分栏态下**信息栏上下两条横线**共用（尺寸由调用方以 [modifier] 传入：
+ * `fillMaxWidth().height(1.dp)`）。
+ *
+ * 色调：`outlineVariant` 再压到 50% 不透明度（用户决策 2026-10-07「调暗、不那么明显」）。
+ * 用 alpha 而不是写死颜色，是为了深浅两套主题下都只是「比背景略深/略浅的一线」；
+ * 若要更淡/更明显，只改这里的 alpha 即可。
+ * 注：播放器与右栏之间**没有**竖线（用户决策删除），两者靠底色与内容边界区分。
  */
 @Composable
 private fun ThinDivider(modifier: Modifier) {
-    Box(modifier = modifier.background(MaterialTheme.colorScheme.outlineVariant))
+    Box(
+        modifier = modifier.background(
+            MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f),
+        ),
+    )
 }
 
 /**
