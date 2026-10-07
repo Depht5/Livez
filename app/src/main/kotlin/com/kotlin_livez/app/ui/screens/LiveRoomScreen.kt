@@ -149,6 +149,8 @@ import kotlin.math.roundToInt
  *
  * 大屏版式：平板横屏（[useWideLayout]）**非全屏**时左右分栏（播放器居左、信息栏 + 标签
  * 内容居右）；**全屏时不分栏**，播放器独占整屏（用户决策 2026-10-07，反转原「全屏也分栏」）。
+ * 全屏**保持同一分支**、只隐藏标题栏与右栏——视频的 AndroidView 组合位置不得变化，
+ * 否则 SurfaceView 会 detach 重建并丢画面（详见下方根因说明）。
  * MainActivity 已声明 configChanges 含 orientation|screenSize|screenLayout|keyboardHidden
  * → 旋转不重建，布局重算由约束驱动（aspectRatio 随宽度变化自动重算 16:9 高度，
  * 等价原 onConfigurationChanged 手动重算语义，无需显式读取 LocalConfiguration）。
@@ -1164,31 +1166,41 @@ fun LiveRoomScreen(
 
     // 分栏**仅非全屏**（用户决策 2026-10-07，反转 task 10-07-tablet-landscape-layout
     // 原「全屏也分栏」决策）：平板横屏点全屏 = 播放器独占整屏，与手机全屏语义一致。
-    // 全屏走下面的窄屏单列分支——该分支的全屏行为（标题栏/信息栏/标签内容隐藏 +
-    // roomVideo 铺满 + 系统栏沉浸）正是需求要的语义，无需另写一份。
-    if (useWideLayout() && !isFullScreen) {
+    //
+    // ⚠ **全屏不换分支**（task 10-07-home-jank-jump-clip-fullscreen-video 修复）：
+    // 曾把条件写成 `useWideLayout() && !isFullScreen`（让全屏走下面的窄屏分支），结果进/出
+    // 全屏会让 roomVideo 里的 AndroidView 跨组合位置重建 —— AndroidView 节点与 LayoutNode
+    // 生命周期绑定（AndroidComposeView.addAndroidView/removeAndroidView 在 onPreAttach/onDetach
+    // 调用），节点 detach 使 SurfaceView 脱离窗口 → MpvVideoView.surfaceDestroyed →
+    // PlayerEngine 切 vo=null（纯音频续播），重挂后才恢复 → 真机表现为「切全屏卡顿一下 +
+    // 播放画面缺失」。现在全屏只隐藏标题栏与右侧面板：视频仍是左列子级（组合位置恒定、
+    // Surface 不重建），右列不组合后 weight(1f) 自然占满整行 → 播放器独占整屏。
+    if (useWideLayout()) {
         Row(modifier = rootModifier) {
             // 左列：标题栏 + 播放器（播放器吃掉剩余高度；letterbox 逻辑在片段内不变）
             Column(modifier = Modifier.weight(1f).fillMaxHeight()) {
                 roomTitleBar()
                 roomVideo(Modifier.weight(1f).fillMaxWidth())
             }
-            // 分隔线：对齐原项目内容区左侧 1px 灰线
-            Box(
-                modifier = Modifier
-                    .fillMaxHeight()
-                    .width(1.dp)
-                    .background(MaterialTheme.colorScheme.outlineVariant),
-            )
-            // 右列：主播信息栏 + 标签栏 + 消息区（仅非全屏分栏态显示）
-            Column(
-                modifier = Modifier
-                    .width(panelWidth)
-                    .fillMaxHeight()
-                    .background(MaterialTheme.colorScheme.surface),
-            ) {
-                roomInfoBar()
-                roomTabsAndContent()
+            // 分隔线与右列（主播信息栏 + 标签栏 + 消息区）**仅非全屏**组合：
+            // 既满足「全屏 = 播放器独占整屏」，又不为此切换分支（见上方根因说明）。
+            if (!isFullScreen) {
+                // 分隔线：对齐原项目内容区左侧 1px 灰线
+                Box(
+                    modifier = Modifier
+                        .fillMaxHeight()
+                        .width(1.dp)
+                        .background(MaterialTheme.colorScheme.outlineVariant),
+                )
+                Column(
+                    modifier = Modifier
+                        .width(panelWidth)
+                        .fillMaxHeight()
+                        .background(MaterialTheme.colorScheme.surface),
+                ) {
+                    roomInfoBar()
+                    roomTabsAndContent()
+                }
             }
         }
     } else {
