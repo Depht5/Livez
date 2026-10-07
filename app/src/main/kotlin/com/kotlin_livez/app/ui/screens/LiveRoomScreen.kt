@@ -1190,20 +1190,19 @@ fun LiveRoomScreen(
                 // 分隔线与右列（主播信息栏 + 标签栏 + 消息区）**仅非全屏**组合：
                 // 既满足「全屏 = 播放器独占整屏」，又不为此切换分支（见上方根因说明）。
                 if (!isFullScreen) {
-                    // 分隔线：对齐原项目内容区左侧 1px 灰线
-                    Box(
-                        modifier = Modifier
-                            .fillMaxHeight()
-                            .width(1.dp)
-                            .background(MaterialTheme.colorScheme.outlineVariant),
-                    )
+                    // 竖分隔线：播放器 | 右栏（对齐原项目内容区左侧 1px 灰线）
+                    ThinDivider(modifier = Modifier.fillMaxHeight().width(1.dp))
                     Column(
                         modifier = Modifier
                             .width(panelWidth)
                             .fillMaxHeight()
                             .background(MaterialTheme.colorScheme.surface),
                     ) {
+                        // 信息栏上下各一条同款横细线（用户要求 2026-10-07）：
+                        // 上 = 顶栏与信息栏之间，下 = 信息栏与标签栏之间，与竖线同色同粗细。
+                        ThinDivider(modifier = Modifier.fillMaxWidth().height(1.dp))
                         roomInfoBar()
+                        ThinDivider(modifier = Modifier.fillMaxWidth().height(1.dp))
                         roomTabsAndContent()
                     }
                 }
@@ -1319,6 +1318,16 @@ fun LiveRoomScreen(
 
         RoomSheet.DanmuShield -> DanmuShieldSheet(onDismiss = { activeSheet = RoomSheet.None })
     }
+}
+
+/**
+ * 分栏细线（1px）—— 宽屏分栏态下播放器与右栏之间的竖线、信息栏上下的两条横线共用同一实现，
+ * 保证颜色（`outlineVariant`）与粗细一致；尺寸由调用方以 [modifier] 传入
+ * （竖线 `fillMaxHeight().width(1.dp)`、横线 `fillMaxWidth().height(1.dp)`）。
+ */
+@Composable
+private fun ThinDivider(modifier: Modifier) {
+    Box(modifier = modifier.background(MaterialTheme.colorScheme.outlineVariant))
 }
 
 /**
