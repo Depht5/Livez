@@ -1,6 +1,5 @@
 package com.kotlin_livez.app.ui.screens
 
-import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -8,29 +7,21 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.wrapContentSize
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyGridState
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
-import androidx.compose.foundation.pager.HorizontalPager
-import androidx.compose.foundation.pager.PagerState
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ScrollableTabRow
 import androidx.compose.material3.Text
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.material3.pulltorefresh.PullToRefreshDefaults
@@ -46,12 +37,10 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.shadow
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.util.lerp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.kotlin_livez.app.app.EventBus
 import com.kotlin_livez.app.app.Site
@@ -59,19 +48,22 @@ import com.kotlin_livez.app.modules.category.AppLiveCategory
 import com.kotlin_livez.app.modules.category.CategoryController
 import com.kotlin_livez.app.modules.category.CategoryListController
 import com.kotlin_livez.app.ui.components.NetImage
+import com.kotlin_livez.app.ui.components.SitePagerTabs
 import com.kotlin_livez.app.ui.theme.cardContainerColor
 import com.kotlin_livez.core.model.LiveSubCategory
-import kotlin.math.floor
 import kotlinx.coroutines.launch
 
 /**
  * 分类页（Compose 版）—— 对应 Dart `modules/category/category_page.dart`（站点 TabBar）+
  * `category_list_view.dart`（分类列表），替换现版 View 体系 `ui/CategoryView.kt`。
  *
- * 结构镜像：顶部可滑动站点 Tab（logo 24dp + 8dp 间距 + 文字 16sp，选中分类蓝 #3498DB /
- * 未选中 #666666 手动切色，指示条 #3498DB），下方为站点横向翻页器（HorizontalPager），
+ * 结构镜像：顶部站点 Tab（logo 24dp + 8dp 间距 + 文字 16sp，选中分类蓝 #3498DB /
+ * 未选中 #666666 手动切色，指示条 #3498DB；装得下时水平居中），站点横向翻页器：
  * 每页一个分类网格：主分类标题为 full-span item 随滚动（**不做吸顶**，用户已决策，
  * 视觉取舍记入设计文档），子分类卡片 +「显示全部」展开；Tab 点击与滑动手势双向同步。
+ *
+ * 标签行与分页器（含「切换站点跳过中间页」两页过渡）由公共组件 [SitePagerTabs] 承载
+ * ——与首页共用同一实现（原两份逐行同构的 SiteTabRow 已收敛）。
  *
  * 各站点列表控制器由 [CategoryController] 壳层持有（跨底栏 Tab 切换存活）；
  * 滚动状态按站点各持一个 [LazyGridState]，由壳层传入（跨底栏切换与路由导航均不丢位置）。
@@ -104,10 +96,11 @@ fun CategoryScreen(
     val pagerState = rememberPagerState(initialPage = siteIndex, pageCount = { sites.size })
 
     // 滑动过程中回写选中索引，驱动 Tab 切色/指示条跟随；
-    // 点击 Tab 走 animateScrollToPage，落页后同样经此路径写回（幂等赋值，无循环风险）。
+    // 点击 Tab 走组件内过渡（相邻站点 animateScrollToPage / 跨多页两页过渡），
+    // 落页与过渡落位后同样经此路径写回（幂等赋值，无循环风险）。
     // 根因说明（真机反馈：左右滑动时顶部 Tab 变化慢一拍）：settledPage 要等翻页动画
     // 完全 settle 才更新；改用 currentPage——跨过页面中线立即切换，指示器实时跟手
-    //（tabIndicatorOffset 自带过渡动画，不会生硬跳变）。
+    //（指示条自身逐帧插值跟随，不会生硬跳变）。
     LaunchedEffect(pagerState.currentPage) {
         selectedSiteIndex = pagerState.currentPage
     }
@@ -141,111 +134,38 @@ fun CategoryScreen(
         onDispose { job.cancel() }
     }
 
-    Column(modifier = modifier.fillMaxSize().background(MaterialTheme.colorScheme.surface).statusBarsPadding()) {
-        SiteTabRow(
-            sites = sites,
-            selectedIndex = siteIndex,
-            pagerState = pagerState,
-            onSelect = { index ->
-                // 点击 Tab → 动画翻页；选中态由上方 currentPage 回写统一驱动
-                coroutineScope.launch { pagerState.animateScrollToPage(index) }
-            },
-        )
-
-        // 各站点一页：网格滚动状态仍由壳层 gridStates Map 持有（键 = 站点 id），
-        // pager 页销毁重建不影响位置；首屏加载守卫在 CategorySiteGrid 内部，行为不变。
-        // pager 横滑与网格纵向滚动/下拉刷新方向正交，无手势冲突。
-        HorizontalPager(state = pagerState, modifier = Modifier.weight(1f).fillMaxWidth()) { page ->
-            // 越界保护：sites 尺寸变化瞬间 pageCount 已更新但页面索引可能短暂越界
-            val pageIdx = page.coerceIn(0, sites.lastIndex.coerceAtLeast(0))
-            val pageSite = sites[pageIdx]
-            val listController = controller.categoryListControllers[pageSite.id]
-            val gridState = gridStates[pageSite.id]
-            if (listController != null && gridState != null) {
-                CategorySiteGrid(
-                    listController = listController,
-                    gridState = gridState,
-                    onOpenSub = { sub -> onOpenCategory(pageSite, sub) },
-                    modifier = Modifier.fillMaxSize(),
-                )
-            } else {
-                // 控制器尚未就绪的兜底空页（正常流程不会出现）
-                Box(modifier = Modifier.fillMaxSize())
-            }
-        }
-    }
-}
-
-/**
- * 站点 Tab 行 —— 对应 Dart category_page.dart 的 TabBar（logo + 文字）与现版 View 的
- * TabLayout MODE_SCROLLABLE 自定义 tab。配色对齐现版 CategoryView：
- * 指示条/选中 secondary、未选中 onSurfaceVariant（custom tab 内容需手动切色）。
- *
- * 指示条逐帧跟随（范式同 HomeScreen）：不用 tabIndicatorOffset（按 selectedTabIndex
- * 定位 + 自带过渡动画，页面跨中线才更新）。改为读取 pager 连续位置
- * （currentPage + currentPageOffsetFraction，组合期订阅 → 滑动中本组件每帧重组），
- * 在相邻两个 TabPosition 之间线性插值出偏移与宽度，实现「页面滑多少、指示条动多少」。
- * 选中文字色仍按 currentPage 切换（简单起见不做逐帧渐变，视觉差异可忽略）。
- */
-@Composable
-private fun SiteTabRow(
-    sites: List<Site>,
-    selectedIndex: Int,
-    pagerState: PagerState,
-    onSelect: (Int) -> Unit,
-) {
-    ScrollableTabRow(
-        selectedTabIndex = selectedIndex,
-        containerColor = MaterialTheme.colorScheme.surface,
-        // Tab 内容左右留白（对应 Dart labelPadding H20）；起始边距取小值贴近左缘（对齐 GRAVITY_START）
-        edgePadding = 12.dp,
-        // 指示条颜色对齐现版 setSelectedTabIndicatorColor(#3498DB，现映射 secondary)，宽度随标签内容
-        // （对齐 isTabIndicatorFullWidth = false）
-        indicator = { tabPositions ->
-            // 连续页位置：整数部分 = 当前页，小数部分 = 滑动进度（可为负——往回滑时
-            // currentPage 已进位而 offset 为负，floor 后仍落在正确的相邻区间）
-            val pos = pagerState.currentPage + pagerState.currentPageOffsetFraction
-            val leftIndex = floor(pos).toInt().coerceIn(0, tabPositions.lastIndex)
-            val rightIndex = (leftIndex + 1).coerceIn(0, tabPositions.lastIndex)
-            val fraction = (pos - leftIndex).coerceIn(0f, 1f)
-            val leftRect = tabPositions[leftIndex]
-            val rightRect = tabPositions[rightIndex]
-            // 手写等价 SecondaryIndicator + tabIndicatorOffset：偏移/宽度随连续位置插值；
-            // 高度 3dp 对齐 M3 SecondaryIndicator 默认粗细
-            Box(
-                Modifier
-                    .wrapContentSize(Alignment.BottomStart)
-                    .offset(x = lerp(leftRect.left.value, rightRect.left.value, fraction).dp)
-                    .width(lerp(leftRect.width.value, rightRect.width.value, fraction).dp)
-                    .height(3.dp)
-                    .background(MaterialTheme.colorScheme.secondary),
-            )
-        },
-        // 现版 TabLayout 无底部分隔线，去掉 M3 默认 divider
-        divider = { },
+    Column(
+        modifier = modifier
+            .fillMaxSize()
+            .background(MaterialTheme.colorScheme.surface)
+            .statusBarsPadding(),
     ) {
-        sites.forEachIndexed { index, site ->
-            val selected = index == selectedIndex
-            Row(
-                modifier = Modifier
-                    .clickable { onSelect(index) }
-                    .padding(horizontal = 20.dp, vertical = 12.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Image(
-                    painter = painterResource(site.logoRes),
-                    contentDescription = site.name,
-                    modifier = Modifier.size(24.dp),
-                )
-                Spacer(modifier = Modifier.width(8.dp))
-                Text(
-                    text = site.name,
-                    fontSize = 16.sp,
-                    // 手动切色：选中 secondary / 未选中 onSurfaceVariant（对齐 setTabTextColors）
-                    color = if (selected) MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-        }
+        SitePagerTabs(
+            pagerState = pagerState,
+            sites = sites,
+            gridStates = gridStates,
+            selectedIndex = siteIndex,
+            // 分类页指示条/选中色跟随 secondary（分类蓝 #3498DB 的 M3 映射）
+            indicatorColor = MaterialTheme.colorScheme.secondary,
+            // 两页过渡起跳时即时反馈选中站点（过渡中 currentPage 尚未变化）
+            onSelectSite = { selectedSiteIndex = it },
+            pageContent = { pageSite, gridState ->
+                val listController = controller.categoryListControllers[pageSite.id]
+                if (listController != null) {
+                    // 首屏加载守卫在 CategorySiteGrid 内部，行为不变
+                    CategorySiteGrid(
+                        listController = listController,
+                        gridState = gridState,
+                        onOpenSub = { sub -> onOpenCategory(pageSite, sub) },
+                        modifier = Modifier.fillMaxSize(),
+                    )
+                } else {
+                    // 控制器尚未就绪的兜底空页（正常流程不会出现）
+                    Box(modifier = Modifier.fillMaxSize())
+                }
+            },
+            modifier = Modifier.fillMaxSize(),
+        )
     }
 }
 
