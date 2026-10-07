@@ -146,6 +146,9 @@ import kotlin.math.roundToInt
  * 全屏切换：isFullScreen 为 UI 层状态（rememberSaveable 持久，等价原 onSaveInstanceState），
  * 全屏时隐藏竖屏布局区、系统栏隐藏 + SENSOR_LANDSCAPE 方向 + 刘海模式 SHORT_EDGES；
  * 视频按源宽高比 letterbox 居中（不拉伸，黑边留白；无尺寸信息回退铺满）。
+ *
+ * 大屏版式：平板横屏（[useWideLayout]）**非全屏**时左右分栏（播放器居左、信息栏 + 标签
+ * 内容居右）；**全屏时不分栏**，播放器独占整屏（用户决策 2026-10-07，反转原「全屏也分栏」）。
  * MainActivity 已声明 configChanges 含 orientation|screenSize|screenLayout|keyboardHidden
  * → 旋转不重建，布局重算由约束驱动（aspectRatio 随宽度变化自动重算 16:9 高度，
  * 等价原 onConfigurationChanged 手动重算语义，无需显式读取 LocalConfiguration）。
@@ -1159,7 +1162,11 @@ fun LiveRoomScreen(
     // 右侧面板宽度：原项目固定 300dp；此处加屏宽比例上限，避免小尺寸平板被面板吃掉过多
     val panelWidth = minOf(300.dp, LocalConfiguration.current.screenWidthDp.dp * 0.35f)
 
-    if (useWideLayout()) {
+    // 分栏**仅非全屏**（用户决策 2026-10-07，反转 task 10-07-tablet-landscape-layout
+    // 原「全屏也分栏」决策）：平板横屏点全屏 = 播放器独占整屏，与手机全屏语义一致。
+    // 全屏走下面的窄屏单列分支——该分支的全屏行为（标题栏/信息栏/标签内容隐藏 +
+    // roomVideo 铺满 + 系统栏沉浸）正是需求要的语义，无需另写一份。
+    if (useWideLayout() && !isFullScreen) {
         Row(modifier = rootModifier) {
             // 左列：标题栏 + 播放器（播放器吃掉剩余高度；letterbox 逻辑在片段内不变）
             Column(modifier = Modifier.weight(1f).fillMaxHeight()) {
@@ -1173,9 +1180,7 @@ fun LiveRoomScreen(
                     .width(1.dp)
                     .background(MaterialTheme.colorScheme.outlineVariant),
             )
-            // 右列：主播信息栏 + 标签栏 + 消息区。
-            // 分栏态**恒显示**（含全屏）——对齐原项目 _buildExpandedSidePanel 无条件含
-            // buildUserProfile + buildMessageArea；全屏只隐藏系统栏，面板自行避让。
+            // 右列：主播信息栏 + 标签栏 + 消息区（仅非全屏分栏态显示）
             Column(
                 modifier = Modifier
                     .width(panelWidth)

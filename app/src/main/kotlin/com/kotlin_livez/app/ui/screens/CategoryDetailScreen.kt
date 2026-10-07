@@ -6,9 +6,11 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.grid.LazyGridState
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -26,13 +28,14 @@ import com.kotlin_livez.app.app.Sites
 import com.kotlin_livez.app.modules.category.detail.CategoryDetailController
 import com.kotlin_livez.app.ui.Router
 import com.kotlin_livez.app.ui.components.PagedRoomGrid
+import com.kotlin_livez.app.ui.theme.CustomIcons
 import com.kotlin_livez.core.model.LiveSubCategory
 
 /**
  * 分类详情页（Compose 版）—— 对应 Dart `modules/category/detail/category_detail_page.dart`，
  * 替换现版 View 体系 `ui/CategoryDetailActivity.kt`。
  *
- * 结构镜像：顶部栏（返回「←」+ 居中标题 16sp medium + 右侧对称占位），
+ * 结构镜像：顶部栏（返回图标按钮 + 居中标题 16sp medium + 右侧对称占位），
  * 主体为直播间卡片网格（复用 LiveRoomCard 全套）：下拉刷新 + 触底分页 +
  * 首屏加载/错误重试/空态三态——网格机制由公共组件 PagedRoomGrid 承载
  * （原 DetailRoomGrid 实现已逐行收敛进该组件，行为不变；仅错误/空态文案保留本页原文）。
@@ -100,8 +103,8 @@ fun CategoryDetailScreen(
 }
 
 /**
- * 顶部栏 —— 对齐现版布局：返回键（22sp onSurface）+ 居中标题（16sp medium 单行省略）+
- * 右侧占位使标题居中。
+ * 顶部栏 —— 返回图标按钮（48dp 触控区 + 24dp [CustomIcons.Back]，与设置页等页面同款）
+ * + 居中标题（16sp medium 单行省略）+ 右侧对称占位使标题居中。
  */
 @Composable
 private fun DetailTitleBar(title: String, onBack: () -> Unit) {
@@ -111,14 +114,19 @@ private fun DetailTitleBar(title: String, onBack: () -> Unit) {
             .padding(horizontal = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text(
-            text = "←",
-            fontSize = 22.sp,
-            color = MaterialTheme.colorScheme.onSurface,
+        Box(
             modifier = Modifier
-                .clickable(onClick = onBack)
-                .padding(vertical = 12.dp, horizontal = 8.dp),
-        )
+                .size(48.dp)
+                .clickable(onClick = onBack),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(
+                imageVector = CustomIcons.Back,
+                contentDescription = "返回",
+                tint = MaterialTheme.colorScheme.onSurface,
+                modifier = Modifier.size(24.dp),
+            )
+        }
         Text(
             text = title,
             fontSize = 16.sp,
@@ -131,11 +139,7 @@ private fun DetailTitleBar(title: String, onBack: () -> Unit) {
                 .weight(1f)
                 .padding(vertical = 12.dp),
         )
-        // 右侧占位使标题居中（对应返回键对称位置）
-        Text(
-            text = "",
-            fontSize = 22.sp,
-            modifier = Modifier.padding(vertical = 12.dp, horizontal = 8.dp),
-        )
+        // 右侧占位使标题居中（与返回按钮对称）
+        Box(modifier = Modifier.size(48.dp))
     }
 }
