@@ -34,6 +34,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
@@ -329,7 +330,11 @@ fun SitePagerTabs(
                 trailing = trailing,
             )
 
-            Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
+            // 分页区**必须裁剪**：过渡期源页与目标页都用 Modifier.offset 平移出本区域，
+            // 而宽屏壳层的内容 Box 是 Row 的最后一个子级（绘制在 NavigationRail 之上，
+            // 见 AppNavHost.MainShell），不裁剪时平移出内容区的页面会浮在左侧导航栏上。
+            // 网格自身（LazyVerticalGrid）本就裁剪边界，故卡片阴影观感不受影响。
+            Box(modifier = Modifier.weight(1f).fillMaxWidth().clipToBounds()) {
                 HorizontalPager(
                     state = pagerState,
                     modifier = Modifier
