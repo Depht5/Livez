@@ -28,15 +28,18 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
@@ -66,6 +69,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.painterResource
@@ -96,6 +100,8 @@ import com.kotlin_livez.app.player.PlayerEngine
 import com.kotlin_livez.app.services.MpvOptionsService
 import com.kotlin_livez.app.ui.DanmakuOverlayView
 import com.kotlin_livez.app.ui.Router
+import com.kotlin_livez.app.ui.deviceOrientationPolicy
+import com.kotlin_livez.app.ui.useWideLayout
 import com.kotlin_livez.app.ui.components.DanmuSettingsSheet
 import com.kotlin_livez.app.ui.components.DanmuSettingsSidePanel
 import com.kotlin_livez.app.ui.components.DanmuShieldSheet
@@ -232,7 +238,9 @@ fun LiveRoomScreen(
             insetsController.isAppearanceLightStatusBars = false
             insetsController.isAppearanceLightNavigationBars = false
         } else {
-            activity.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+            // 退出全屏恢复方向按设备档位：平板 → 释放（可继续横屏用大屏分栏布局）；
+            // 紧凑手机 → 竖屏（原固定 PORTRAIT 的语义，见 ui/WideLayout.kt）
+            activity.requestedOrientation = activity.deviceOrientationPolicy()
             insetsController.show(WindowInsetsCompat.Type.systemBars())
             // 恢复图标明暗 = 应用当前生效主题的对应值（task 08-29-live-room-bars-follow-status
             // 真机实证：原硬编码 true（深色图标）在深色模式下把状态栏打成黑图标不可见；
@@ -248,7 +256,8 @@ fun LiveRoomScreen(
             val activity = context as? Activity
             if (activity != null) {
                 runCatching {
-                    activity.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+                    // 同样按设备档位恢复（平板不强行掰回竖屏，否则离开直播间后无法保持横屏大屏布局）
+                    activity.requestedOrientation = activity.deviceOrientationPolicy()
                     val insetsController = WindowInsetsControllerCompat(
                         activity.window, activity.window.decorView,
                     )
@@ -792,27 +801,12 @@ fun LiveRoomScreen(
     // 根容器的背景色直接决定刘海区域的观感——原根容器固定白色，主题白底从视频黑底之外
     // （含刘海延伸区）穿透出来。修复：全屏时根容器改黑色（与视频外层黑底一致），
     // 竖屏维持白色不变。
-    Column(
-        modifier = modifier
-            // 容器展开：与来源卡片根容器 sharedBounds 配对（卡片矩形连续扩张为全屏，
-            // 内容交叉淡化；返回反向）——一镜到底的容器变换层
-            .liveRoomContainerSharedElement(siteId, roomId)
-            .fillMaxSize()
-            // 沉浸（M3 任务）：根容器背景延伸覆盖状态栏区（背景先应用铺满，再收缩内容）；
-            // statusBarsPadding 让标题栏等内容避开状态栏；全屏时系统栏隐藏 insets=0，
-            // padding 自动归零，视频铺满无影响。
-            .background(if (isFullScreen) Color.Black else MaterialTheme.colorScheme.surface)
-            .statusBarsPadding(),
-    ) {
 
-        // 标题栏：返回图标（CustomIcons.Back）/ 标题（16sp medium 单行省略）/ 菜单图标
-        // （CustomIcons.Menu）—— 全屏时隐藏。
-        // 根因说明（真机症状 4：标题不居中、返回按钮左侧缺几个像素）：
-        // 旧实现标题用 weight(1f) 挤在左右两个文本按钮之间——「←」与「⋮」字形推进宽度
-        // 不相等，可用空间不对称导致标题整体偏移几个像素；且「←」按字形紧排，负 left
-        // bearing 使箭头左侧尖端被裁切。
-        // 修复：三段对称结构——两侧各固定 48dp 方形触控区、字形在其中居中（留足空间
-        // 不再裁切）；标题脱离 Row 权重分配、由 Box 正中对齐，实现真正水平居中。
+    // ---------- 版式片段（宽屏两列 / 窄屏单列共用；避免在两个分支里复制数百行）----------
+    // 根修饰符（背景/共享元素/insets）由下方根容器承担，片段内不含。
+
+    /** 标题栏片段：宽屏在播放器列顶部、窄屏在最顶部；全屏时隐藏（守卫留在片段内）。 */
+    val roomTitleBar: @Composable () -> Unit = {
         if (!isFullScreen) {
             Box(
                 modifier = Modifier
@@ -871,19 +865,12 @@ fun LiveRoomScreen(
                 }
             }
         }
+    }
 
-        // 视频区：竖屏高 = 屏宽 × 9/16（aspectRatio 由约束驱动，旋转时自动重算，
-        // 对应原 onConfigurationChanged 手动重算的语义）；全屏占满整屏。黑底由父容器承担。
-        // 进入直播间「先黑底、后出画面」属 mpv 异步初始化的正常表现
-        // （initialize/create/surface attach 均异步完成），不做伪加载动画，
-        // 黑底占位由本 Box 的 background(Color.Black) 承担。
-        // 手势层挂在外层（含 letterbox 黑边区域，全屏任意位置可点/滑）。
+    /** 视频区片段：布局尺寸由调用方传入（宽屏 weight 填满 / 窄屏 16:9 或全屏铺满）。 */
+    val roomVideo: @Composable (Modifier) -> Unit = { outerModifier ->
         Box(
-            modifier = (if (isFullScreen) {
-                Modifier.fillMaxSize()
-            } else {
-                Modifier.fillMaxWidth().aspectRatio(16f / 9f)
-            })
+            modifier = outerModifier
                 .liveRoomCoverSharedElement(siteId, roomId)
                 .then(videoGestureModifier)
                 .background(Color.Black),
@@ -1029,132 +1016,189 @@ fun LiveRoomScreen(
                 )
             }
         }
+    }
 
-        // 信息区（对应 Dart buildUserProfile）：头像/名称/平台 + 人气 —— 全屏时隐藏
-        if (!isFullScreen) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .background(MaterialTheme.colorScheme.surface)
-                    .padding(horizontal = 12.dp, vertical = 8.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                NetImage(
-                    url = detail?.userAvatar.orEmpty(),
-                    modifier = Modifier.size(48.dp),
-                    isRound = true,
-                )
-                Column(modifier = Modifier.weight(1f).padding(horizontal = 12.dp)) {
-                    Text(
-                        text = detail?.userName ?: "",
-                        fontSize = 14.sp,
-                        color = MaterialTheme.colorScheme.onSurface,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        // 平台行：图标 + 平台名
-                        Image(
-                            painter = painterResource(site.logoRes),
-                            contentDescription = null,
-                            modifier = Modifier.size(16.dp),
-                        )
-                        Spacer(modifier = Modifier.size(4.dp))
-                        Text(text = site.name, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    }
-                }
-                // 关注按钮（task follow-tab-and-room-follow）：未关注 = 灰色空心爱心
-                // HeartOutline，已关注 = 红色实心爱心 HeartFilled；点击切换关注状态
-                Icon(
-                    imageVector = if (followed) CustomIcons.HeartFilled else CustomIcons.HeartOutline,
-                    contentDescription = null,
-                    // Icon 的 ColorFilter 染色决定实际颜色（tint=Unspecified 会回退为
-                    // LocalContentColor 染黑）：显式按状态上色——已关注红 #FF0000；
-                    // 未关注浅色灰 #808080，深色下浅灰 #B0B0B0（深灰底对比不足，
-                    // task 08-29-dark-mode 用户定标；经 LocalAppDarkTheme 感知手动切换）
-                    tint = if (followed) {
-                        Color(0xFFFF0000)
-                    } else if (LocalAppDarkTheme.current) {
-                        Color(0xFFB0B0B0)
-                    } else {
-                        Color(0xFF808080)
-                    },
-                    modifier = Modifier
-                        // 顺序关键：padding 外层撑点击区、size 最内层决定爱心本体尺寸
-                        //（反序会让 padding 挤压渲染区，爱心实际只显示 size−padding）
-                        .clickable {
-                            if (followed) {
-                                controller.removeFollowUser()
-                            } else {
-                                controller.followUser()
-                            }
-                        }
-                        .padding(horizontal = 4.dp, vertical = 4.dp)
-                        .size(23.dp),
-                )
+    /** 信息栏片段（对应 Dart buildUserProfile）：头像/名称/平台 + 关注 + 人气。
+     *  守卫由调用方决定：窄屏非全屏显示；宽屏恒显示（右侧面板的组成部分）。 */
+    val roomInfoBar: @Composable () -> Unit = {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(MaterialTheme.colorScheme.surface)
+                .padding(horizontal = 12.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            NetImage(
+                url = detail?.userAvatar.orEmpty(),
+                modifier = Modifier.size(48.dp),
+                isRound = true,
+            )
+            Column(modifier = Modifier.weight(1f).padding(horizontal = 12.dp)) {
                 Text(
-                    text = "🔥 ${Utils.onlineToString(online)}",
+                    text = detail?.userName ?: "",
                     fontSize = 14.sp,
-                    // 人气橙色（现版 #FF9800，主题常量暂无此色值）
-                    color = LiveOrange,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    // 平台行：图标 + 平台名
+                    Image(
+                        painter = painterResource(site.logoRes),
+                        contentDescription = null,
+                        modifier = Modifier.size(16.dp),
+                    )
+                    Spacer(modifier = Modifier.size(4.dp))
+                    Text(text = site.name, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
+            // 关注按钮（task follow-tab-and-room-follow）：未关注 = 灰色空心爱心
+            // HeartOutline，已关注 = 红色实心爱心 HeartFilled；点击切换关注状态
+            Icon(
+                imageVector = if (followed) CustomIcons.HeartFilled else CustomIcons.HeartOutline,
+                contentDescription = null,
+                // Icon 的 ColorFilter 染色决定实际颜色（tint=Unspecified 会回退为
+                // LocalContentColor 染黑）：显式按状态上色——已关注红 #FF0000；
+                // 未关注浅色灰 #808080，深色下浅灰 #B0B0B0（深灰底对比不足，
+                // task 08-29-dark-mode 用户定标；经 LocalAppDarkTheme 感知手动切换）
+                tint = if (followed) {
+                    Color(0xFFFF0000)
+                } else if (LocalAppDarkTheme.current) {
+                    Color(0xFFB0B0B0)
+                } else {
+                    Color(0xFF808080)
+                },
+                modifier = Modifier
+                    // 顺序关键：padding 外层撑点击区、size 最内层决定爱心本体尺寸
+                    //（反序会让 padding 挤压渲染区，爱心实际只显示 size−padding）
+                    .clickable {
+                        if (followed) {
+                            controller.removeFollowUser()
+                        } else {
+                            controller.followUser()
+                        }
+                    }
+                    .padding(horizontal = 4.dp, vertical = 4.dp)
+                    .size(23.dp),
+            )
+            Text(
+                text = "🔥 ${Utils.onlineToString(online)}",
+                fontSize = 14.sp,
+                // 人气橙色（现版 #FF9800，主题常量暂无此色值）
+                color = LiveOrange,
+            )
+        }
+    }
+
+    /** 标签栏 + 内容区片段：weight 需要 Column 作用域，故声明为 ColumnScope 扩展，
+     *  由调用处的 Column 提供（宽屏右列 / 窄屏根列均满足）。 */
+    val roomTabsAndContent: @Composable ColumnScope.() -> Unit = {
+        TabRow(
+            selectedTabIndex = selectedTabIndex,
+            containerColor = MaterialTheme.colorScheme.surface,
+            contentColor = MaterialTheme.colorScheme.secondary,
+            indicator = { tabPositions ->
+                Box(
+                    modifier = Modifier
+                        .tabIndicatorOffset(tabPositions[selectedTabIndex])
+                        .height(2.dp)
+                        .background(MaterialTheme.colorScheme.secondary),
+                )
+            },
+        ) {
+            tabs.forEachIndexed { index, tab ->
+                Tab(
+                    selected = selectedTabIndex == index,
+                    onClick = { selectedTabIndex = index },
+                    text = {
+                        Text(
+                            text = tab.label,
+                            fontSize = 14.sp,
+                            // 选中蓝 / 未选中灰（对齐原 setTabTextColors）
+                            color = if (selectedTabIndex == index) MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    },
                 )
             }
         }
 
-        // 标签栏 + 内容区（weight=1）—— 全屏时隐藏（状态在上方无条件声明，不丢失）
-        if (!isFullScreen) {
-            TabRow(
-                selectedTabIndex = selectedTabIndex,
-                containerColor = MaterialTheme.colorScheme.surface,
-                contentColor = MaterialTheme.colorScheme.secondary,
-                indicator = { tabPositions ->
-                    Box(
-                        modifier = Modifier
-                            .tabIndicatorOffset(tabPositions[selectedTabIndex])
-                            .height(2.dp)
-                            .background(MaterialTheme.colorScheme.secondary),
-                    )
-                },
-            ) {
-                tabs.forEachIndexed { index, tab ->
-                    Tab(
-                        selected = selectedTabIndex == index,
-                        onClick = { selectedTabIndex = index },
-                        text = {
-                            Text(
-                                text = tab.label,
-                                fontSize = 14.sp,
-                                // 选中蓝 / 未选中灰（对齐原 setTabTextColors）
-                                color = if (selectedTabIndex == index) MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        },
+        Box(modifier = Modifier.weight(1f)) {
+            when (selectedKey) {
+                TAB_KEY_CHAT -> {
+                    // 自动跟随在页面级（chatListState 声明处）：意图守卫 + 每消息贴底；
+                    // 面板恢复组合（全屏退出/切回 Tab）后本分支重组，消息 effect 即刻生效。
+                    ChatTabContent(
+                        messages = messages,
+                        listState = chatListState,
                     )
                 }
+                TAB_KEY_SUPER_CHAT -> SuperChatTabContent(superChats)
+                TAB_KEY_FOLLOW -> FollowTabContent(
+                    items = followLive + followNotLive,
+                    onOpenRoom = { follow ->
+                        val target = Sites.allSites[follow.siteId] ?: return@FollowTabContent
+                        controller.resetRoom(target, follow.roomId)
+                    },
+                )
+                TAB_KEY_CONTRIBUTION_RANK -> ContributionRankTabContent(contributionUsers)
+                TAB_KEY_SETTINGS -> SettingsTabPlaceholder(
+                    onOpenSettings = { activeSheet = RoomSheet.LiveSettings },
+                )
             }
+        }
+    }
 
-            Box(modifier = Modifier.weight(1f)) {
-                when (selectedKey) {
-                    TAB_KEY_CHAT -> {
-                        // 自动跟随在页面级（chatListState 声明处）：意图守卫 + 每消息贴底；
-                        // 面板恢复组合（全屏退出/切回 Tab）后本分支重组，消息 effect 即刻生效。
-                        ChatTabContent(
-                            messages = messages,
-                            listState = chatListState,
-                        )
-                    }
-                    TAB_KEY_SUPER_CHAT -> SuperChatTabContent(superChats)
-                    TAB_KEY_FOLLOW -> FollowTabContent(
-                        items = followLive + followNotLive,
-                        onOpenRoom = { follow ->
-                            val target = Sites.allSites[follow.siteId] ?: return@FollowTabContent
-                            controller.resetRoom(target, follow.roomId)
-                        },
-                    )
-                    TAB_KEY_CONTRIBUTION_RANK -> ContributionRankTabContent(contributionUsers)
-                    TAB_KEY_SETTINGS -> SettingsTabPlaceholder(
-                        onOpenSettings = { activeSheet = RoomSheet.LiveSettings },
-                    )
-                }
+    // ---------- 根容器：宽屏（平板横屏）两列 / 窄屏单列 ----------
+    // 背景色沿用原根容器写法：全屏黑底（刘海延伸区观感），竖屏主题底色。
+    val rootModifier = modifier
+        .liveRoomContainerSharedElement(siteId, roomId)
+        .fillMaxSize()
+        .background(if (isFullScreen) Color.Black else MaterialTheme.colorScheme.surface)
+        .statusBarsPadding()
+
+    // 右侧面板宽度：原项目固定 300dp；此处加屏宽比例上限，避免小尺寸平板被面板吃掉过多
+    val panelWidth = minOf(300.dp, LocalConfiguration.current.screenWidthDp.dp * 0.35f)
+
+    if (useWideLayout()) {
+        Row(modifier = rootModifier) {
+            // 左列：标题栏 + 播放器（播放器吃掉剩余高度；letterbox 逻辑在片段内不变）
+            Column(modifier = Modifier.weight(1f).fillMaxHeight()) {
+                roomTitleBar()
+                roomVideo(Modifier.weight(1f).fillMaxWidth())
+            }
+            // 分隔线：对齐原项目内容区左侧 1px 灰线
+            Box(
+                modifier = Modifier
+                    .fillMaxHeight()
+                    .width(1.dp)
+                    .background(MaterialTheme.colorScheme.outlineVariant),
+            )
+            // 右列：主播信息栏 + 标签栏 + 消息区。
+            // 分栏态**恒显示**（含全屏）——对齐原项目 _buildExpandedSidePanel 无条件含
+            // buildUserProfile + buildMessageArea；全屏只隐藏系统栏，面板自行避让。
+            Column(
+                modifier = Modifier
+                    .width(panelWidth)
+                    .fillMaxHeight()
+                    .background(MaterialTheme.colorScheme.surface),
+            ) {
+                roomInfoBar()
+                roomTabsAndContent()
+            }
+        }
+    } else {
+        Column(modifier = rootModifier) {
+            roomTitleBar()
+            roomVideo(
+                if (isFullScreen) {
+                    Modifier.fillMaxSize()
+                } else {
+                    Modifier.fillMaxWidth().aspectRatio(16f / 9f)
+                },
+            )
+            if (!isFullScreen) {
+                roomInfoBar()
+                roomTabsAndContent()
             }
         }
     }

@@ -9,23 +9,32 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.grid.LazyGridState
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material3.NavigationRail
+import androidx.compose.material3.NavigationRailItem
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.SaveableStateHolder
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.runtime.setValue
@@ -44,6 +53,7 @@ import com.kotlin_livez.app.modules.category.CategoryController
 import com.kotlin_livez.app.modules.follow_user.FollowUserController
 import com.kotlin_livez.app.modules.home.HomeController
 import com.kotlin_livez.app.ui.Router
+import com.kotlin_livez.app.ui.useWideLayout
 import com.kotlin_livez.app.ui.screens.AccountScreen
 import com.kotlin_livez.app.ui.screens.CategoryDetailScreen
 import com.kotlin_livez.app.ui.screens.CategoryScreen
@@ -271,59 +281,150 @@ private fun MainShell(shell: ShellState) {
     // NavHost 的 SaveableStateHolder 同样恢复）
     var currentIndex by rememberSaveable { mutableIntStateOf(0) }
 
-    Column(modifier = Modifier.fillMaxSize()) {
-        Box(modifier = Modifier.weight(1f)) {
-            // SaveableStateProvider（task 08-29-scroll-restore-follow-refresh）：底栏 Tab
-            // 切换按键保留各 Tab 的 rememberSaveable 状态。根因（真机实证：底栏切走再切回
-            // 后首页/分类回落第一站点顶部）：此前 when 分支直接销毁重建，无状态保存——
-            // 首页/分类的 selectedSiteIndex 与 rememberPagerState 均为 rememberSaveable，
-            // 丢弃后切回即重置，观感即「离开再返回滚动位置丢失」。各站点 LazyGridState
-            // 由壳层持有本就存活，恢复站点索引后位置随之恢复。路由导航由 NavHost 自带
-            // SaveableStateProvider 保存（进直播间返回不丢），与本层嵌套互不影响。
-            val tabStateHolder = rememberSaveableStateHolder()
-            tabStateHolder.SaveableStateProvider(currentIndex) {
-                when (currentIndex) {
-                    0 -> HomeScreen(
-                        controller = shell.homeController,
-                        gridStates = shell.homeGridStates,
-                        onOpenLiveRoom = { site, roomId ->
-                            // 直播间已迁路由（Batch 7）：Router.openLiveRoom 导航至
-                            // livertoom/{siteId}/{roomId}（siteId/roomId 经 URL 编码）
-                            Router.openLiveRoom(site, roomId)
-                        },
-                    )
-                    1 -> FollowScreen(controller = shell.followController)
-                    2 -> CategoryScreen(
-                        controller = shell.categoryController,
-                        gridStates = shell.categoryGridStates,
-                        onOpenCategory = { site, sub ->
-                            // 分类详情已迁路由（本批）：path/query 字符串传参，
-                            // 特殊字符经 URL 编码（NavController 解析后自动解码）
-                            val route = "category/${Uri.encode(site.id)}" +
-                                "?categoryId=${Uri.encode(sub.id)}" +
-                                "&categoryName=${Uri.encode(sub.name)}"
-                            Router.navigate(route)
-                        },
-                    )
-                    else -> MineScreen()
-                }
+    // Tab 状态持有者提升到分支之外（task 10-07-tablet-landscape-layout）：宽/窄两分支
+    // 在组合树中的位置不同，若把 holder 放在分支内，横竖屏切换会因分支切换而重建、
+    // 各 Tab 的 rememberSaveable（选中站点/分页器位置）随之丢失。放在 MainShell 层
+    // 则跨旋转存活，语义对齐 Dart 的 IndexedStack（pages 由控制器持有、旋转不丢）。
+    val tabStateHolder = rememberSaveableStateHolder()
+
+    // 选中/重按的唯一入口（宽/窄两分支共用，避免映射逻辑写两遍）：
+    // 对齐 Dart indexed_controller.setIndex —— 仅重复点击当前 Tab 才发射事件，
+    // 且发射值为「页面标识」而非底栏槽位（Constant.allHomePages：首页 0 / 关注 1 / 分类 2 / 我的 3），
+    // 订阅方按页面标识过滤：HomeController/首页 Screen 收 index==0、
+    // FollowUserController 收 index==1（回顶/刷新）、CategoryScreen 收 index==2。
+    // 本 fork 底栏为 首页(槽0)/关注(槽1)/分类(槽2)/我的(槽3)——对调后槽位与 Dart 页面标识
+    // 恰好一致，直接透传。
+    val onSelectTab: (Int) -> Unit = { index ->
+        if (index == currentIndex) {
+            EventBus.emit(EventBus.kBottomNavigationBarClicked, index)
+        } else {
+            currentIndex = index
+        }
+    }
+
+    if (useWideLayout()) {
+        // 大屏（平板横屏，task 10-07-tablet-landscape-layout）：底栏整条不组合，改为左侧
+        // NavigationRail 紧凑左上对齐（对齐 Dart indexed_page.dart 横屏分支的
+        // NavigationRail + `Visibility(visible: portrait)` 底栏）。
+        Row(modifier = Modifier.fillMaxSize()) {
+            MainNavigationRail(currentIndex, onSelectTab)
+            // 内容区左侧 1px 分隔线（对齐原项目 `Border.left` Colors.grey.withAlpha(50)）
+            Box(
+                modifier = Modifier
+                    .fillMaxHeight()
+                    .width(1.dp)
+                    .background(MaterialTheme.colorScheme.outlineVariant),
+            )
+            Box(modifier = Modifier.weight(1f)) {
+                MainTabContent(currentIndex, shell, tabStateHolder)
             }
         }
-        MainBottomBar(currentIndex) { index ->
-            if (index == currentIndex) {
-                // 对齐 Dart indexed_controller.setIndex：仅重复点击当前 Tab 才发射事件，
-                // 且发射值为「页面标识」而非底栏槽位——Dart 发射 items[i].index
-                // （Constant.allHomePages：首页 0 / 关注 1 / 分类 2 / 我的 3），
-                // 订阅方按页面标识过滤：HomeController/首页 Screen 收 index==0、
-                // FollowUserController 收 index==1（回顶/刷新）、CategoryScreen 收 index==2。
-                // 本 fork 底栏为 首页(槽0)/关注(槽1)/分类(槽2)/我的(槽3)——
-                // 对调后槽位与 Dart 页面标识（首页0/关注1/分类2/我的3）恰好一致，直接透传。
-                val pageIndex = index
-                EventBus.emit(EventBus.kBottomNavigationBarClicked, pageIndex)
-            } else {
-                currentIndex = index
+    } else {
+        Column(modifier = Modifier.fillMaxSize()) {
+            Box(modifier = Modifier.weight(1f)) {
+                MainTabContent(currentIndex, shell, tabStateHolder)
             }
+            MainBottomBar(currentIndex, onSelectTab)
         }
+    }
+}
+
+/**
+ * Tab 内容区 —— 宽/窄两分支**共用的唯一实现**（勿在两分支各写一份 `when`，否则必然漂移）。
+ *
+ * SaveableStateProvider（task 08-29-scroll-restore-follow-refresh）：底栏/侧栏 Tab 切换时
+ * 保留各 Tab 的 rememberSaveable 状态。根因（真机实证：切换后首页/分类回落第一站点顶部）：
+ * 此前 `when` 分支直接销毁重建、无状态保存——首页/分类的 selectedSiteIndex 与
+ * rememberPagerState 均为 rememberSaveable，丢弃后切回即重置。各站点 LazyGridState 由壳层
+ * 持有本就存活，恢复站点索引后位置随之恢复。路由导航由 NavHost 自带 SaveableStateProvider
+ * 保存（进直播间返回不丢），与本层嵌套互不影响。
+ */
+@Composable
+private fun MainTabContent(
+    currentIndex: Int,
+    shell: ShellState,
+    tabStateHolder: SaveableStateHolder,
+) {
+    tabStateHolder.SaveableStateProvider(currentIndex) {
+        when (currentIndex) {
+            0 -> HomeScreen(
+                controller = shell.homeController,
+                gridStates = shell.homeGridStates,
+                onOpenLiveRoom = { site, roomId ->
+                    // 直播间已迁路由（Batch 7）：Router.openLiveRoom 导航至
+                    // livertoom/{siteId}/{roomId}（siteId/roomId 经 URL 编码）
+                    Router.openLiveRoom(site, roomId)
+                },
+            )
+            1 -> FollowScreen(controller = shell.followController)
+            2 -> CategoryScreen(
+                controller = shell.categoryController,
+                gridStates = shell.categoryGridStates,
+                onOpenCategory = { site, sub ->
+                    // 分类详情已迁路由（本批）：path/query 字符串传参，
+                    // 特殊字符经 URL 编码（NavController 解析后自动解码）
+                    val route = "category/${Uri.encode(site.id)}" +
+                        "?categoryId=${Uri.encode(sub.id)}" +
+                        "&categoryName=${Uri.encode(sub.name)}"
+                    Router.navigate(route)
+                },
+            )
+            else -> MineScreen()
+        }
+    }
+}
+
+/**
+ * 左侧导航栏（平板横屏）—— 对齐 Dart `indexed_page.dart` 的横屏 NavigationRail：
+ *
+ * | 原项目 | 此处 |
+ * |---|---|
+ * | `labelType: NavigationRailLabelType.none`（纯图标无文字） | `label = null` + `alwaysShowLabel = false` |
+ * | `groupAlignment: -1`（**顶部对齐**） | M3 `NavigationRail` 内部为居中排列，故在末尾追加 `Spacer(weight(1f))` 把各项顶到左上角 |
+ * | `padding: edgeInsetsV8` | 每项 `padding(vertical = 4.dp)` |
+ * | 图标/选中态 | 复用底栏的 `CustomIcons` 四项与显式配色（选中 onSecondaryContainer / 未选中 onSurfaceVariant） |
+ * | 无障碍 | label 置空但保留 `contentDescription`（底栏既有约定） |
+ */
+@Composable
+private fun MainNavigationRail(currentIndex: Int, onSelect: (Int) -> Unit) {
+    val titles = listOf("首页", "关注", "分类", "我的")
+    val icons = listOf(
+        CustomIcons.Home,
+        CustomIcons.HeartOutline,
+        CustomIcons.Category,
+        CustomIcons.Mine,
+    )
+
+    NavigationRail(
+        modifier = Modifier.fillMaxHeight(),
+        // 容器色与底栏 NavigationBar 一致（surfaceContainer；纯黑模式下该槽位同样不覆盖）
+        containerColor = MaterialTheme.colorScheme.surfaceContainer,
+    ) {
+        titles.forEachIndexed { index, title ->
+            val selected = currentIndex == index
+            NavigationRailItem(
+                selected = selected,
+                onClick = { onSelect(index) },
+                modifier = Modifier.padding(vertical = 4.dp),
+                icon = {
+                    Icon(
+                        imageVector = icons[index],
+                        contentDescription = title,
+                        tint = if (selected) {
+                            MaterialTheme.colorScheme.onSecondaryContainer
+                        } else {
+                            MaterialTheme.colorScheme.onSurfaceVariant
+                        },
+                        modifier = Modifier.size(24.dp),
+                    )
+                },
+                label = null,
+                alwaysShowLabel = false,
+            )
+        }
+        // 紧凑左上对齐：可伸缩占位吃掉剩余高度（M3 NavigationRail 内部按居中排列，
+        // 无此占位时四项会垂直居中而非贴顶）
+        Spacer(modifier = Modifier.weight(1f))
     }
 }
 

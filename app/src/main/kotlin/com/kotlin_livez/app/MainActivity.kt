@@ -20,6 +20,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.compose.rememberNavController
 import com.kotlin_livez.app.di.ServiceContainer
 import com.kotlin_livez.app.ui.Router
+import com.kotlin_livez.app.ui.deviceOrientationPolicy
 import com.kotlin_livez.app.ui.nav.AppNavHost
 import com.kotlin_livez.app.ui.theme.AppTheme
 import com.kotlin_livez.app.ui.theme.appThemeResolvedDark
@@ -39,6 +40,13 @@ class MainActivity : ComponentActivity() {
         // （深色生效时的图标明暗切换见下方 DisposableEffect——auto 只跟随系统，不感知应用内手动切换）
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
+
+        // 大屏布局（task 10-07-tablet-landscape-layout）：Manifest 不再硬锁竖屏——平板需自由
+        // 旋转才能进入横屏大屏布局（底栏左置 / 直播间左右分栏）。方向策略改为按设备档位在
+        // 运行时决定：平板释放全部方向交给系统，紧凑手机锁竖屏（保持既有行为与手感）。
+        // 对齐 Dart 原项目 resetPreferredOrientation："Tablets keep the OS orientation policy
+        // so their layouts are not forced through portrait."（见 ui/WideLayout.kt）
+        requestedOrientation = deviceOrientationPolicy()
 
         Router.install(applicationContext)
 

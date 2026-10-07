@@ -22,15 +22,17 @@
         android:usesCleartextTraffic="true"
         android:theme="@style/Theme.LiveApp">
 
-        <!-- 单 Activity 宿主：竖屏 + 旋转/深浅色切换不重建（直播间全屏切换依赖 configChanges，
-             否则 NavHost 状态丢失；旋转后布局重算由 Compose LocalConfiguration 驱动。
+        <!-- 单 Activity 宿主：旋转/深浅色切换不重建（直播间全屏切换与平板旋转依赖 configChanges，
+             否则 NavHost 状态丢失；旋转后布局重算由 Compose LocalConfiguration 驱动）。
+             方向策略（task 10-07-tablet-landscape-layout）：**不再硬锁竖屏**——平板需自由旋转
+             才能进入横屏大屏布局；改由 MainActivity 按设备档位在运行时决定（平板释放全部方向、
+             紧凑手机锁竖屏，见 ui/WideLayout.kt deviceOrientationPolicy）。
              uiMode：对齐 Dart 版 manifest——切系统深色不重建（否则每次切深色都重拉流
              重建 mpv 会话，且重建时序曾触发聊天列表 requestScrollToItem(-1) 崩溃）；
              深浅色即时切换由 Compose isSystemInDarkTheme 经 onConfigurationChanged 重组驱动） -->
         <activity
             android:name=".MainActivity"
             android:exported="true"
-            android:screenOrientation="portrait"
             android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|uiMode">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
