@@ -199,6 +199,8 @@ class RemoteSyncWebDAVController : BaseController() {
             buildJsonObject {
                 put("data", buildJsonObject {
                     for ((key, value) in localStorage.getAllSettings()) {
+                        // 本机专属配置（斗鱼设备号）不随备份上传，避免多设备共用同一 did
+                        if (key in ProfileBackupService.deviceLocalSettings) continue
                         put(key, value)
                     }
                 })
@@ -367,13 +369,19 @@ class RemoteSyncWebDAVController : BaseController() {
             name == userSettingsJsonName -> {
                 try {
                     val obj = jsonData as? JsonObject ?: return
+                    // 全量恢复会 clearAllSettings()：先缓存本机专属配置（斗鱼设备号）的现值
+                    val localDeviceSettings = ProfileBackupService.cacheDeviceLocalSettings(localStorage)
                     localStorage.clearAllSettings()
                     val values = LinkedHashMap<String, Any>()
                     for ((key, value) in obj) {
+                        // 过滤云端传入的本机专属配置，避免覆盖本机设备号
+                        if (key in ProfileBackupService.deviceLocalSettings) continue
                         if (value is JsonPrimitive) {
                             values[key] = value.content
                         }
                     }
+                    // 把本机缓存值写回（未缓存则保持“无值”，由账号服务重新生成）
+                    values.putAll(localDeviceSettings)
                     localStorage.putAllSettings(values)
                     appSettings.reloadFromStorage()
                     Log.d("已同步用户设置")

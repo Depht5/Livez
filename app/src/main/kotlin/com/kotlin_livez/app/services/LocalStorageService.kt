@@ -113,6 +113,9 @@ class LocalStorageService(private val appContext: Context) {
         const val kDouyinCookie = "DouyinCookie"
         // 斗鱼登录 Cookie（键名与 Dart LocalStorageService.kDouyuCookie 一致，保证备份/同步兼容）
         const val kDouyuCookie = "DouyuCookie"
+        // 斗鱼本机设备号（32 位小写 hex，对应 DouyuSite 的签名 did 与 dy_did/acf_did）。
+        // 本机专属：备份/WebDAV 同步导出时剔除，导入时保留本机现有值（防止多设备共用同一 did）。
+        const val kDouyuDeviceId = "DouyuDeviceId"
         const val kStyleColor = "kStyleColor"
         const val kIsDynamic = "kIsDynamic"
         const val kBilibiliLoginTip = "BilibiliLoginTip"

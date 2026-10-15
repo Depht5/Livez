@@ -43,6 +43,15 @@ object ProfileBackupService {
         LocalStorageService.kWebDAVLastRecoverTime,
     )
 
+    /**
+     * 本机专属设置：导出时剔除、导入/全量恢复时保留本机现有值。
+     * 斗鱼设备号是「一台设备一个身份」，跨设备复制会让多台设备共用同一 did
+     * （斗鱼据此判定异常并周期性掐流），因此不随备份/同步迁移。
+     */
+    val deviceLocalSettings: Set<String> = setOf(
+        LocalStorageService.kDouyuDeviceId,
+    )
+
     suspend fun exportProfileMap(
         dbService: DBService,
         localStorage: LocalStorageService,
@@ -262,6 +271,8 @@ object ProfileBackupService {
         return buildJsonObject {
             for ((key, value) in localStorage.getAllSettings()) {
                 if (key in excludedSettings) continue
+                // 本机专属配置不导出（避免泄漏本机斗鱼设备号）
+                if (key in deviceLocalSettings) continue
                 put(key, value)
             }
         }
@@ -337,24 +348,44 @@ object ProfileBackupService {
         localStorage: LocalStorageService,
     ) {
         val obj = rawSettings as? JsonObject ?: return
+        // 先缓存本机专属配置（斗鱼设备号）的现值，导入结束后原样保留
+        val localDeviceSettings = cacheDeviceLocalSettings(localStorage)
         if (overwrite) {
             clearImportableSettings(localStorage)
         }
         val values = LinkedHashMap<String, Any>()
         for ((key, value) in obj) {
             if (key in excludedSettings) continue
+            // 过滤外部传入的本机专属配置，避免覆盖本机设备号
+            if (key in deviceLocalSettings) continue
             values[key] = safeJsonValue(value)
         }
-        localStorage.putAllSettings(values)
         summary.settings = values.size
+        // 覆盖导入走了清理路径：把本机缓存值一并写回（未缓存则保持“无值”，由账号服务重新生成）
+        if (overwrite && localDeviceSettings.isNotEmpty()) {
+            values.putAll(localDeviceSettings)
+        }
+        localStorage.putAllSettings(values)
     }
 
     private fun clearImportableSettings(localStorage: LocalStorageService) {
         val keys = localStorage.getAllSettings().keys
-            .filter { it !in excludedSettings }
+            .filter { it !in excludedSettings && it !in deviceLocalSettings }
         if (keys.isNotEmpty()) {
             localStorage.deleteAllSettings(keys)
         }
+    }
+
+    /** 读取本机现有的 [deviceLocalSettings] 值（对应设计「导入前先缓存本机值」）。 */
+    fun cacheDeviceLocalSettings(localStorage: LocalStorageService): Map<String, Any> {
+        val cached = LinkedHashMap<String, Any>()
+        for (key in deviceLocalSettings) {
+            val value = localStorage.getValue(key, "")
+            if (value.isNotEmpty()) {
+                cached[key] = value
+            }
+        }
+        return cached
     }
 
     private suspend fun importShields(

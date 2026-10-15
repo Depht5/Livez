@@ -9,6 +9,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
+import java.security.SecureRandom
 
 /**
  * 斗鱼账号服务 —— 对应 Dart `DouyuAccountService`
@@ -27,12 +28,21 @@ class DouyuAccountService(
     @JvmField
     var cookie: String = ""
 
+    /**
+     * 本机稳定设备号（32 位小写 hex，持久化于 [LocalStorageService.kDouyuDeviceId]）。
+     * 由 [setSite] 注入 [DouyuSite.deviceId]，用于签名 did 与 Cookie 的 dy_did/acf_did：
+     * 匿名共用固定假设备号会被斗鱼判定为异常并周期性掐流。
+     */
+    // @JvmField：与下方 setCookie(String) 同类问题，避免字段访问器与同名 JVM 签名冲突。
+    @JvmField
+    var deviceId: String = ""
+
     private val _hasCookie = MutableStateFlow(false)
     val hasCookie: StateFlow<Boolean> = _hasCookie
 
     private val ioScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
-    /** 对应 Dart onInit：启动时读回本地 Cookie 并推送到站点实例。 */
+    /** 对应 Dart onInit：启动时读回本地 Cookie/设备号并推送到站点实例。 */
     fun init() {
         cookie = localStorage.getValue(LocalStorageService.kDouyuCookie, "")
         _hasCookie.value = cookie.trim().isNotEmpty()
@@ -44,6 +54,34 @@ class DouyuAccountService(
         // 播放路径读的正是这一份实例，写别处会导致 Cookie 静默不生效。
         val site = Sites.allSites[Constant.kDouyu]?.liveSite as? DouyuSite ?: return
         site.cookie = cookie
+        // 设备号必须注入同一份实例（禁止新建 DouyuSite()），否则签名 did 与请求头 Cookie 不同源。
+        site.deviceId = ensureDeviceId()
+    }
+
+    /**
+     * 取本机设备号：内存已生成/读回即返回；否则读持久化值；都没有则随机生成 32 位小写 hex
+     * 并异步持久化（对齐 Dart `DouyuAccountService` 的本机设备号语义）。
+     */
+    private fun ensureDeviceId(): String {
+        if (deviceId.isNotEmpty()) return deviceId
+        val saved = localStorage.getValue(LocalStorageService.kDouyuDeviceId, "").trim()
+        if (saved.isNotEmpty()) {
+            deviceId = saved
+            return deviceId
+        }
+        val generated = generateHexDeviceId(32)
+        deviceId = generated
+        ioScope.launch { localStorage.setValue(LocalStorageService.kDouyuDeviceId, generated) }
+        return deviceId
+    }
+
+    /** 生成指定长度的小写 16 进制随机串（对应 Dart generateRandomString 的字符集）。 */
+    private fun generateHexDeviceId(length: Int): String {
+        val chars = "0123456789abcdef"
+        val random = SecureRandom()
+        return buildString(length) {
+            repeat(length) { append(chars[random.nextInt(chars.length)]) }
+        }
     }
 
     fun setCookie(value: String) {
