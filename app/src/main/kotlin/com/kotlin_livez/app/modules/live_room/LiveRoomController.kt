@@ -166,6 +166,25 @@ class LiveRoomController(
     val autoExitCompleting: StateFlow<Boolean> = _autoExitCompleting
     private var _playbackMediaGeneration = 0
     private var mediaErrorRetryCount = 0
+
+    /**
+     * 恢复风暴滑动窗口：每次「媒体错误重试后重新打开成功」记一个时间戳。
+     * 对应 Dart 新版 live_room_controller 的 _playbackRecoveryTimes。
+     */
+    private val _playbackRecoveryTimes = mutableListOf<Long>()
+
+    /** 看门狗上次采样到的播放位置（毫秒）；null 表示尚未建立基准。 */
+    private var _lastWatchdogPosition: Long? = null
+
+    /** 播放位置最后一次发生推进的时间（墙钟毫秒）。 */
+    private var _lastWatchdogProgressAtMs = 0L
+
+    /** 看门狗上次触发重新拉流的时间（墙钟毫秒，冷却用）。 */
+    private var _lastWatchdogRefreshAtMs = 0L
+
+    /** 看门狗重新拉流进行中守卫：避免重拉尚未完成时叠加第二次 setPlayer。 */
+    private var _playbackRefreshInFlight = false
+
     private var _onlineRefreshInFlight = false
     private val _recordingStartTime: Instant? = null
 
@@ -211,6 +230,9 @@ class LiveRoomController(
     private var autoExitDeadlineJob: Job? = null
     private var countdownJob: Job? = null
 
+    /** 播放停滞看门狗周期任务（dispose 时取消）。 */
+    private var playbackWatchdogJob: Job? = null
+
     /** 已完成的播放器打开（对应 openPlaybackMedia 后的事件链）。 */
     private var mediaEventSubJobs = mutableListOf<Job>()
 
@@ -238,6 +260,8 @@ class LiveRoomController(
     fun loadData() {
         val restarted = ++_loadGeneration
         Log.d("loadData: generation=$restarted")
+        // 新会话重新计「连续失败」与恢复风暴窗口（对应 Dart 新版 loadData 入口）。
+        resetPlaybackRecoveryBookkeeping()
         wsChatLogged = false
         keywordDropLogged = false
         dupDropLogged = false
@@ -546,6 +570,10 @@ class LiveRoomController(
                 return
             }
             player.open(url, headers)
+            // 打开成功（对应 Dart initPlaylist 打开完成）：此前发生过重试时记一次恢复，
+            // 并把 mediaErrorRetryCount 归零 —— 语义是「连续失败」而非「会话累计」，
+            // 否则长时间观看时第 3 次周期性掐流会被误判为「重试耗尽」。
+            onPlaybackRecovered()
             _followed.value = _followed.value
         } finally {
             if (openingDeferred === deferred) {
@@ -582,6 +610,8 @@ class LiveRoomController(
         mediaEventSubJobs.add(completedJob)
         mediaEventSubJobs.add(errorJob)
         mediaEventSubJobs.add(playingJob)
+        // 播放停滞看门狗随订阅启动（dispose 时取消）。
+        startPlaybackWatchdog()
     }
 
     private val shouldRefreshUrlsOnPlaybackRetry: Boolean
@@ -589,6 +619,139 @@ class LiveRoomController(
 
     private fun isPlaybackEventCurrent(loadGeneration: Int, mediaGeneration: Int): Boolean =
         isCurrentLoad(loadGeneration) && mediaGeneration == _playbackMediaGeneration
+
+    /* ---------- 恢复记账与恢复风暴熔断（对应 Dart _playbackRecoveryTimes 系列） ---------- */
+
+    /** 新会话（进房/刷新/切房）重新计连续失败次数与恢复风暴窗口。 */
+    private fun resetPlaybackRecoveryBookkeeping() {
+        mediaErrorRetryCount = 0
+        _playbackRecoveryTimes.clear()
+    }
+
+    private fun prunePlaybackRecoveryTimes(now: Long = System.currentTimeMillis()) {
+        _playbackRecoveryTimes.removeAll { now - it > RECOVERY_WINDOW_MS }
+    }
+
+    /** 5 分钟窗口内恢复次数达上限：判定恢复风暴，末线路不再无限重签重连。 */
+    private val playbackRecoveryStormDetected: Boolean
+        get() {
+            prunePlaybackRecoveryTimes()
+            return _playbackRecoveryTimes.size >= MAX_RECOVERIES_PER_WINDOW
+        }
+
+    /**
+     * 播放（重新）打开成功后的记账 —— 对应 Dart onPlaybackRecovered。
+     * 只有此前发生过重试（mediaErrorRetryCount > 0）才记为一次「恢复」并归零计数；
+     * 正常打开不计数，因此计数语义始终是「连续失败」。
+     */
+    private fun onPlaybackRecovered() {
+        if (mediaErrorRetryCount > 0) {
+            val now = System.currentTimeMillis()
+            prunePlaybackRecoveryTimes(now)
+            _playbackRecoveryTimes.add(now)
+            mediaErrorRetryCount = 0
+        }
+    }
+
+    /* ---------- 统一恢复链路（对应 Dart setPlayer/_recoverPlaybackOnce） ---------- */
+
+    /**
+     * 重新打开播放器（对应 Dart `setPlayer({refreshUrls})`）。
+     *
+     * refreshUrls 为真时先重新签名取流；**resetLine 必须为 false** —— 保持当前线路，
+     * 不因一次断流就退回线路 1（Dart 原版 `setPlayer(refreshUrls: true)` 调
+     * `_reloadPlayUrls(silent: true)` 时 resetLine 取默认值 false）。
+     * 取流失败抛异常，由调用方走重试耗尽链路（Dart 是静默 return，Kotlin 显式抛出，
+     * 以便统一收敛到 playbackRetriesExhausted）。
+     */
+    suspend fun setPlayer(refreshUrls: Boolean = false) {
+        if (refreshUrls) {
+            val refreshed = reloadPlayUrls(resetLine = false, silent = true)
+            if (!refreshed) {
+                throw IllegalStateException("Failed to refresh play urls")
+            }
+        }
+        initPlaylist()
+    }
+
+    /** 放弃播放：错误态提示「播放失败」，正常结束态判定为已下播（对应 Dart 尾部处理）。 */
+    private fun markPlaybackGivenUp(
+        isError: Boolean,
+        errorText: String? = null,
+        showFailureToast: Boolean = true,
+    ) {
+        if (isError) {
+            _errorMsg.value = "播放失败"
+            if (showFailureToast) {
+                Log.d("Toast: 播放失败: ${errorText ?: ""}")
+            }
+            return
+        }
+        _liveStatus.value = false
+    }
+
+    /** 单次重试：setPlayer 失败（取流失败等）时收敛到重试耗尽链路。 */
+    private suspend fun recoverPlaybackOnce(
+        loadGeneration: Int,
+        mediaGeneration: Int,
+        isError: Boolean,
+        errorText: String? = null,
+    ) {
+        try {
+            setPlayer(refreshUrls = shouldRefreshUrlsOnPlaybackRetry)
+        } catch (e: Throwable) {
+            Log.e("恢复播放失败: $e", e)
+            if (!isPlaybackEventCurrent(loadGeneration, mediaGeneration)) return
+            playbackRetriesExhausted(
+                loadGeneration = loadGeneration,
+                mediaGeneration = mediaGeneration,
+                isError = isError,
+                errorText = errorText,
+            )
+        }
+    }
+
+    /**
+     * 重试耗尽（对应 Dart 尾部逻辑，但末线路重签循环扩展到斗鱼）：
+     * 还有剩余线路 → 切下一条；末线路且站点为虎牙/斗鱼且未触发恢复风暴 →
+     * 重置线路索引与失败计数并重新签名取流续播（不再直接判下播/换台）。
+     */
+    private suspend fun playbackRetriesExhausted(
+        loadGeneration: Int,
+        mediaGeneration: Int,
+        isError: Boolean,
+        errorText: String? = null,
+    ) {
+        if (!isPlaybackEventCurrent(loadGeneration, mediaGeneration)) return
+        val reason = if (isError) "playback_failure" else "live_end"
+        val urls = _playUrls.value
+        if (urls.isEmpty()) {
+            markPlaybackGivenUp(isError = isError, errorText = errorText)
+            tryAutoSwitchToNextLiveRoom(reason = reason)
+            return
+        }
+        if (urls.size - 1 == currentLineIndex) {
+            val siteId = site?.id
+            // 斗鱼常只返回 1 条线路：纳入末线路重签重连循环，避免周期性掐流被误判「已下播」。
+            if ((siteId == Constant.kHuya || siteId == Constant.kDouyu) &&
+                !playbackRecoveryStormDetected
+            ) {
+                currentLineIndex = 0
+                mediaErrorRetryCount = 0
+                try {
+                    setPlayer(refreshUrls = true)
+                    return
+                } catch (e: Throwable) {
+                    Log.e("重置线路重连失败: $e", e)
+                    if (!isPlaybackEventCurrent(loadGeneration, mediaGeneration)) return
+                }
+            }
+            markPlaybackGivenUp(isError = isError, errorText = errorText)
+            tryAutoSwitchToNextLiveRoom(reason = reason)
+            return
+        }
+        changePlayLine(currentLineIndex + 1)
+    }
 
     /** 播放结束（对应 Dart mediaEnd）。 */
     fun mediaEnd() {
@@ -604,24 +767,19 @@ class LiveRoomController(
                 }
                 if (!isPlaybackEventCurrent(loadGeneration, mediaGeneration)) return@launch
                 mediaErrorRetryCount += 1
-                if (reloadPlayUrls(silent = true, resetLine = shouldRefreshUrlsOnPlaybackRetry)) {
-                    initPlaylist()
-                }
+                recoverPlaybackOnce(
+                    loadGeneration = loadGeneration,
+                    mediaGeneration = mediaGeneration,
+                    isError = false,
+                )
                 return@launch
             }
             Log.d("播放结束")
-            if (_playUrls.value.size - 1 == currentLineIndex) {
-                if (site?.id == Constant.kHuya) {
-                    currentLineIndex = 0
-                    mediaErrorRetryCount = 0
-                    if (reloadPlayUrls(resetLine = true, silent = true)) initPlaylist()
-                    return@launch
-                }
-                _liveStatus.value = false
-                tryAutoSwitchToNextLiveRoom(reason = "live_end")
-            } else {
-                changePlayLine(currentLineIndex + 1)
-            }
+            playbackRetriesExhausted(
+                loadGeneration = loadGeneration,
+                mediaGeneration = mediaGeneration,
+                isError = false,
+            )
         }
     }
 
@@ -639,23 +797,96 @@ class LiveRoomController(
                 }
                 if (!isPlaybackEventCurrent(loadGeneration, mediaGeneration)) return@launch
                 mediaErrorRetryCount += 1
-                if (reloadPlayUrls(silent = true, resetLine = shouldRefreshUrlsOnPlaybackRetry)) {
-                    initPlaylist()
-                }
+                recoverPlaybackOnce(
+                    loadGeneration = loadGeneration,
+                    mediaGeneration = mediaGeneration,
+                    isError = true,
+                    errorText = errorText,
+                )
                 return@launch
             }
-            if (_playUrls.value.size - 1 == currentLineIndex) {
-                if (site?.id == Constant.kHuya) {
-                    currentLineIndex = 0
-                    mediaErrorRetryCount = 0
-                    if (reloadPlayUrls(resetLine = true, silent = true)) initPlaylist()
-                    return@launch
+            playbackRetriesExhausted(
+                loadGeneration = loadGeneration,
+                mediaGeneration = mediaGeneration,
+                isError = true,
+                errorText = errorText,
+            )
+        }
+    }
+
+    /* ---------- 播放停滞看门狗（对应 Dart _startPlaybackWatchdog 的精简移植） ---------- */
+
+    /**
+     * 每 2 秒采样一次播放位置：画面卡住（TCP 未断、未触发 EOF）时主动重取流续播。
+     * 在 subscribePlayerEvents() 时启动，dispose() 时取消。
+     */
+    private fun startPlaybackWatchdog() {
+        playbackWatchdogJob?.cancel()
+        _lastWatchdogPosition = null
+        _lastWatchdogProgressAtMs = 0L
+        playbackWatchdogJob = scope.launch {
+            while (!_roomDisposed) {
+                delay(PLAYBACK_WATCHDOG_INTERVAL_MS)
+                if (_roomDisposed) break
+                tickPlaybackWatchdog()
+            }
+        }
+    }
+
+    private fun tickPlaybackWatchdog() {
+        val playerState = player.state.value
+        // 仅在「直播中且播放器自认为在播」时监测；暂停/未开播/切房一律不干预。
+        if (!_liveStatus.value || !playerState.playing) {
+            _lastWatchdogPosition = null
+            _lastWatchdogProgressAtMs = 0L
+            return
+        }
+        val now = System.currentTimeMillis()
+        val position = playerState.positionMs
+        val lastPosition = _lastWatchdogPosition
+        if (lastPosition == null || position != lastPosition) {
+            // 建立基准 / 位置推进：刷新推进时间。
+            _lastWatchdogPosition = position
+            _lastWatchdogProgressAtMs = now
+            return
+        }
+        val stalledForMs = now - _lastWatchdogProgressAtMs
+        // 缓冲态判据更短：mpv 已在等缓存且缓存确实耗尽（bufferMs <= 1s，0 亦含「未上报」），
+        // 位置又停滞 4 秒 → 重拉能立刻见效。未处于缓冲态则需停滞 6 秒才动手。
+        val stalled = (playerState.pausedForCache &&
+            playerState.bufferMs <= 1000L &&
+            stalledForMs >= BUFFERING_STALL_THRESHOLD_MS) ||
+            (!playerState.pausedForCache && stalledForMs >= FROZEN_PLAYBACK_THRESHOLD_MS)
+        if (!stalled) return
+        if (_playbackRefreshInFlight) return
+        if (playbackRecoveryStormDetected) return
+        if (now - _lastWatchdogRefreshAtMs < WATCHDOG_REFRESH_COOLDOWN_MS) return
+        _lastWatchdogRefreshAtMs = now
+        // 触发后重置推进基准，配合冷却时间避免连续触发。
+        _lastWatchdogProgressAtMs = now
+        refreshPlayerFromWatchdog()
+    }
+
+    /**
+     * 看门狗触发重新拉流：setPlayer(refreshUrls = true)（保持当前线路，resetLine = false）。
+     * 失败只记录日志，冷却后由看门狗自行再试（不额外做换台/整房刷新）。
+     */
+    private fun refreshPlayerFromWatchdog() {
+        if (_playbackRefreshInFlight) return
+        _playbackRefreshInFlight = true
+        val loadGeneration = _loadGeneration
+        val mediaGeneration = _playbackMediaGeneration
+        scope.launch {
+            try {
+                Log.d("看门狗检测到播放停滞，尝试重新拉流")
+                setPlayer(refreshUrls = true)
+            } catch (e: Throwable) {
+                Log.e("看门狗刷新失败: $e", e)
+                if (isPlaybackEventCurrent(loadGeneration, mediaGeneration)) {
+                    Log.d("Toast: 播放停滞，正在重新连接...")
                 }
-                _errorMsg.value = "播放失败"
-                Log.d("Toast: 播放失败: $errorText")
-                tryAutoSwitchToNextLiveRoom(reason = "playback_failure")
-            } else {
-                changePlayLine(currentLineIndex + 1)
+            } finally {
+                _playbackRefreshInFlight = false
             }
         }
     }
@@ -704,6 +935,8 @@ class LiveRoomController(
     fun refreshRoom() {
         Log.d("refreshRoom")
         if (_roomDisposed) return
+        // 手动刷新属于新会话：连续失败计数与恢复风暴窗口一并重置。
+        resetPlaybackRecoveryBookkeeping()
         cancelRoomBoundJobs()
         // 清空 SC/贡献榜/去重状态（对应 Dart refreshRoom）
         _superChats.value = emptyList()
@@ -1075,11 +1308,15 @@ class LiveRoomController(
                 }
                 if (!isCurrentLoad(loadGeneration) || !_onlineRefreshInFlight) return@launch
                 if (_detail.value == null) return@launch
+                // 取一次快照，避免 playing 与 pausedForCache 分属两次不同的状态读取。
+                val playerState = player.state.value
                 if (detail) {
                     onlineStatusRefreshPolicy.reset()
                 } else if (onlineStatusRefreshPolicy.confirmOffline(
                         reportedLive = false,
-                        hasActivePlaybackEvidence = player.state.value.playing,
+                        // 缓冲态（paused-for-cache）同样是在播证据：此时 playing 仍为 true，
+                        // 但接口抖动/切流瞬间提示 playing=false 时不能据此误判下播。
+                        hasActivePlaybackEvidence = playerState.playing || playerState.pausedForCache,
                     )
                 ) {
                     _liveStatus.value = false
@@ -1418,8 +1655,13 @@ class LiveRoomController(
             val stalled = s.positionMs <= beforeMs || s.pausedForCache || s.completed || !s.playing
             if (!stalled) return@launch
             Log.d("返回前台后检测到播放停滞，尝试恢复")
-            if (reloadPlayUrls(silent = true, resetLine = shouldRefreshUrlsOnPlaybackRetry)) {
-                initPlaylist()
+            try {
+                // 统一走 setPlayer（refreshUrls = true 时内部 resetLine = false，保持当前线路）；
+                // 取流失败会抛异常，但本路径既有语义是「尝试一次，失败就算了」：只记日志，
+                // 不弹 toast、不切线路、不进重试耗尽链路。
+                setPlayer(refreshUrls = true)
+            } catch (e: Throwable) {
+                Log.e("返回前台恢复播放失败: $e", e)
             }
         }
     }
@@ -1435,6 +1677,10 @@ class LiveRoomController(
         cancelRoomBoundJobs()
         BackgroundPlayback.stop()
         countdownJob?.cancel()
+        // 播放停滞看门狗随页面销毁取消，避免旧控制器继续重取流。
+        playbackWatchdogJob?.cancel()
+        playbackWatchdogJob = null
+        _playbackRefreshInFlight = false
         onlineStatusRefreshPolicy.reset()
         mediaEventSubJobs.forEach { it.cancel() }
         mediaEventSubJobs.clear()
@@ -1452,5 +1698,23 @@ class LiveRoomController(
         reopeningDeferred = null
         openingDeferred?.complete(Unit)
         openingDeferred = null
+    }
+
+    companion object {
+        /** 恢复风暴窗口内允许的最大恢复次数（5 分钟 6 次）。 */
+        private const val MAX_RECOVERIES_PER_WINDOW = 6
+        private const val RECOVERY_WINDOW_MS = 5 * 60 * 1000L
+
+        /** 播放停滞看门狗采样周期。 */
+        private const val PLAYBACK_WATCHDOG_INTERVAL_MS = 2000L
+
+        /** 缓冲态（paused-for-cache）下位置停滞多久判定卡死。 */
+        private const val BUFFERING_STALL_THRESHOLD_MS = 4000L
+
+        /** 非缓冲态下位置停滞多久判定卡死。 */
+        private const val FROZEN_PLAYBACK_THRESHOLD_MS = 6000L
+
+        /** 看门狗两次重新拉流之间的最小间隔。 */
+        private const val WATCHDOG_REFRESH_COOLDOWN_MS = 6000L
     }
 }
