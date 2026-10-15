@@ -45,6 +45,14 @@ class DouyuSite : LiveSite() {
      */
     var cookie: String = ""
 
+    /**
+     * 本机持久化设备号（由 app 层 `DouyuAccountService` 注入 32 位小写 hex）。
+     * 参与签名 `did` 与请求头 Cookie 的 `dy_did`/`acf_did`（见 [deviceDid]）：
+     * 为空时退回 Cookie 的 `acf_did`，再退回进程内兜底设备号。
+     */
+    @JvmField
+    var deviceId: String = ""
+
     override fun danmaku(): LiveDanmaku = DouyuDanmaku()
 
     companion object {
@@ -64,6 +72,22 @@ class DouyuSite : LiveSite() {
         private const val kContributionUserAgent =
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
 
+        /**
+         * 进程内兜底设备号（32 位小写 hex，仅初始化一次）。
+         * 应用层未注入持久化 `deviceId`、Cookie 也没有 `acf_did` 时使用，
+         * 保证匿名态不会退化回"所有用户共用同一个固定假设备号"（对应上游 `processFallbackDid`）。
+         */
+        private val processFallbackDid: String = generateHexDid(32)
+
+        /** 生成指定长度的小写 16 进制随机串（对应 Dart generateRandomString 的字符集）。 */
+        private fun generateHexDid(length: Int): String {
+            val chars = "0123456789abcdef"
+            val random = java.security.SecureRandom()
+            return buildString(length) {
+                repeat(length) { append(chars[random.nextInt(chars.length)]) }
+            }
+        }
+
         /** betard 房间信息请求头（匿名，不注入登录 Cookie —— 与 Dart `_getRoomInfo` 一致）。 */
         private fun betardHeader(roomId: String): Map<String, Any?> = mapOf(
             "referer" to "https://www.douyu.com/$roomId",
@@ -71,13 +95,30 @@ class DouyuSite : LiveSite() {
         )
     }
 
-    /** 基础请求头（对应 Dart `_requestHeaders`）：referer/UA + Cookie 非空时注入登录 Cookie。 */
-    private fun requestHeaders(): Map<String, Any?> = buildMap<String, Any?> {
-        put("referer", "https://www.douyu.com/")
-        put("user-agent", kPlayUserAgent)
-        val trimmed = cookie.trim()
-        if (trimmed.isNotEmpty()) put("Cookie", trimmed)
-    }
+    /**
+     * 基础请求头（对应 Dart `_requestHeaders`）：referer/UA + 设备身份 Cookie。
+     * Cookie 恒携带 [deviceCookieHeader]（登录态保留用户 Cookie，匿名态自动补 `dy_did`/`acf_did`），
+     * 使请求头设备号与 `ub98484234` 签名 `did` 同源。
+     */
+    private fun requestHeaders(): Map<String, Any?> = mapOf(
+        "referer" to "https://www.douyu.com/",
+        "user-agent" to kPlayUserAgent,
+        "Cookie" to deviceCookieHeader,
+    )
+
+    /**
+     * 搜索专用请求头：保持原搜索请求的形态（Edg/114 UA + 搜索页 referer）不变，
+     * 只把原先随机生成的 `dy_did`/`acf_did` 换成设备身份 Cookie [deviceCookieHeader]
+     * （PRD R1 只要求移除随机 `Cookie` 覆盖，不扩大到 UA/referer）。
+     *
+     * 注意：此处刻意不使用 [requestHeaders] 做合并 —— 它用小写 `"user-agent"`，
+     * 而搜索头用大写 `"User-Agent"`，Kotlin Map 键大小写敏感，合并会出现两个 UA 头。
+     */
+    private fun searchHeaders(): Map<String, String> = mapOf(
+        "User-Agent" to kSearchUserAgent,
+        "referer" to "https://www.douyu.com/search/",
+        "Cookie" to deviceCookieHeader,
+    )
 
     /**
      * 房间维度基础请求头 = 基础头 + 房间 referer
@@ -85,6 +126,55 @@ class DouyuSite : LiveSite() {
      */
     private fun roomRequestHeaders(roomId: String): Map<String, Any?> =
         requestHeaders() + mapOf("referer" to "https://www.douyu.com/$roomId")
+
+    /** 从 [cookie] 读取指定键的值；键缺失、片段没有 `=` 或键值为空白时返回空串。 */
+    internal fun cookieValue(key: String): String {
+        if (cookie.trim().isEmpty()) return ""
+        for (part in cookie.split(";")) {
+            val item = part.trim()
+            val separatorIndex = item.indexOf('=')
+            if (separatorIndex <= 0) continue
+            val currentKey = item.substring(0, separatorIndex).trim()
+            if (currentKey == key) {
+                return item.substring(separatorIndex + 1).trim()
+            }
+        }
+        return ""
+    }
+
+    /**
+     * 签名与 Cookie 共用的设备号，优先级：
+     * Cookie 的 `acf_did` -> 注入的 [deviceId] -> 进程内兜底设备号（对应上游 `deviceDid`）。
+     */
+    internal val deviceDid: String
+        get() {
+            val cookieDid = cookieValue("acf_did")
+            if (cookieDid.isNotEmpty()) return cookieDid
+            val normalizedDeviceId = deviceId.trim()
+            if (normalizedDeviceId.isNotEmpty()) return normalizedDeviceId
+            return processFallbackDid
+        }
+
+    /**
+     * 设备身份请求头 Cookie（对应上游 `deviceCookieHeader`）：
+     * 保留用户 [cookie] 原文，缺失 `dy_did`/`acf_did` 时用 [deviceDid] 补齐（`"; "` 连接）。
+     */
+    internal val deviceCookieHeader: String
+        get() {
+            val did = deviceDid
+            val segments = mutableListOf<String>()
+            val trimmedCookie = cookie.trim().trimEnd(';').trim()
+            if (trimmedCookie.isNotEmpty()) {
+                segments.add(trimmedCookie)
+            }
+            if (cookieValue("dy_did").isEmpty()) {
+                segments.add("dy_did=$did")
+            }
+            if (cookieValue("acf_did").isEmpty()) {
+                segments.add("acf_did=$did")
+            }
+            return segments.joinToString("; ")
+        }
 
     override suspend fun categories(): List<LiveCategory> {
         val categories = mutableListOf<LiveCategory>()
@@ -227,7 +317,8 @@ class DouyuSite : LiveSite() {
                     .jsonObject["data"]?.jsonObject?.get("room$roomId").str()
             }.getOrDefault("")
             if (script.isNotEmpty()) {
-                val signed = DouyuSign.getSign(script, roomId)
+                // 签名设备号与请求头 Cookie 的 dy_did/acf_did 同源（上游 1.13.2-pre 对齐）。
+                val signed = DouyuSign.getSign(script, roomId, deviceDid)
                 if (signed.isNotEmpty()) return signed
             }
         } catch (_: Exception) {
@@ -310,15 +401,11 @@ class DouyuSite : LiveSite() {
     }
 
     override suspend fun searchRooms(keyword: String, page: Int): LiveSearchRoomResult {
-        val did = generateRandomString(32)
+        // 不再用随机 did 覆盖 Cookie：搜索头原样保留，Cookie 走设备身份（上游 1.13.2-pre）。
         val result = HttpClient.getJson(
             "https://www.douyu.com/japi/search/api/searchShow",
             query = mapOf("kw" to keyword, "page" to page, "pageSize" to 20),
-            header = mapOf(
-                "User-Agent" to kSearchUserAgent,
-                "referer" to "https://www.douyu.com/search/",
-                "Cookie" to "dy_did=$did;acf_did=$did",
-            ),
+            header = searchHeaders(),
         )
         if ((result?.jsonObject?.get("error").intv() ?: 0) != 0) {
             throw CoreError(result?.jsonObject?.get("msg").str())
@@ -339,7 +426,7 @@ class DouyuSite : LiveSite() {
     }
 
     override suspend fun searchAnchors(keyword: String, page: Int): LiveSearchAnchorResult {
-        val did = generateRandomString(32)
+        // 同上：搜索请求不再覆盖 Cookie，跟随设备身份请求头。
         val result = HttpClient.getJson(
             "https://www.douyu.com/japi/search/api/searchUser",
             query = mapOf(
@@ -348,11 +435,7 @@ class DouyuSite : LiveSite() {
                 "pageSize" to 20,
                 "filterType" to 1,
             ),
-            header = mapOf(
-                "User-Agent" to kSearchUserAgent,
-                "referer" to "https://www.douyu.com/search/",
-                "Cookie" to "dy_did=$did;acf_did=$did",
-            ),
+            header = searchHeaders(),
         )
         val items = (result?.jsonObject?.get("data")?.jsonObject?.get("relateUser")?.jsonArray
             ?: JsonArray(emptyList())).mapNotNull { item ->
@@ -416,17 +499,6 @@ class DouyuSite : LiveSite() {
         )
         val json = runCatching { HttpClient.json.parseToJsonElement(text) }.getOrNull()
         return json?.jsonObject?.get("room")?.jsonObject
-    }
-
-    /** 生成指定长度的16进制随机字符串（对应 Dart generateRandomString）。 */
-    private val secureRandom = java.security.SecureRandom()
-
-    private fun generateRandomString(length: Int): String {
-        val stringBuffer = StringBuilder()
-        repeat(length) {
-            stringBuffer.append("0123456789abcdef"[secureRandom.nextInt(16)])
-        }
-        return stringBuffer.toString()
     }
 
     /** 热度字符串解析（对应 Dart parseHotNum："1.2万" → 12000）。 */

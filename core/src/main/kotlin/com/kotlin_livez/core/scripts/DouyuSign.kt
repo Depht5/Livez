@@ -15,6 +15,9 @@ import org.mozilla.javascript.Context
  */
 object DouyuSign {
 
+    /** 匿名兜底设备号（对应 Dart `DouyuSign` 里固定写死的 `did`）。 */
+    private const val kDefaultDid = "10000000000000000000000000001501"
+
     /** 预置 CryptoJS（从 Dart kCryptoJs 原文提取；`$` 已替换为 `\u0024` 规避 Kotlin 字符串模板）。 */
     private val kCryptoJs: String =
         """
@@ -25,10 +28,17 @@ object DouyuSign {
 
     /**
      * 计算签名串。
+     *
+     * 新增可选 [did]（对应上游 1.13.2-pre）：签名设备号必须与请求头 Cookie 的
+     * `dy_did`/`acf_did` 同源，否则匿名共用固定假设备号会被斗鱼周期性掐流、
+     * 登录态也会因签名与 Cookie 不一致被判定异常；[did] 为 `null` 或空白时回退
+     * [kDefaultDid]，保持旧行为。
+     *
      * @param html 服务器下发的 crptext JS 源码
      * @param rid 房间号
+     * @param did 设备号（`null`/空白时回退默认值）
      */
-    fun getSign(html: String, rid: String): String {
+    fun getSign(html: String, rid: String, did: String? = null): String {
         val context = Context.enter()
         return try {
             // 解释模式：Android 不支持 Rhino 的字节码生成，统一使用
@@ -38,12 +48,12 @@ object DouyuSign {
             context.evaluateString(scope, kCryptoJs, "CryptoJS", 1, null)
             context.evaluateString(scope, html, "DouyuEnc", 1, null)
 
-            // 对应 Dart：did 固定、time 取当前秒级时间戳
-            val did = "10000000000000000000000000001501"
+            // 对应 Dart：time 取当前秒级时间戳；did 由调用方注入（缺省回退常量）
+            val signDid = did?.trim()?.takeIf { it.isNotEmpty() } ?: kDefaultDid
             val time = System.currentTimeMillis() / 1000
             val result = context.evaluateString(
                 scope,
-                "ub98484234('$rid','$did','$time')",
+                "ub98484234('$rid','$signDid','$time')",
                 "call",
                 1,
                 null,
