@@ -50,6 +50,7 @@ import androidx.compose.material3.Tab
 import androidx.compose.material3.TabRow
 import androidx.compose.material3.TabRowDefaults.tabIndicatorOffset
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -1176,51 +1177,103 @@ fun LiveRoomScreen(
     // PlayerEngine 切 vo=null（纯音频续播），重挂后才恢复 → 真机表现为「切全屏卡顿一下 +
     // 播放画面缺失」。现在全屏只隐藏标题栏与右侧面板：视频仍是左列子级（组合位置恒定、
     // Surface 不重建），右列不组合后 weight(1f) 自然占满整行 → 播放器独占整屏。
-    if (useWideLayout()) {
+    //
+    // ⚠ **宽/窄也不再换分支**（task 10-16-live-room-pager-review-fixes，闭合上条的「遗留」）：
+    // 上面只修好了 `isFullScreen` 这一维；外层仍是一个以 `useWideLayout()` 为条件的宽/窄
+    // 分支结构，平板**竖↔横旋转**使 `useWideLayout()` 翻转时依旧是同一条 detach 路径（症状：平板竖屏
+    // 点全屏触发旋转进横屏、手动旋转屏、退出全屏回竖屏，画面缺失只剩声音）。根治办法是让
+    // `roomVideo` 的**调用位置与组合深度恒定**：宽/窄合并为唯一的外层
+    // `Column -> Row -> Column -> roomVideo`，两种版式的差异全部表达为
+    // 「**同层兄弟的增删 + 同层 Modifier 变化**」——
+    //   ① 右侧面板（信息栏 + 标签内容）= Row 内 `if (wideLayout && !isFullScreen)`；
+    //   ② 窄屏下方信息栏 + 标签区 = 外层 Column 内 `if (!wideLayout && !isFullScreen)`；
+    //   ③ 各容器与视频的 Modifier 由 `videoFillsSpace = wideLayout || isFullScreen` 切换。
+    // 三条分支增删的都是**视频的兄弟节点**（①②在视频同级，③只改 Modifier、不改 call site），
+    // 视频自身的组合槽位与 `wideLayout` / `isFullScreen` 的取值完全无关，故任意形态互切都
+    // 不会让 AndroidView 节点 detach。这也是「为什么合并后不再有跨分支位移」。
+    // 逐形态等价性推演（合并后 ≡ 合并前）：
+    //  · 窄屏竖屏非全屏（wide=false, full=false）：videoFillsSpace=false → Row 只吃
+    //    `fillMaxWidth()`（不权重），左列 `weight(1f)`（在主轴上吃满宽、高度随内容）；
+    //    视频 `fillMaxWidth().aspectRatio(16/9)` → 与合并前「根 Column 内的 16:9 视频」同宽同高；
+    //    信息栏/标签区走 ② 分支，`roomTabsAndContent` 的 `weight(1f)` 仍落在根 Column 上
+    //    → 占满剩余高度。逐项与合并前一致。
+    //  · 窄屏全屏（wide=false, full=true）：videoFillsSpace=true → Row `weight(1f).fillMaxWidth()`
+    //    吃掉全部剩余高度、左列 `weight(1f).fillMaxHeight()`、视频 `weight(1f).fillMaxWidth()`
+    //    → 播放器铺满整屏（标题栏片段自身守卫、①②都不组合，根 Column 无其它子级）
+    //    → 与合并前「视频 + `fillMaxSize` 独占整屏」等价。
+    //  · 宽屏非全屏（wide=true, full=false）：①为真、②为假 → Row／左列／视频／右列的 Modifier
+    //    与合并前宽屏分支**逐字相同**（Row weight+fillMaxWidth、左列 weight+fillMaxHeight、
+    //    视频 weight+fillMaxWidth、右列 width(panelWidth)+fillMaxHeight）。
+    //  · 宽屏全屏（wide=true, full=true）：videoFillsSpace=true、①为假、②为假 → 与合并前
+    //    宽屏分支「全屏只隐藏标题栏与右列」的写法等价（播放器独占整屏）。
+    //  · 旋转使 `useWideLayout()` 翻转（「窄屏非全屏 ↔ 宽屏非全屏」「窄屏全屏 ↔ 宽屏全屏」）：
+    //    只有 Row/左列的 Modifier 改变（重测量、不重建节点），视频调用位置不动
+    //    → 不再有跨分支位移（此即本次闭合点）。
+    val wideLayout = useWideLayout()
+    val videoFillsSpace = wideLayout || isFullScreen
+
+    Column(modifier = rootModifier) {
         // 顶栏**全宽**（用户决策 2026-10-07）：分栏态顶栏横跨整个顶部，其下才是
         // 「播放器居左 / 信息栏 + 标签内容居右」；不再让标题栏只占左列、信息栏顶到最上。
-        // 全屏时顶栏片段自身守卫不组合、右列不组合 → 左列 weight(1f) 独占整行铺满整屏。
-        Column(modifier = rootModifier) {
-            roomTitleBar()
-            Row(modifier = Modifier.weight(1f).fillMaxWidth()) {
-                // 左列：播放器（吃掉剩余高度；letterbox 逻辑在片段内不变）
-                Column(modifier = Modifier.weight(1f).fillMaxHeight()) {
-                    roomVideo(Modifier.weight(1f).fillMaxWidth())
-                }
-                // 分隔线与右列（主播信息栏 + 标签栏 + 消息区）**仅非全屏**组合：
-                // 既满足「全屏 = 播放器独占整屏」，又不为此切换分支（见上方根因说明）。
-                if (!isFullScreen) {
-                    Column(
-                        modifier = Modifier
-                            .width(panelWidth)
-                            .fillMaxHeight()
-                            .background(MaterialTheme.colorScheme.surface),
-                    ) {
-                        // 信息栏上下各一条横细线（用户要求 2026-10-07）：上 = 顶栏与信息栏之间，
-                        // 下 = 信息栏与标签栏之间。播放器与右栏之间**不做竖线**（用户要求删除，
-                        // 靠左右底色/内容边界区分）。
-                        ThinDivider(modifier = Modifier.fillMaxWidth().height(1.dp))
-                        roomInfoBar()
-                        ThinDivider(modifier = Modifier.fillMaxWidth().height(1.dp))
-                        roomTabsAndContent()
-                    }
+        // 全屏时顶栏片段自身守卫不组合 → 下面的 Row/左列自然独占整屏。
+        roomTitleBar()
+        Row(
+            // 宽屏/全屏：吃掉标题栏以下的全部高度；窄屏非全屏：高度随内容，让位给下方信息栏
+            modifier = if (videoFillsSpace) {
+                Modifier.weight(1f).fillMaxWidth()
+            } else {
+                Modifier.fillMaxWidth()
+            },
+        ) {
+            // 左列：播放器（宽屏/全屏吃满剩余高度；窄屏非全屏高度由 16:9 视频决定）
+            Column(
+                modifier = if (videoFillsSpace) {
+                    Modifier.weight(1f).fillMaxHeight()
+                } else {
+                    Modifier.weight(1f)
+                },
+            ) {
+                roomVideo(
+                    if (videoFillsSpace) {
+                        Modifier.weight(1f).fillMaxWidth()
+                    } else {
+                        Modifier.fillMaxWidth().aspectRatio(16f / 9f)
+                    },
+                )
+            }
+            // 右列（主播信息栏 + 标签栏 + 消息区）**仅宽屏且非全屏**组合：
+            // 既满足「全屏 = 播放器独占整屏」，又不为此切换视频所在分支（见上方根因说明）。
+            if (wideLayout && !isFullScreen) {
+                Column(
+                    modifier = Modifier
+                        .width(panelWidth)
+                        .fillMaxHeight()
+                        .background(MaterialTheme.colorScheme.surface),
+                ) {
+                    // 信息栏上下各一条横细线（用户要求 2026-10-07）：上 = 顶栏与信息栏之间，
+                    // 下 = 信息栏与标签栏之间。播放器与右栏之间**不做竖线**（用户要求删除，
+                    // 靠左右底色/内容边界区分）。色调 = `outlineVariant` × alpha 0.5（用户决策
+                    // 「调暗、不那么明显」；用 alpha 而非写死颜色，深浅两套主题下都只是「比背景
+                    // 略深/略浅的一线」）。改用 Material3 `HorizontalDivider`（同厚度同色，其内部
+                    // 即 `fillMaxWidth().height(thickness)`）收敛本文件原先的私有细线实现
+                    // （task 10-16-live-room-pager-review-fixes Finding 7）。
+                    HorizontalDivider(
+                        thickness = 1.dp,
+                        color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f),
+                    )
+                    roomInfoBar()
+                    HorizontalDivider(
+                        thickness = 1.dp,
+                        color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f),
+                    )
+                    roomTabsAndContent()
                 }
             }
         }
-    } else {
-        Column(modifier = rootModifier) {
-            roomTitleBar()
-            roomVideo(
-                if (isFullScreen) {
-                    Modifier.fillMaxSize()
-                } else {
-                    Modifier.fillMaxWidth().aspectRatio(16f / 9f)
-                },
-            )
-            if (!isFullScreen) {
-                roomInfoBar()
-                roomTabsAndContent()
-            }
+        // 窄屏非全屏：信息栏与标签区在播放器**下方**（宽屏已移入右列，全屏不显示）
+        if (!wideLayout && !isFullScreen) {
+            roomInfoBar()
+            roomTabsAndContent()
         }
     }
 
@@ -1317,24 +1370,6 @@ fun LiveRoomScreen(
 
         RoomSheet.DanmuShield -> DanmuShieldSheet(onDismiss = { activeSheet = RoomSheet.None })
     }
-}
-
-/**
- * 分栏细线（1px）—— 宽屏分栏态下**信息栏上下两条横线**共用（尺寸由调用方以 [modifier] 传入：
- * `fillMaxWidth().height(1.dp)`）。
- *
- * 色调：`outlineVariant` 再压到 50% 不透明度（用户决策 2026-10-07「调暗、不那么明显」）。
- * 用 alpha 而不是写死颜色，是为了深浅两套主题下都只是「比背景略深/略浅的一线」；
- * 若要更淡/更明显，只改这里的 alpha 即可。
- * 注：播放器与右栏之间**没有**竖线（用户决策删除），两者靠底色与内容边界区分。
- */
-@Composable
-private fun ThinDivider(modifier: Modifier) {
-    Box(
-        modifier = modifier.background(
-            MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f),
-        ),
-    )
 }
 
 /**

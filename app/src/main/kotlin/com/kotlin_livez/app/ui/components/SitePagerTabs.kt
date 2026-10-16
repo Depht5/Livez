@@ -13,24 +13,27 @@ import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.wrapContentSize
 import androidx.compose.foundation.lazy.grid.LazyGridState
 import androidx.compose.foundation.pager.HorizontalPager
-import androidx.compose.foundation.pager.PagerState
+import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ScrollableTabRow
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.movableContentOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -38,18 +41,22 @@ import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.layout
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.rememberTextMeasurer
+import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.util.lerp
+import com.kotlin_livez.app.app.EventBus
 import com.kotlin_livez.app.app.Site
 import kotlin.math.abs
 import kotlin.math.floor
 import kotlin.math.roundToInt
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 
 /**
@@ -58,13 +65,17 @@ import kotlinx.coroutines.launch
  *
  * 收敛原因：首页与分类页原有两份逐行同构的 `SiteTabRow` + `HorizontalPager`，
  * 本次两项改动（标签居中、切换跳过中间页）两边都要，必须只有一份实现，否则必然漂移。
+ * 二次收敛：底栏「重按当前 Tab → 回顶或刷新」的选中态与监听同样从两个页面收敛到这里
+ * （原先是两份逐行同构的 `selectedSiteIndex` / `pagerState` / `DisposableEffect` 样板）。
  *
  * 与改动前一致的部分：Tab 内容（logo 24dp + 8dp 间距 + 16sp 站名、选中色手动切换、
  * 点击无涟漪）、指示条逐帧跟随插值、`beyondViewportPageCount` 默认 0（静止只组合当前页）、
  * 相邻站点点击与滑动切页走 `animateScrollToPage`。
  *
  * 本次新增：① 标签组装得下时水平居中（见 [rememberCenteredEdgePadding]）；
- * ② 点击相隔 ≥2 个站点的 Tab 时播放「两页过渡」，只组合当前页与目标页（见 [SitePagerTabs]）。
+ * ② 点击相隔 ≥2 个站点的 Tab 时播放「两页过渡」，只组合当前页与目标页（见 [SitePagerTabs]）；
+ * ③ 两页过渡用站点级 `movableContentOf` 把目标页**节点树搬移**进 Pager —— 不再是
+ * 「覆盖层组合一份、落位时 Pager 再组合一份」（后者每跳一次就多组合一整页，是切换卡顿的主要来源）。
  */
 
 /* ---------- 尺寸常量（来源：material3 ScrollableTabRow 实现与既有 Tab 样式）---------- */
@@ -88,6 +99,9 @@ private val TabLogoGap = 8.dp
 /** 标签行起始边距兜底值：标签组超宽时维持左对齐 + 可横向滚动（改动前的既有行为）。 */
 private val TabEdgePadding = 12.dp
 
+/** 指示条粗细（对齐 M3 `SecondaryIndicator` 默认值）。 */
+private val IndicatorHeight = 3.dp
+
 /** 两页过渡时长（与全局页面转场 `tween(280)` 一致）。 */
 private const val PAGE_JUMP_DURATION_MS = 280
 
@@ -97,20 +111,27 @@ private const val PAGE_JUMP_DURATION_MS = 280
  * 为何进度放在这里而不是页面级 `remember { Animatable }`：每次起跳都新建对象、进度初值恒为 0，
  * 起跳当帧渲染的就是「源页满屏」；若复用同一个 Animatable 再在 `LaunchedEffect` 里
  * `snapTo(0f)`，会先渲染出一帧「新过渡 + 旧进度 1」的画面（目标页整屏闪一帧）。
+ *
+ * 目标页内容**不再需要独立的网格状态**（改动前此处持有 `overlayGridState`）：本次目标页由
+ * [SitePagerTabs] 的站点级 `movableContentOf` 提供，落位是「同一棵节点树搬进 Pager 槽位」
+ * 而非「覆盖层与 Pager 各组合一份」—— 真实 [LazyGridState] 在同一时刻只会被一个
+ * `LazyVerticalGrid` 挂载，再播种一份复制品只会（1）多出一份组合、（2）交接瞬间靠播种对齐
+ * 滚动位置。搬移则连滚动位置一起搬走。
  */
 private class PagerJump(
     val source: Int,
     val target: Int,
-    /**
-     * 目标页覆盖层专用网格状态（由目标页真实状态播种）。
-     * 落位那一帧 Pager 会用**真实**状态渲染目标页，此处若复用同一个 [LazyGridState]，
-     * 同一个状态会被两个 LazyVerticalGrid 同时挂载（共享 scrollPosition/layoutInfo/prefetch
-     * 策略，属未定义行为）—— 故覆盖层必须用独立实例。
-     */
-    val overlayGridState: LazyGridState,
 ) {
     /** 0 → 1 过渡进度。 */
     val progress = Animatable(0f)
+
+    /**
+     * 覆盖层是否仍持有目标页的 `movableContent`。
+     * 必须与 [SitePagerTabs] 中 Pager 内容槽的守卫成对使用：`movableContentOf` 的同一实例
+     * **同一时刻只能被调用一次** —— 覆盖层持有时，Pager 里目标页那个槽位必须留空，
+     * 否则同一份内容被组合两次（届时节点归属未定义）。
+     */
+    var overlayActive by mutableStateOf(true)
 
     /** 滑动方向：目标在右为 +1、在左为 -1。 */
     val direction: Int get() = if (target > source) 1 else -1
@@ -124,8 +145,8 @@ private class PagerJump(
  * 页面跨中线才更新，真机反馈「滑多少、指示条不动」）。改为由调用方提供连续页位置
  * （[indicatorPosition]，手势/翻页动画期 = `currentPage + currentPageOffsetFraction`，
  * 两页过渡期 = 源→目标插值位置），在相邻两个 TabPosition 之间线性插值出偏移与宽度，
- * 实现「页面滑多少、指示条动多少」。该 lambda 在**布局阶段**被调用，读状态只触发重排，
- * 不会让调用方每帧重组。
+ * 实现「页面滑多少、指示条动多少」。该 lambda 在**布局阶段**被调用（见下方 `Modifier.layout`），
+ * 读状态只触发重排，不会让调用方每帧重组。
  *
  * @param sites 站点列表（顺序即 Tab 顺序）
  * @param selectedIndex 当前选中站点（驱动站名选中色）
@@ -163,26 +184,50 @@ fun SiteTabRow(
                 indicator = { tabPositions ->
                     // 空列表守卫：tabPositions 为空时 lastIndex = -1，coerceIn 会抛异常
                     if (tabPositions.isNotEmpty()) {
-                        // 连续页位置：整数部分 = 左邻 Tab，小数部分 = 过渡进度
-                        // （可为负——往回滑时 currentPage 已进位而 offset 为负，floor 后仍落在正确区间）
-                        val pos = indicatorPosition()
-                        val leftIndex = floor(pos).toInt().coerceIn(0, tabPositions.lastIndex)
-                        val rightIndex = (leftIndex + 1).coerceIn(0, tabPositions.lastIndex)
-                        val fraction = (pos - leftIndex).coerceIn(0f, 1f)
-                        val leftRect = tabPositions[leftIndex]
-                        val rightRect = tabPositions[rightIndex]
-                        // 手写等价 SecondaryIndicator + tabIndicatorOffset：偏移/宽度随连续位置插值；
-                        // 高度 3dp 对齐 M3 SecondaryIndicator 默认粗细
                         Box(
                             modifier = Modifier
-                                .wrapContentSize(Alignment.BottomStart)
-                                .offset(
-                                    x = lerp(leftRect.left.value, rightRect.left.value, fraction).dp,
-                                )
-                                .width(
-                                    lerp(leftRect.width.value, rightRect.width.value, fraction).dp,
-                                )
-                                .height(3.dp)
+                                .fillMaxSize()
+                                // 指示条位置/宽度在**布局阶段**读取并落位：连续页位置读的是动画状态，
+                                // 若在 @Composable 函数体里读，indicator 子组合会在滑页/跳页动画期间每帧重组
+                                // （正是审查检出的 Finding 6）；放进 Modifier.layout 后，状态变化只让本次布局
+                                // 失效（重排），动画期间子组合 0 次重组。
+                                // 占位节点铺满整行只是为了让 placeable 能在行内任意 x/y 落位，
+                                // 真正被画成指示条的是下面按固定尺寸测量的那个 placeable。
+                                .layout { measurable, constraints ->
+                                    // 连续页位置：整数部分 = 左邻 Tab，小数部分 = 过渡进度
+                                    // （可为负——往回滑时 currentPage 已进位而 offset 为负，floor 后仍落在正确区间）
+                                    val pos = indicatorPosition()
+                                    val leftIndex = floor(pos).toInt().coerceIn(0, tabPositions.lastIndex)
+                                    val rightIndex = (leftIndex + 1).coerceIn(0, tabPositions.lastIndex)
+                                    val fraction = (pos - leftIndex).coerceIn(0f, 1f)
+                                    val leftRect = tabPositions[leftIndex]
+                                    val rightRect = tabPositions[rightIndex]
+                                    // 手写等价 SecondaryIndicator + tabIndicatorOffset：偏移/宽度随连续位置插值。
+                                    // 先 roundToPx 再插值（而不是用 Dp 小数插值后交给下游取整），
+                                    // 避免相邻两 tab 的取整误差方向不一致时指示条比标签宽/窄 1px。
+                                    val indicatorWidthPx = lerp(
+                                        leftRect.width.roundToPx().toFloat(),
+                                        rightRect.width.roundToPx().toFloat(),
+                                        fraction,
+                                    ).roundToInt().coerceAtLeast(0)
+                                    val indicatorOffsetXPx = lerp(
+                                        leftRect.left.roundToPx().toFloat(),
+                                        rightRect.left.roundToPx().toFloat(),
+                                        fraction,
+                                    ).roundToInt()
+                                    val indicatorHeightPx = IndicatorHeight.roundToPx()
+                                    // background 画在「被测量出来的 placeable」尺寸上（不是本布局节点的尺寸），
+                                    // 故必须用固定尺寸约束测量它，否则整行都会被涂成指示条色
+                                    val placeable = measurable.measure(
+                                        Constraints.fixed(indicatorWidthPx, indicatorHeightPx),
+                                    )
+                                    layout(constraints.maxWidth, constraints.maxHeight) {
+                                        placeable.placeRelative(
+                                            x = indicatorOffsetXPx,
+                                            y = (constraints.maxHeight - indicatorHeightPx).coerceAtLeast(0),
+                                        )
+                                    }
+                                }
                                 .background(indicatorColor),
                         )
                     }
@@ -224,7 +269,7 @@ fun SiteTabRow(
 }
 
 /**
- * 站点横向分页器 —— 标签行 + 分页器 + 「跳过中间页」两页过渡。
+ * 站点横向分页器 —— 标签行 + 分页器 + 「跳过中间页」两页过渡 + 底栏重按联动。
  *
  * 背景（为什么需要它）：点 Tab 走 `animateScrollToPage` 时滚动位置连续穿过中间页，
  * `HorizontalPager` 会依次组合与视口相交的页 —— 从 B 站切到抖音会把斗鱼/虎牙的卡片
@@ -235,48 +280,164 @@ fun SiteTabRow(
  * 1. 过渡期 Pager **必须保持组合**，只做位移：`PagerState.scrollToPage` 内部
  *    `awaitLayoutModifier.waitForFirstLayout()`（foundation `PagerState.kt`），
  *    把 Pager 摘出组合会让落位挂起。
- * 2. 源页由 Pager 自身渲染（它停在源页，静止时只组合当前页）→ 零重复组合；
- *    目标页由覆盖层渲染（临时网格状态，见 [PagerJump.overlayGridState]）。
- * 3. 两页位移互补：进度 p 时源页占 [-pW, W-pW]、目标页占 [W-pW, 2W-pW]，
+ * 2. 源页由 Pager 自身渲染（它停在源页，静止时只组合当前页）→ 零重复组合。
+ * 3. 目标页由**站点级 `movableContentOf`** 渲染：覆盖层先持有它的节点树，280ms 结束时整棵树
+ *    搬进 Pager 的目标槽位 —— 全程只组合一次（改动前覆盖层与落位后的 Pager 各组合一份，
+ *    实测每跳一次就多一份目标页组合，是切换重帧的主要来源）。
+ * 4. 两页位移互补：进度 p 时源页占 [-pW, W-pW]、目标页占 [W-pW, 2W-pW]，
  *    并集恒为视口 → 无空白帧。
- * 4. 结束顺序不可颠倒：先 `scrollToPage(target)`（此时覆盖层仍遮住整屏），
- *    再清 `jump` —— 同一帧露出已组合好的目标页，无闪烁。
+ * 5. 结束顺序不可颠倒（也不能在其中插入挂起点）：`scrollToPage(target)` →
+ *    (`overlayActive = false`, `jump = null`) 同帧完成，见下方 `LaunchedEffect(jump)` 注释。
  *
- * @param pagerState 分页器状态（由页面创建并持有：底栏「重按首页/分类」事件要读 currentPage）
  * @param sites 站点列表
  * @param gridStates 各站点网格滚动状态（键 = 站点 id，由壳层持有）
- * @param selectedIndex 当前选中站点下标
  * @param indicatorColor 指示条/选中色
- * @param onSelectSite 选中站点变化的即时回调（两页过渡起跳时立刻通知，让 Tab 选中色即时反馈）
- * @param pageContent 单页内容（首页传 PagedRoomGrid / 分类页传分类网格）；
- *   两页过渡的目标页会以**临时网格状态**再调一次，故实现必须是可重入的纯渲染
+ * @param bottomNavTabIndex 本页在底栏中的下标（底栏「重按当前 Tab」事件的载荷即此下标：
+ *   首页 = 0 / 分类页 = 2）
+ * @param onRefreshSite 底栏重按且当前站点列表已回顶时的刷新回调（页面侧传
+ *   `controller.xxxListControllers[site.id]?.refreshData()`）
+ * @param pageContent 单页内容（首页传 PagedRoomGrid / 分类页传分类网格）
  * @param trailing 透传给 [SiteTabRow] 的行尾槽
  */
 @Composable
 fun SitePagerTabs(
-    pagerState: PagerState,
     sites: List<Site>,
     gridStates: Map<String, LazyGridState>,
-    selectedIndex: Int,
     indicatorColor: Color,
-    onSelectSite: (Int) -> Unit,
+    bottomNavTabIndex: Int,
+    onRefreshSite: (Site) -> Unit,
     pageContent: @Composable (site: Site, gridState: LazyGridState) -> Unit,
     modifier: Modifier = Modifier,
     trailing: (@Composable RowScope.() -> Unit)? = null,
 ) {
-    // 当前两页过渡（null = 空闲）。用 remember 而非 rememberSaveable：过渡是瞬时 UI 态，
-    // 进程重建/旋转后不需要恢复（旋转会中断动画，落位由下方 scrollToPage 兜底语义承担）。
-    var jump by remember { mutableStateOf<PagerJump?>(null) }
-    val coroutineScope = rememberCoroutineScope()
     val lastIndex = sites.lastIndex.coerceAtLeast(0)
+
+    // 当前站点 Tab（rememberSaveable：进程重建/底栏 Tab 切换回来后恢复选中态，亦作 pager 的
+    // initialPage 兜底）。点击（含两页过渡）与滑动两条路径分别即时置位 / 落位回写。
+    var selectedSiteIndex by rememberSaveable { mutableIntStateOf(0) }
+    // 越界保护：设置里站点排序变化导致索引失效时回落到第一个站点
+    val siteIndex = selectedSiteIndex.coerceIn(0, lastIndex)
+
+    // 横向翻页器（foundation 1.7 stable API）：站点页左右滑动切换；
+    // 默认不预组合邻页（beyondViewportPageCount=0），滑动中邻页被组合时其内部
+    // 「仅首次加载」守卫触发邻站首载，等价旧 View attach 即加载语义，可接受。
+    // 内聚到本组件：底栏「重按」事件要按逻辑选中站点取列表状态，已选项与 Pager 页码可能失步。
+    val pagerState = rememberPagerState(initialPage = siteIndex, pageCount = { sites.size })
+
+    // 当前两页过渡（null = 空闲）。用 remember 而非 rememberSaveable：过渡是瞬时 UI 态，
+    // 进程重建/旋转后不需要恢复（旋转会中断动画，落位由下方失步自愈守卫兜底语义承担）。
+    var jump by remember { mutableStateOf<PagerJump?>(null) }
+    // 相邻站点点击启动的 animateScrollToPage 协程：起跳/跨页点击前要先取消它（否则两次滚动
+    // 互相抢 MutatorMutex，旧协程留下的半页偏移会让新动画从中间位置起步），回写也要避开它。
+    var animateScrollJob by remember { mutableStateOf<Job?>(null) }
+    val coroutineScope = rememberCoroutineScope()
+
+    // ===== 站点内容「可搬移」槽位 =====
+    // 按站点把该页内容封成 movableContentOf：两页过渡结束时，覆盖层里**已经组合好**的目标页
+    // 节点树会被整体搬进 HorizontalPager 的目标槽位（而不是在 Pager 里从头再组合一份）。
+    // - 绑定**真实** LazyGridState（不再需要临时 overlayGridState）：节点是「搬移」而非「复制」，
+    //   同一时刻只有一个 LazyVerticalGrid 挂载该状态，滚动位置随节点一起搬走。
+    // - rememberUpdatedState(pageContent)：movableContentOf 的 lambda 只在 remember 里创建一次，
+    //   直接捕获 pageContent 会永久持有首次组合那个旧 lambda（调用方每次重组都新建 lambda，
+    //   里面又捕获着 controller / 点击回调）——必须经 rememberUpdatedState 读最新值。
+    // - 同一槽位同一时刻只能被调用一次（覆盖层持有目标页时 Pager 槽位必须留空，见下方守卫）。
+    val currentPageContent by rememberUpdatedState(pageContent)
+    val siteMovableContents = remember(sites, gridStates) {
+        sites.associate { site ->
+            val gridState = gridStates[site.id]
+            site.id to movableContentOf {
+                if (gridState != null) {
+                    currentPageContent(site, gridState)
+                } else {
+                    // 控制器尚未就绪的兜底空页（正常流程不会出现）
+                    Box(modifier = Modifier.fillMaxSize())
+                }
+            }
+        }
+    }
+
+    // ===== 底栏重复点击事件（对齐 Dart indexed_controller.setIndex 的发射语义）=====
+    // Dart 行为（lib/modules/indexed/indexed_controller.dart setIndex + lib/modules/home/
+    // home_controller.dart onInit/refreshOrScrollTop + lib/modules/category/category_controller.dart
+    // onInit/refreshOrScrollTop + lib/app/controller/base_controller.dart scrollToTopOrRefresh）：
+    // 仅当重复点击当前 Tab 且当前页是本页时，若列表有滚动偏移则动画回顶，否则触发刷新。
+    // 滚动状态与选中站点都由本组件持有，故监听从两个页面收敛到此处（原 HomeScreen/CategoryScreen
+    // 各有一份逐行同构的 DisposableEffect）。
+    DisposableEffect(bottomNavTabIndex, sites) {
+        val job = EventBus.listen<Int>(EventBus.kBottomNavigationBarClicked) { index ->
+            if (index == bottomNavTabIndex) {
+                // 注意读**逻辑选中**站点（selectedSiteIndex）而不是 pagerState.currentPage：
+                // 后者是延迟落位的（280ms 跨页过渡期间仍停在源页），用它会在「点跨页 Tab 后立刻
+                // 双击底栏」时刷新到**源站点**。selectedSiteIndex 由 rememberSaveable 持有
+                // （remember 出来的稳定实例），闭包每次执行都读到最新值，不能用每次重组重算的局部变量。
+                val current = selectedSiteIndex.coerceIn(0, sites.lastIndex.coerceAtLeast(0))
+                val site = sites[current]
+                val gridState = gridStates[site.id]
+                if (gridState != null) {
+                    val scrolled =
+                        gridState.firstVisibleItemIndex > 0 || gridState.firstVisibleItemScrollOffset > 0
+                    if (scrolled) {
+                        // 对齐 Dart scrollController.animateTo(0, 200ms)
+                        coroutineScope.launch { gridState.animateScrollToItem(0) }
+                    } else {
+                        onRefreshSite(site)
+                    }
+                }
+            }
+        }
+        onDispose { job.cancel() }
+    }
 
     // 过渡驱动：起跳对象即动画载体。
     LaunchedEffect(jump) {
         val active = jump ?: return@LaunchedEffect
+        // 起跳前先把 Pager 定格在源页：上一次手势滑动或相邻站点 animateScrollToPage 可能仍在
+        // 进行（沿途会组合中间页），甚至停在非整页位置 —— 直接叠加「整页位移」会画出错位画面。
+        if (pagerState.isScrollInProgress || pagerState.currentPageOffsetFraction != 0f) {
+            pagerState.scrollToPage(active.source)
+        }
         active.progress.animateTo(1f, tween(PAGE_JUMP_DURATION_MS))
-        // Pager 仍组合（只是被平移出视口）——scrollToPage 才能立即生效
+        // ---- 结束顺序（不可颠倒，且两条状态写之间不得插入挂起点）----
+        // 此刻覆盖层与 Pager 里的目标页槽位**像素级重合**（进度 1：覆盖层 offset = 0；
+        // Pager 被整体平移 -direction·W，其内部落到目标页后同样落在 0）。
+        // ① 先让 Pager 内部切到目标页：目标槽位会被下方守卫留空（overlayActive 仍为 true），
+        //    不会与仍持有内容的覆盖层重复挂载同一份 movableContent；
+        // ② 同一帧内再「撤覆盖层 + 清 jump」→ 覆盖层里的节点树就地移入 Pager 槽位，无空白帧。
+        // 反面顺序（overlayActive 先置 false、再 scrollToPage）会闪一帧：覆盖层已不再持有目标页，
+        // 而 Pager 尚未落到目标页 —— 目标页内容在那一帧里不属于任何槽位。
         pagerState.scrollToPage(active.target)
+        active.overlayActive = false
         jump = null
+    }
+
+    // 滑动/落位回写选中索引，驱动 Tab 切色与指示条跟随。
+    // 根因说明（真机反馈：左右滑动时顶部 Tab 变化慢一拍）：settledPage 要等翻页动画完全 settle
+    // 才更新；改用 currentPage——跨过页面中线立即切换，指示器实时跟手
+    //（指示条自身逐帧插值跟随，不会生硬跳变）。
+    // 两条守卫（缺一不可）：
+    // ① jump == null —— 两页过渡期间 currentPage 仍是**源页**，无守卫会把刚点下的目标站点改回
+    //    源页（选中色/指示条弹回）；过渡落位时 currentPage 已等于目标站点，此写回是幂等的；
+    // ② animateScrollJob 不在进行中 —— 相邻站点点击已即时置位，动画中途回写只会造成指示条抖动。
+    LaunchedEffect(pagerState.currentPage) {
+        if (jump == null && animateScrollJob?.isActive != true) {
+            selectedSiteIndex = pagerState.currentPage
+        }
+    }
+
+    // 失步自愈守卫：280ms 过渡中途离开组合（进搜索页 / 切底栏 —— selectedSiteIndex 是
+    // rememberSaveable、pagerState 的 Saver 存的是**尚未落位**的源页）再返回，或过渡中途双击底栏，
+    // 都会留下「逻辑选中站点 ≠ Pager 页码」。空闲态（无过渡、无进行中滚动）下以逻辑选中站点为准拉回。
+    // 空闲判定除 isScrollInProgress 还要看 animateScrollJob：相邻站点点击刚 launch 时协程尚未真正
+    // 开始滚动（isScrollInProgress 此刻仍为 false），只看后者会在点击当帧就 scrollToPage 而把整段
+    // 滑动动画跳过（表现为「点 Tab 直接闪过去」）。
+    LaunchedEffect(siteIndex, jump, pagerState.isScrollInProgress) {
+        if (jump == null &&
+            animateScrollJob?.isActive != true &&
+            !pagerState.isScrollInProgress &&
+            pagerState.currentPage != siteIndex
+        ) {
+            pagerState.scrollToPage(siteIndex)
+        }
     }
 
     val onSelect: (Int) -> Unit = { index ->
@@ -287,22 +448,22 @@ fun SitePagerTabs(
             // 重复点击当前站点：无动作（对齐既有语义，Null 分支不触发滚动）
             index == current -> Unit
             // 相邻站点：维持整段滑动（此时视口内天然只有这两页，无中间页问题）
-            abs(index - current) <= 1 -> coroutineScope.launch {
-                pagerState.animateScrollToPage(index)
+            abs(index - current) <= 1 -> {
+                // 先取消上一次相邻点击的滚动，再置选中态并起新动画
+                animateScrollJob?.cancel()
+                selectedSiteIndex = index
+                animateScrollJob = coroutineScope.launch {
+                    pagerState.animateScrollToPage(index)
+                }
             }
             // 跨多页：两页过渡（只组合当前页与目标页）
             else -> {
-                val real = sites.getOrNull(index)?.let { gridStates[it.id] }
-                jump = PagerJump(
-                    source = current,
-                    target = index,
-                    overlayGridState = LazyGridState(
-                        real?.firstVisibleItemIndex ?: 0,
-                        real?.firstVisibleItemScrollOffset ?: 0,
-                    ),
-                )
+                // 同上：手势滑动或上一次相邻动画未停稳时直接起跳，会让 Pager 从非整数页位置
+                // 叠加位移；先取消协程，起跳前再由 LaunchedEffect 把 Pager 定格到源页
+                animateScrollJob?.cancel()
+                jump = PagerJump(source = current, target = index)
                 // Tab 选中色即时反馈（对齐 M3 语义：颜色即切、指示条动画跟随）
-                onSelectSite(index)
+                selectedSiteIndex = index
             }
         }
     }
@@ -314,7 +475,7 @@ fun SitePagerTabs(
         Column(modifier = Modifier.fillMaxSize()) {
             SiteTabRow(
                 sites = sites,
-                selectedIndex = selectedIndex,
+                selectedIndex = siteIndex,
                 // 连续页位置：过渡期按源→目标插值（指示条跨多格移动），
                 // 其余时刻跟随手势/翻页动画的连续位置
                 indicatorPosition = {
@@ -353,12 +514,21 @@ fun SitePagerTabs(
                     // 越界保护：sites 尺寸变化瞬间 pageCount 已更新但页面索引可能短暂越界
                     val pageIdx = page.coerceIn(0, lastIndex)
                     val site = sites[pageIdx]
-                    val gridState = gridStates[site.id]
-                    if (gridState != null) {
-                        pageContent(site, gridState)
-                    } else {
-                        // 控制器尚未就绪的兜底空页（正常流程不会出现）
+                    val active = jump
+                    if (active != null && active.overlayActive && pageIdx == active.target) {
+                        // 覆盖层此刻正持有目标页的 movableContent：同一可搬移内容同一时刻只能被
+                        // 调用一次。Pager 的页内容是测量期**子组合**（LazyLayout → SubcomposeLayout），
+                        // 与覆盖层所在的主组合同属一个 Recomposer —— 搬移会跨这两层组合进行，
+                        // 故此槽位必须先留空占位；覆盖层释放后本槽位下一帧即接住那棵节点树。
                         Box(modifier = Modifier.fillMaxSize())
+                    } else {
+                        val content = siteMovableContents[site.id]
+                        if (content != null) {
+                            content()
+                        } else {
+                            // 站点列表变化瞬间可能取不到槽位（正常流程不会出现）
+                            Box(modifier = Modifier.fillMaxSize())
+                        }
                     }
                 }
 
@@ -377,8 +547,13 @@ fun SitePagerTabs(
                             },
                     ) {
                         val targetSite = sites.getOrNull(active.target)
-                        if (targetSite != null) {
-                            pageContent(targetSite, active.overlayGridState)
+                        if (targetSite != null && active.overlayActive) {
+                            val content = siteMovableContents[targetSite.id]
+                            if (content != null) {
+                                content()
+                            } else {
+                                Box(modifier = Modifier.fillMaxSize())
+                            }
                         }
                     }
                     // 过渡期吞掉触摸：防误触移动中的卡片（Initial 阶段消费，优先级最高）
@@ -413,23 +588,32 @@ fun SitePagerTabs(
  * 其余属性（含 `letterSpacing`）来自 MaterialTheme 下发的 `LocalTextStyle`（= bodyLarge），
  * 直接量默认 style 会偏窄 → 居中偏移。
  *
- * 装不下时回落 [TabEdgePadding]：维持改动前的「左对齐 + 可横向滚动」。
+ * 全程按**整数像素**求和与求商（而不是 Dp 小数）：Dp 的小数部分在下游会被各自取整，
+ * 临界宽度下「Σ 各 tab 取整后宽度」会略大于容器可用宽 —— 表现为标签组明明放得下却多出
+ * 1~4px 的横向滚动。整数像素下总宽与可用宽同一量纲，判据与实现一致。
+ *
+ * 装不下时回落 [TabEdgePadding]（由 `maxOf` 保证下限）：维持改动前的「左对齐 + 可横向滚动」。
  */
 @Composable
 private fun rememberCenteredEdgePadding(sites: List<Site>, available: Dp): Dp {
     val measurer = rememberTextMeasurer()
     val density = LocalDensity.current
     val textStyle = MaterialTheme.typography.bodyLarge.copy(fontSize = 16.sp)
-    val totalWidth = remember(sites, textStyle, density, measurer) {
-        sites.fold(0.dp) { acc, site ->
-            val textWidth = with(density) {
-                measurer.measure(site.name, style = textStyle).size.width.toDp()
+    val totalWidthPx = remember(sites, textStyle, density, measurer) {
+        with(density) {
+            val minTabWidthPx = TabMinWidth.roundToPx()
+            val fixedChromePx =
+                TabLogoSize.roundToPx() + TabLogoGap.roundToPx() + TabContentPadding.roundToPx() * 2
+            sites.sumOf { site ->
+                val textWidthPx = measurer.measure(site.name, style = textStyle).size.width
+                maxOf(minTabWidthPx, fixedChromePx + textWidthPx)
             }
-            acc + maxOf(
-                TabMinWidth,
-                TabLogoSize + TabLogoGap + textWidth + TabContentPadding * 2,
-            )
         }
     }
-    return if (totalWidth < available) (available - totalWidth) / 2 else TabEdgePadding
+    return with(density) {
+        val availablePx = available.roundToPx()
+        val minEdgePaddingPx = TabEdgePadding.roundToPx()
+        val centeredEdgePaddingPx = (availablePx - totalWidthPx) / 2
+        maxOf(minEdgePaddingPx, centeredEdgePaddingPx).toDp()
+    }
 }

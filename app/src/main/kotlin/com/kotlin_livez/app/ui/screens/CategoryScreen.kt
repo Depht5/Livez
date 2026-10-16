@@ -18,7 +18,6 @@ import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyGridState
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
-import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
@@ -27,13 +26,8 @@ import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.material3.pulltorefresh.PullToRefreshDefaults
 import androidx.compose.material3.pulltorefresh.rememberPullToRefreshState
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
-import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.saveable.rememberSaveable
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.shadow
@@ -42,7 +36,6 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.kotlin_livez.app.app.EventBus
 import com.kotlin_livez.app.app.Site
 import com.kotlin_livez.app.modules.category.AppLiveCategory
 import com.kotlin_livez.app.modules.category.CategoryController
@@ -51,7 +44,6 @@ import com.kotlin_livez.app.ui.components.NetImage
 import com.kotlin_livez.app.ui.components.SitePagerTabs
 import com.kotlin_livez.app.ui.theme.cardContainerColor
 import com.kotlin_livez.core.model.LiveSubCategory
-import kotlinx.coroutines.launch
 
 /**
  * 分类页（Compose 版）—— 对应 Dart `modules/category/category_page.dart`（站点 TabBar）+
@@ -64,11 +56,11 @@ import kotlinx.coroutines.launch
  *
  * 标签行与分页器（含「切换站点跳过中间页」两页过渡）由公共组件 [SitePagerTabs] 承载
  * ——与首页共用同一实现（原两份逐行同构的 SiteTabRow 已收敛）。
+ * 本页只声明「本页是什么」：底栏下标（2026-10 收敛后 选中站点索引 / Pager 状态 /
+ * 「重按分类 Tab → 回顶或刷新」监听全部内聚在 [SitePagerTabs] 内，见其注释）。
  *
  * 各站点列表控制器由 [CategoryController] 壳层持有（跨底栏 Tab 切换存活）；
  * 滚动状态按站点各持一个 [LazyGridState]，由壳层传入（跨底栏切换与路由导航均不丢位置）。
- *
- * 底栏「重复点击分类 Tab」事件在本页监听：回顶或刷新（见下方 DisposableEffect 注释）。
  *
  * @param controller 分类控制器（由 MainShell 壳层 remember 持有）
  * @param gridStates 各站点网格滚动状态（键 = 站点 id，由壳层持有）
@@ -82,57 +74,6 @@ fun CategoryScreen(
     modifier: Modifier = Modifier,
 ) {
     val sites = controller.sites
-    val coroutineScope = rememberCoroutineScope()
-
-    // 当前站点 Tab（rememberSaveable：进程重建后恢复选中态，作 pager 的 initialPage 兜底；
-    // 之后以 pager 的 currentPage 为准回写——点击与滑动两条路径统一收敛到这一处写回）
-    var selectedSiteIndex by rememberSaveable { mutableIntStateOf(0) }
-    // 越界保护：设置里站点排序变化导致索引失效时回落到第一个站点
-    val siteIndex = selectedSiteIndex.coerceIn(0, sites.lastIndex.coerceAtLeast(0))
-
-    // 横向翻页器（foundation 1.7 stable API）：站点分类网格页左右滑动切换；
-    // 默认不预组合邻页（beyondViewportPageCount=0），滑动中邻页被组合时其内部
-    // 「仅首次加载」守卫触发邻站首载，等价旧 View attach 即加载语义，可接受。
-    val pagerState = rememberPagerState(initialPage = siteIndex, pageCount = { sites.size })
-
-    // 滑动过程中回写选中索引，驱动 Tab 切色/指示条跟随；
-    // 点击 Tab 走组件内过渡（相邻站点 animateScrollToPage / 跨多页两页过渡），
-    // 落页与过渡落位后同样经此路径写回（幂等赋值，无循环风险）。
-    // 根因说明（真机反馈：左右滑动时顶部 Tab 变化慢一拍）：settledPage 要等翻页动画
-    // 完全 settle 才更新；改用 currentPage——跨过页面中线立即切换，指示器实时跟手
-    //（指示条自身逐帧插值跟随，不会生硬跳变）。
-    LaunchedEffect(pagerState.currentPage) {
-        selectedSiteIndex = pagerState.currentPage
-    }
-
-    // ===== 底栏重复点击事件（对齐 Dart indexed_controller.setIndex 的发射语义）=====
-    // Dart 行为（lib/modules/category/category_controller.dart onInit/refreshOrScrollTop +
-    // lib/app/controller/base_controller.dart scrollToTopOrRefresh）：重复点击当前 Tab 且当前页是
-    // 分类页时，若当前站点列表有滚动偏移则动画回顶，否则触发刷新。原 Kotlin 版在控制器内订阅并
-    // 固定刷新第 0 个站点；Compose 下当前索引与滚动状态由本页持有，故监听从控制器移到此处
-    // 并按真实选中站点处理。
-    DisposableEffect(Unit) {
-        val job = EventBus.listen<Int>(EventBus.kBottomNavigationBarClicked) { index ->
-            if (index == 2) {
-                // 注意读最新的可见页索引：闭包只创建一次，必须经 pagerState（remember 持有的
-                // 稳定实例）读取当前 currentPage（与 Tab 选中态同一来源），不能用每次重组重算的局部变量
-                val current = pagerState.currentPage.coerceIn(0, sites.lastIndex.coerceAtLeast(0))
-                val listController = controller.categoryListControllers[sites[current].id]
-                val gridState = gridStates[sites[current].id]
-                if (listController != null && gridState != null) {
-                    val scrolled =
-                        gridState.firstVisibleItemIndex > 0 || gridState.firstVisibleItemScrollOffset > 0
-                    if (scrolled) {
-                        // 对齐 Dart scrollController.animateTo(0, 200ms)
-                        coroutineScope.launch { gridState.animateScrollToItem(0) }
-                    } else {
-                        listController.refreshData()
-                    }
-                }
-            }
-        }
-        onDispose { job.cancel() }
-    }
 
     Column(
         modifier = modifier
@@ -141,14 +82,14 @@ fun CategoryScreen(
             .statusBarsPadding(),
     ) {
         SitePagerTabs(
-            pagerState = pagerState,
             sites = sites,
             gridStates = gridStates,
-            selectedIndex = siteIndex,
             // 分类页指示条/选中色跟随 secondary（分类蓝 #3498DB 的 M3 映射）
             indicatorColor = MaterialTheme.colorScheme.secondary,
-            // 两页过渡起跳时即时反馈选中站点（过渡中 currentPage 尚未变化）
-            onSelectSite = { selectedSiteIndex = it },
+            // 底栏「重按分类 Tab」事件载荷 = 底栏下标（分类页 = 2）：
+            // 有滚动偏移则回顶、否则刷新选中站点，逻辑在 SitePagerTabs 内
+            bottomNavTabIndex = 2,
+            onRefreshSite = { site -> controller.categoryListControllers[site.id]?.refreshData() },
             pageContent = { pageSite, gridState ->
                 val listController = controller.categoryListControllers[pageSite.id]
                 if (listController != null) {
