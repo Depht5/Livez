@@ -1,5 +1,7 @@
 package com.kotlin_livez.core.model
 
+import java.util.concurrent.atomic.AtomicLong
+
 /**
  * 弹幕消息类型。
  * 对应 Dart `LiveMessageType`（lib/src/model/live_message.dart）。
@@ -21,6 +23,9 @@ enum class LiveMessageType {
 /**
  * 弹幕/聊天消息。
  * 对应 Dart `LiveMessage`。`data` 对应 Dart 的 `dynamic`（在线人数时为人气值 Long）。
+ *
+ * 注：[id] 是对 Dart 模型的**有意偏离**（Dart 无此字段）——供列表稳定 key 使用，
+ * 详见该字段注释。
  */
 data class LiveMessage(
     /** 消息类型 */
@@ -37,7 +42,19 @@ data class LiveMessage(
     val imageUrls: List<String>? = null,
     /** 富文本消息片段（按平台顺序保存文字和图片，便于插回原位置） */
     val spans: List<LiveMessageSpan>? = null,
-)
+    /**
+     * 单调递增的唯一标识（**有意偏离 Dart 模型**：Dart 的 LiveMessage 没有 id）。
+     * 用途：聊天列表稳定 key（LazyColumn `key = { it.id }`）——列表头部消息被裁掉/中途插入时
+     * 不再按位置复用节点。弹幕解析发生在 IO 线程（各站点 WebSocket 回调并发入列），
+     * 故用 [AtomicLong] 自增而非普通 Int 计数器。
+     */
+    val id: Long = nextMessageId.incrementAndGet(),
+) {
+    companion object {
+        /** 全局自增序号（跨房间/跨站点单调，不重置——只要求唯一即可）。 */
+        private val nextMessageId = AtomicLong(0L)
+    }
+}
 
 /**
  * 富文本片段：文字或图片二选一。

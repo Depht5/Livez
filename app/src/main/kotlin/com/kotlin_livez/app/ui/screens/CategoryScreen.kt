@@ -28,6 +28,7 @@ import androidx.compose.material3.pulltorefresh.rememberPullToRefreshState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.shadow
@@ -42,6 +43,7 @@ import com.kotlin_livez.app.modules.category.CategoryController
 import com.kotlin_livez.app.modules.category.CategoryListController
 import com.kotlin_livez.app.ui.components.NetImage
 import com.kotlin_livez.app.ui.components.SitePagerTabs
+import com.kotlin_livez.app.ui.theme.LocalAppDarkTheme
 import com.kotlin_livez.app.ui.theme.cardContainerColor
 import com.kotlin_livez.core.model.LiveSubCategory
 
@@ -112,11 +114,18 @@ fun CategoryScreen(
 
 /* ---------- 分类行模型（镜像现版 CategoryView 的 CategoryRow sealed class）---------- */
 
-/** 分类网格行：主分类标题跨全宽、子分类卡片、「显示全部」卡片。 */
+/**
+ * 分类网格行：主分类标题跨全宽、子分类卡片、「显示全部」卡片。
+ * 三个行类型均为 `data class`（值等值）：它们不持有 lambda、也未被当作 key 使用
+ * （`items` 未传 `key`，位置即身份），故改值等值对现有渲染无行为影响——目的是后续需要
+ * 按值比较、或要拿行对象当稳定 key 时不必再改类型。
+ * 注：值等值本身不等于「可跳过重组」——行参数 `AppLiveCategory` 含 MutableStateFlow
+ * 属性（非稳定类型），`CategoryRow` 也随之不是稳定类型。
+ */
 private sealed class CategoryRow {
-    class Header(val cat: AppLiveCategory) : CategoryRow()
-    class Sub(val cat: AppLiveCategory, val sub: LiveSubCategory) : CategoryRow()
-    class ShowMore(val cat: AppLiveCategory) : CategoryRow()
+    data class Header(val cat: AppLiveCategory) : CategoryRow()
+    data class Sub(val cat: AppLiveCategory, val sub: LiveSubCategory) : CategoryRow()
+    data class ShowMore(val cat: AppLiveCategory) : CategoryRow()
 }
 
 /**
@@ -126,6 +135,11 @@ private sealed class CategoryRow {
  * 差异记录：Dart 用 sticky_headers 吸顶分组标题、现版 View 自研 translationY 卡位吸顶；
  * 本版按用户决策**不做吸顶**——主分类标题作为 full-span item 随内容滚动。
  * 「显示全部」逻辑照搬 AppLiveCategory.take15/showAll：点击置 showAll=true 后展开全部子分类。
+ * 行序列 `rows` 按「分类数据 + 展开态快照」记忆化，只在两者变化时重建（见函数内说明）。
+ *
+ * 注：`AppLiveCategory.take15` 已在模型侧（`modules/category/CategoryListController.kt`）改为
+ * 构造期缓存的 val——每次读取不再重新 `take(15)` 并分配列表；本页在此之上把同一分类的
+ * 读取次数由 2 次降为 1 次。
  */
 @OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
 @Composable
@@ -148,15 +162,24 @@ private fun CategorySiteGrid(
         showAllMap[cat.id] = cat.showAll.collectAsStateWithLifecycle().value
     }
 
-    // 展开后的扁平行序列（镜像现版 CategoryAdapter.submit 的 flatMap 构建逻辑）
-    val rows = categories.flatMap { cat ->
-        buildList {
-            add(CategoryRow.Header(cat))
-            val showAll = showAllMap[cat.id] ?: true
-            val subs = if (showAll) cat.children else cat.take15
-            subs.forEach { add(CategoryRow.Sub(cat, it)) }
-            if (!showAll && cat.children.size > cat.take15.size) {
-                add(CategoryRow.ShowMore(cat))
+    // 展开后的扁平行序列（镜像现版 CategoryAdapter.submit 的 flatMap 构建逻辑）。
+    // 记忆化（task 10-17-ui-power-and-recomposition-governance）：仅在分类数据或任一
+    // 「显示全部」展开态变化时重建，避免每次重组都重跑 flatMap 并新建整个行序列
+    // （remember 的 key 按 equals 比较，key 里的 Map 内容不变即命中缓存）。
+    // 展开态必须留在 key 内：点击「显示全部」只置 showAll.value = true（置位是展开的唯一驱动，
+    // 见点击处的既有 gotcha）；漏掉这个 key 会让置位后 rows 不重建，表现为「点击显示全部无效」。
+    val rows = remember(categories, showAllMap) {
+        categories.flatMap { cat ->
+            buildList {
+                add(CategoryRow.Header(cat))
+                val showAll = showAllMap[cat.id] ?: true
+                // take15 只取一次（原实现同一分类读两次，每次都重新 take(15) 分配一个列表）
+                val take15 = cat.take15
+                val subs = if (showAll) cat.children else take15
+                subs.forEach { add(CategoryRow.Sub(cat, it)) }
+                if (!showAll && cat.children.size > take15.size) {
+                    add(CategoryRow.ShowMore(cat))
+                }
             }
         }
     }
@@ -288,9 +311,10 @@ private fun HeaderText(name: String) {
 }
 
 /**
- * 子分类卡片 —— 对齐现版 buildSubCard 视觉：白底圆角 8dp、elevation 2dp、
- * 统一固定高 84dp、内边距 8/10、图 40dp 圆角 8dp（等价 NetImage.loadRound）、
- * 名称 12sp onSurfaceVariant 单行居中；[hideImage]=true 时为「显示全部」卡片（隐藏图片槽位）。
+ * 子分类卡片 —— 对齐现版 buildSubCard 视觉：白底圆角 8dp、elevation 2dp
+ * （深色/纯黑主题下跳过阴影）、统一固定高 84dp、内边距 8/10、图 40dp 圆角 8dp
+ * （等价 NetImage.loadRound）、名称 12sp onSurfaceVariant 单行居中；
+ * [hideImage]=true 时为「显示全部」卡片（隐藏图片槽位）。
  */
 @Composable
 private fun SubCategoryCard(
@@ -299,10 +323,18 @@ private fun SubCategoryCard(
     onClick: () -> Unit,
     hideImage: Boolean = false,
 ) {
+    // 深色/纯黑主题下跳过 2dp 阴影（task 10-17-ui-power-and-recomposition-governance）：
+    // 深色底上阴影几乎不可见，却仍要按 elevation 录一层阴影绘制指令，纯属浪费。
+    // 只动 shadow 这一条件，modifier 链顺序（clip/clickable）保持原样。
+    val cardShadow = if (LocalAppDarkTheme.current) {
+        Modifier
+    } else {
+        Modifier.shadow(elevation = 2.dp, shape = RoundedCornerShape(8.dp))
+    }
     Column(
         modifier = Modifier
             .height(84.dp)
-            .shadow(elevation = 2.dp, shape = RoundedCornerShape(8.dp))
+            .then(cardShadow)
             .background(cardContainerColor(), RoundedCornerShape(8.dp))
             .clickable(onClick = onClick)
             .padding(start = 8.dp, top = 10.dp, end = 8.dp, bottom = 10.dp),

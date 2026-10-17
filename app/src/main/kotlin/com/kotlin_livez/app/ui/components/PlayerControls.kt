@@ -37,8 +37,10 @@ import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.kotlin_livez.app.ui.theme.CustomIcons
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.StateFlow
 import java.time.LocalTime
 import java.time.format.DateTimeFormatter
 
@@ -69,6 +71,12 @@ import java.time.format.DateTimeFormatter
  *
  * show/hide/toggle 与 5s 自动隐藏的计时逻辑由宿主（LiveRoomScreen）以 LaunchedEffect
  * 实现；本组件只按参数渲染。
+ *
+ * **直播时长（1Hz）订阅下沉**（task 10-17-ui-power-and-recomposition-governance）：
+ * 时长 Flow 改由本组件在 `visible == true` 时自行 `collectAsStateWithLifecycle()`——
+ * 上方 `if (!visible) return` 使控制层隐藏期间本组件**根本不进入组合**，每秒一次的
+ * 时长刷新因此不触发任何重组（此前订阅在 LiveRoomScreen 根部，覆盖 95% 以上观看时长
+ * 的隐藏期也每秒重组整页）。宿主只传 Flow 本身（StateFlow 属性读取不产生订阅）。
  */
 @Composable
 fun PlayerControlsOverlay(
@@ -77,7 +85,7 @@ fun PlayerControlsOverlay(
     playing: Boolean,
     liveStatus: Boolean,
     danmakuEnabled: Boolean,
-    durationText: String,
+    durationFlow: StateFlow<String>,
     qualityName: String,
     lineName: String,
     title: String,
@@ -94,6 +102,10 @@ fun PlayerControlsOverlay(
 ) {
     // 等价旧 View 的 GONE：不参与组合，按钮状态随下次显示时的参数重建
     if (!visible) return
+
+    // 时长订阅必须在早返回之后：控制层隐藏时本组件不进入组合，也就不会收集该 Flow
+    //（首帧即取到当前值，无需 host 侧再做初值回填）
+    val durationText by durationFlow.collectAsStateWithLifecycle()
 
     Box(modifier = modifier.fillMaxSize()) {
 

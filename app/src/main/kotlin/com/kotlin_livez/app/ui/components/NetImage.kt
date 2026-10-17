@@ -5,6 +5,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
@@ -15,6 +16,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
+import coil.size.Precision
 import com.kotlin_livez.app.ui.theme.ImageError
 import com.kotlin_livez.app.ui.theme.ImagePlaceholder
 
@@ -42,6 +44,7 @@ fun NetImage(
     placeholderColor: Color = ImagePlaceholder,
     errorColor: Color = ImageError,
 ) {
+    val context = LocalContext.current
     val pic = normalizeUrl(url)
     val clipModifier: Modifier = when {
         shape != null -> modifier.clip(shape)
@@ -56,6 +59,24 @@ fun NetImage(
         return
     }
 
+    // 记忆化（task 10-17-ui-power-and-recomposition-governance）：本组件在网格里一屏十几张，
+    // 且每次重组都会重新执行函数体——原先 ImageRequest.Builder 与两个 ColorPainter 都是
+    // 每次重组新建的对象，现按各自输入缓存：只在 URL（或 Context）变化时重建请求，
+    // 只在颜色参数变化时重建 painter。
+    val request = remember(context, pic) {
+        ImageRequest.Builder(context)
+            .data(pic)
+            .crossfade(true)
+            // 尺寸精度放宽：解码尺寸不必与目标严格一致（目标可自行缩放），Coil 可复用更大尺寸的
+            // 内存缓存条目并避免多余放大解码；
+            // 允许 RGB_565：图片确定为不透明时用 16 位色位图，内存减半（代价是轻微色阶损失）。
+            .precision(Precision.INEXACT)
+            .allowRgb565(true)
+            .build()
+    }
+    val placeholderPainter = remember(placeholderColor) { ColorPainter(placeholderColor) }
+    val errorPainter = remember(errorColor) { ColorPainter(errorColor) }
+
     // 加载中/失败用纯色 painter（对齐 View 版色值：加载中 #F2F2F2、失败 #E0E0E0）。
     //
     // 为何用 AsyncImage 而不是 SubcomposeAsyncImage（task 10-07-home-jank-jump-clip-fullscreen-video）：
@@ -65,14 +86,11 @@ fun NetImage(
     // Slow issue draw commands 各 ~270/360 帧），即成本在组合侧。AsyncImage + ColorPainter 占位
     // 只有单次组合，视觉与语义（占位色、失败色、crossfade、圆角裁剪、空 URL 分支）完全不变。
     AsyncImage(
-        model = ImageRequest.Builder(LocalContext.current)
-            .data(pic)
-            .crossfade(true)
-            .build(),
+        model = request,
         contentDescription = null,
         contentScale = contentScale,
-        placeholder = ColorPainter(placeholderColor),
-        error = ColorPainter(errorColor),
+        placeholder = placeholderPainter,
+        error = errorPainter,
         modifier = clipModifier,
     )
 }

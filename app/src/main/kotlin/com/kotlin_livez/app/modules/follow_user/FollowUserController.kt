@@ -22,8 +22,15 @@ import kotlinx.coroutines.launch
 /** 关注分组模式（对应 Dart FollowGroupMode）。 */
 enum class FollowGroupMode { liveStatus, platform }
 
-/** 分组选项（对应 Dart FollowGroupOption）。 */
-class FollowGroupOption(
+/**
+ * 分组选项（对应 Dart FollowGroupOption）。
+ *
+ * 值语义（`data class`）：groupOptions 是**计算属性**（每次读取都新建列表与选项实例），
+ * 值等值让 UI 侧能按 groupMode/followList 记忆化它、并让等值的新旧列表互相抵消；
+ * 选中判定用的是 `option.id == selectedGroupId`（见 UI 与 filterBySelectedGroup），
+ * 无任何按实例身份比较或把选项当集合键的用法，故改值等值无行为变化。
+ */
+data class FollowGroupOption(
     val id: String,
     val title: String,
     val siteId: String? = null,

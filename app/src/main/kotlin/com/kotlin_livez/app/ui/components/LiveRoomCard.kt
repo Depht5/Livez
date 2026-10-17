@@ -25,6 +25,7 @@ import com.kotlin_livez.app.app.Utils
 import com.kotlin_livez.app.ui.nav.liveRoomContainerSharedElement
 import com.kotlin_livez.app.ui.nav.liveRoomCoverSharedElement
 import com.kotlin_livez.app.ui.theme.ImagePlaceholder
+import com.kotlin_livez.app.ui.theme.LocalAppDarkTheme
 import com.kotlin_livez.app.ui.theme.cardContainerColor
 import com.kotlin_livez.core.model.LiveRoomItem
 
@@ -61,13 +62,21 @@ fun LiveRoomCard(
     } else {
         Modifier
     }
+    // 深色/纯黑主题下跳过 2dp 阴影（task 10-17-ui-power-and-recomposition-governance）：
+    // 深色底上阴影几乎不可见，却仍要按 elevation 录一层阴影绘制指令。
+    // 浅色下保持 8dp 圆角 + 2dp 阴影的既有视觉；只动 shadow 这一条件。
+    val cardShadow = if (LocalAppDarkTheme.current) {
+        Modifier
+    } else {
+        Modifier.shadow(elevation = 2.dp, shape = RoundedCornerShape(8.dp))
+    }
     Column(
         modifier = containerSharedModifier
             .then(modifier)
             .fillMaxWidth()
             // 卡片容器色（task 08-29-chat-pin-bubble-follow-grid）：深色 = #1D1B20
-            //（介于页面背景与底栏之间的灰）；浅色 = surface。8dp 圆角 + 2dp 阴影不变
-            .shadow(elevation = 2.dp, shape = RoundedCornerShape(8.dp))
+            //（介于页面背景与底栏之间的灰）；浅色 = surface。8dp 圆角不变
+            .then(cardShadow)
             .background(cardContainerColor(), RoundedCornerShape(8.dp))
             .clickable(onClick = onClick),
     ) {

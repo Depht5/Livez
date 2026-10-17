@@ -58,15 +58,16 @@ import com.kotlin_livez.app.models.FollowUser
 import com.kotlin_livez.app.modules.follow_user.FollowGroupMode
 import com.kotlin_livez.app.modules.follow_user.FollowGroupOption
 import com.kotlin_livez.app.modules.follow_user.FollowUserController
+import com.kotlin_livez.app.services.FollowService
 import com.kotlin_livez.app.ui.Router
 import com.kotlin_livez.app.ui.components.NetImage
 import com.kotlin_livez.app.ui.nav.liveRoomContainerSharedElement
 import com.kotlin_livez.app.ui.nav.liveRoomCoverSharedElement
 import com.kotlin_livez.app.ui.components.resolveLiveRoomGrid
 import com.kotlin_livez.app.ui.theme.ImagePlaceholder
+import com.kotlin_livez.app.ui.theme.LocalAppDarkTheme
 import com.kotlin_livez.app.ui.theme.cardContainerColor
 import com.kotlin_livez.app.ui.theme.LiveIndicatorRed
-import com.kotlin_livez.core.model.FollowRefreshProgress
 
 /**
  * 关注用户页（Compose 版）—— 对应 Dart `follow_user_page.dart`，
@@ -122,18 +123,25 @@ fun FollowScreen(
     val selectedGroupId by effectiveController.selectedGroupId.collectAsStateWithLifecycle()
     // followList 参与组合读取（groupOptions 依赖它推导平台分组项），需订阅触发重组
     val followList by ServiceContainer.followService.followList.collectAsStateWithLifecycle()
-    val refreshProgress by ServiceContainer.followService.refreshProgress.collectAsStateWithLifecycle()
+    // groupOptions 的第三个输入：Sites.supportSites 按 siteSort 排序（决定平台分组项的先后序）
+    val siteSort by ServiceContainer.appSettings.siteSort.collectAsStateWithLifecycle()
     // 真实刷新态（启动/进页/定时/手动共用）：绑定下拉刷新指示器
     val updating by ServiceContainer.followService.updating.collectAsStateWithLifecycle()
+    // 注：refreshProgress 的订阅已下沉到 RefreshProgressSection 内部——刷新进度每秒多次 tick，
+    // 在本页收集会让整页（顶栏/分组条/网格）跟着重组（task 10-17-ui-power-and-recomposition-governance）。
 
     // 搜索关键字本地输入态；防抖语义对齐现版 TextWatcher：每次变更直接 setSearchKeyword
     var keyword by rememberSaveable { mutableStateOf("") }
     // 取消关注确认框目标（长按行置位）
     var pendingUnfollow by remember { mutableStateOf<FollowUser?>(null) }
 
-    // 分组选项为控制器计算属性：其依赖的 groupMode / followList 均已在上方订阅，
-    // 任一变化驱动本组合重组，此处随重组重算（平台分组的站点项随之增减）。
-    val groupOptions = effectiveController.groupOptions
+    // 分组选项为控制器计算属性（**不得**在 controller 侧缓存——那会把按 followList 推导出的
+    // 平台分组项冻结成陈旧列表）；改为在 UI 侧按其全部输入记忆化：
+    // groupMode（状态/平台分支）、followList（平台分组的站点集合）、siteSort（站点先后序，
+    // 经 Sites.supportSites 间接读取）。三者任一变化才重算，其余重组沿用同一列表实例。
+    val groupOptions = remember(effectiveController, groupMode, followList, siteSort) {
+        effectiveController.groupOptions
+    }
 
     // 根背景用 surface：与顶栏白条、列表区底一致——原 surfaceContainerLow 会在
     // 分组按钮行与状态栏区域露出灰底，与页面其他区域形成色差（用户反馈）。
@@ -162,7 +170,8 @@ fun FollowScreen(
             onSelect = { option -> effectiveController.setGroupOption(option) },
         )
 
-        RefreshProgressCard(progress = refreshProgress)
+        // 刷新进度区（进度流在子组件内部收集，tick 只重组本区）
+        RefreshProgressSection(followService = ServiceContainer.followService)
 
         // 下拉刷新（对齐主页 PagedRoomGrid 模式，task player-icons-follow-ux）：
         // isRefreshing 绑定 FollowService.updating（真实刷新态）；onRefresh 强制全量刷
@@ -334,12 +343,19 @@ private fun TagChipBar(
 }
 
 /**
- * 刷新进度卡片 —— 对应 Dart follow_user_page._buildRefreshProgress：
+ * 刷新进度区 —— 对应 Dart follow_user_page._buildRefreshProgress：
  * 进度激活时显示「阶段文案 + 已解析/总数」、可选明细行、线性进度条；
  * 非激活时不占布局（对齐 Dart SizedBox.shrink）。
+ *
+ * 订阅下沉点（task 10-17-ui-power-and-recomposition-governance）：refreshProgress 在本函数
+ * 内部 collectAsStateWithLifecycle，使每秒多次的进度 tick 只重组本区，不再带动整页
+ * （顶栏 / 分组条 / 关注网格）重组——这是原「在本页收集后当参数传下来」写法的代价所在。
+ * **函数名固定为 `RefreshProgressSection`**：后续任务将在本函数内追加 AnimatedVisibility
+ * （进度淡入淡出），改名会让那一步找不到落点。
  */
 @Composable
-private fun RefreshProgressCard(progress: FollowRefreshProgress) {
+private fun RefreshProgressSection(followService: FollowService) {
+    val progress by followService.refreshProgress.collectAsStateWithLifecycle()
     if (!progress.active) {
         return
     }
@@ -397,11 +413,19 @@ private fun FollowItemCard(
     modifier: Modifier = Modifier,
 ) {
     val site = Sites.allSites[item.siteId]
+    // 深色/纯黑主题下跳过 2dp 阴影（task 10-17-ui-power-and-recomposition-governance）：
+    // 与 LiveRoomCard / SubCategoryCard 同策略——深色底上阴影不可见却仍要录绘制指令。
+    // 只动 shadow 这一条件，modifier 链的 clip/clickable 顺序保持原样（归后续任务）。
+    val cardShadow = if (LocalAppDarkTheme.current) {
+        Modifier
+    } else {
+        Modifier.shadow(elevation = 2.dp, shape = RoundedCornerShape(8.dp))
+    }
     Column(
         modifier = Modifier
             .liveRoomContainerSharedElement(item.siteId, item.roomId)
             .then(modifier)
-            .shadow(elevation = 2.dp, shape = RoundedCornerShape(8.dp))
+            .then(cardShadow)
             .background(cardContainerColor(), RoundedCornerShape(8.dp))
             .combinedClickable(
                 onClick = onClick,

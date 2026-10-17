@@ -128,13 +128,21 @@ class LiveRoomController(
     private val _disableAutoScroll = MutableStateFlow(false)
     val disableAutoScroll: StateFlow<Boolean> = _disableAutoScroll
 
+    /**
+     * 同步「用户上滑回看历史」意图（UI 侧滚动锁 → 控制器，由 LiveRoomScreen 的
+     * LaunchedEffect 驱动；task 10-17-ui-power-and-recomposition-governance）。
+     *
+     * 唯一读取方是聊天入列路径的 200 条上限裁剪（`size > 200 && !_disableAutoScroll`）：
+     * 置 true 期间不再裁掉头部消息（对齐 Dart，保证上滑回看时不丢内容），代价是该期间
+     * 消息列表无上限增长——用户贴底（置 false）即恢复裁剪。
+     */
+    fun setDisableAutoScroll(value: Boolean) {
+        _disableAutoScroll.value = value
+    }
+
     /** 直播间持续时长（对应 Dart liveDuration） */
     private val _liveDuration = MutableStateFlow("00:00:00")
     val liveDuration: StateFlow<String> = _liveDuration
-
-    /** 自动退出倒计时（对应 Dart countdown） */
-    private val _countdown = MutableStateFlow(60)
-    val countdown: StateFlow<Int> = _countdown
 
     private val _autoExitEnable = MutableStateFlow(false)
     val autoExitEnable: StateFlow<Boolean> = _autoExitEnable
@@ -226,9 +234,7 @@ class LiveRoomController(
     private var onlineRefreshRequestJob: Job? = null
     private var liveDurationJob: Job? = null
     private var danmakuCallbackJob: Job? = null
-    private var autoExitTickerJob: Job? = null
     private var autoExitDeadlineJob: Job? = null
-    private var countdownJob: Job? = null
 
     /** 播放停滞看门狗周期任务（dispose 时取消）。 */
     private var playbackWatchdogJob: Job? = null
@@ -842,7 +848,10 @@ class LiveRoomController(
             return
         }
         val now = System.currentTimeMillis()
-        val position = playerState.positionMs
+        // 进度与缓冲前探量已从 PlayerState 剥离为引擎上的 @Volatile 属性
+        //（task 10-17-ui-power-and-recomposition-governance：避免 30–60Hz 的 time-pos
+        // 回调持续发射 state 触发整页重组），此处直接读属性。
+        val position = player.positionMs
         val lastPosition = _lastWatchdogPosition
         if (lastPosition == null || position != lastPosition) {
             // 建立基准 / 位置推进：刷新推进时间。
@@ -854,7 +863,7 @@ class LiveRoomController(
         // 缓冲态判据更短：mpv 已在等缓存且缓存确实耗尽（bufferMs <= 1s，0 亦含「未上报」），
         // 位置又停滞 4 秒 → 重拉能立刻见效。未处于缓冲态则需停滞 6 秒才动手。
         val stalled = (playerState.pausedForCache &&
-            playerState.bufferMs <= 1000L &&
+            player.bufferMs <= 1000L &&
             stalledForMs >= BUFFERING_STALL_THRESHOLD_MS) ||
             (!playerState.pausedForCache && stalledForMs >= FROZEN_PLAYBACK_THRESHOLD_MS)
         if (!stalled) return
@@ -1082,7 +1091,7 @@ class LiveRoomController(
         val shieldList = appSettings.shieldList.value
         if (shieldList.isEmpty()) return false
         val text = normalizeMessageText(msg.message)
-        val parts = text.split(Regex("\\s+")).filter { it.isNotEmpty() }
+        val parts = text.split(WS_REGEX).filter { it.isNotEmpty() }
         val fullNames = shieldList.filter { !it.contains(" ") }
         val phraseNames = shieldList.filter { it.contains(" ") }
         if (fullNames.isNotEmpty() && parts.any { p -> fullNames.any { it.equals(p, ignoreCase = true) } }) {
@@ -1095,7 +1104,7 @@ class LiveRoomController(
     }
 
     private fun normalizeMessageText(text: String): String {
-        return text.replace(Regex("\\s+"), " ").trim()
+        return text.replace(WS_REGEX, " ").trim()
     }
 
     /** 用户屏蔽检查（对应 Dart _isUserShielded；用户屏蔽词列表在 AppSettingsController）。 */
@@ -1149,8 +1158,8 @@ class LiveRoomController(
         val user = msg.userName
         val normalizedUser = normalizeUserName(user).trim()
         var text = msg.message
-        text = Regex("\\s+").replace(text, "")
-        text = Regex("[\\p{Punct}！？。，、；：\u201C\u201D''（）【】《》]").replace(text, "")
+        text = WS_REGEX.replace(text, "")
+        text = PUNCT_REGEX.replace(text, "")
         val colorComponents = "${msg.color.r}:${msg.color.g}:${msg.color.b}"
         return if (normalizedUser.isEmpty() && text.isEmpty()) {
             ""
@@ -1237,8 +1246,8 @@ class LiveRoomController(
 
     private fun buildSuperChatFingerprint(message: LiveSuperChatMessage): String {
         var userName = message.userName.trim()
-        var text = Regex("\\s+").replace(message.message, "")
-        text = Regex("[\\p{Punct}！？。，、；：\u201C\u201D''（）【】《》]").replace(text, "")
+        var text = WS_REGEX.replace(message.message, "")
+        text = PUNCT_REGEX.replace(text, "")
         if (userName.isEmpty()) userName = "..."
         if (text.isEmpty()) text = "..."
         return "$userName|$text"
@@ -1527,9 +1536,7 @@ class LiveRoomController(
     fun setAutoExitEnabled(enabled: Boolean) {
         _autoExitEnable.value = enabled
         if (enabled) {
-            _countdown.value = _autoExitMinutes.value * 60
             scheduleAutoExitDeadline()
-            startAutoExitTicker()
         } else {
             stopAutoExit()
         }
@@ -1538,11 +1545,13 @@ class LiveRoomController(
     /** 调整自动退出时长（分钟；对应 Dart AutoExitSession 时长设置）。 */
     fun setAutoExitMinutes(minutes: Int) {
         _autoExitMinutes.value = minutes.coerceIn(1, 600)
-        if (_autoExitEnable.value) {
-            _countdown.value = _autoExitMinutes.value * 60
-        }
     }
 
+    /**
+     * 自动退出到点触发：分钟级 delay 后置 `_autoExitCompleting`（UI 监听后退出直播间）。
+     * 注意：原 `startAutoExitTicker`（每秒递减 `_countdown`）已删除——全仓 UI 无该 flow
+     * 消费者，真实触发路径只有本方法（task 10-17-ui-power-and-recomposition-governance）。
+     */
     private fun scheduleAutoExitDeadline() {
         autoExitDeadlineJob?.cancel()
         autoExitDeadlineJob = scope.launch {
@@ -1560,21 +1569,9 @@ class LiveRoomController(
         }
     }
 
-    private fun startAutoExitTicker() {
-        autoExitTickerJob?.cancel()
-        autoExitTickerJob = scope.launch {
-            while (_autoExitEnable.value && !_roomDisposed) {
-                delay(1000)
-                _countdown.value = (_countdown.value - 1).coerceAtLeast(0)
-                if (_countdown.value <= 0) break
-            }
-        }
-    }
-
     fun stopAutoExit() {
         _autoExitEnable.value = false
         autoExitDeadlineJob?.cancel()
-        autoExitTickerJob?.cancel()
     }
 
     /* ---------- 直播时长（对应 Dart startLiveDurationTimer：主播已开播时长） ---------- */
@@ -1615,7 +1612,9 @@ class LiveRoomController(
     fun onAppBackground() {
         _isBackground = true
         backgroundedAtElapsedMs = SystemClock.elapsedRealtime()
-        positionBeforeBackgroundMs = player.state.value.positionMs
+        // 进度读引擎上的 @Volatile 属性（已从 PlayerState 剥离，见 tickPlaybackWatchdog 说明）；
+        // 切后台/回前台跨线程，@Volatile 保证可见性。
+        positionBeforeBackgroundMs = player.positionMs
         // 后台播放关闭 = 切后台立即暂停（设置对 _playerAutoPause 的互补语义，亦为用户预期；
         // Dart 原行为是"不启动保活、任由系统冻结进程"，Kotlin 改为确定性暂停）
         if (!allowBackgroundPlayback() && player.state.value.playing) {
@@ -1651,8 +1650,9 @@ class LiveRoomController(
         scope.launch {
             delay(1_200)
             if (!isCurrentLoad(loadGeneration) || _isBackground) return@launch
+            // 快照只用于仍留在 PlayerState 的字段；进度改读引擎属性（同上）
             val s = player.state.value
-            val stalled = s.positionMs <= beforeMs || s.pausedForCache || s.completed || !s.playing
+            val stalled = player.positionMs <= beforeMs || s.pausedForCache || s.completed || !s.playing
             if (!stalled) return@launch
             Log.d("返回前台后检测到播放停滞，尝试恢复")
             try {
@@ -1676,7 +1676,6 @@ class LiveRoomController(
         stopAutoExit()
         cancelRoomBoundJobs()
         BackgroundPlayback.stop()
-        countdownJob?.cancel()
         // 播放停滞看门狗随页面销毁取消，避免旧控制器继续重取流。
         playbackWatchdogJob?.cancel()
         playbackWatchdogJob = null
@@ -1701,6 +1700,19 @@ class LiveRoomController(
     }
 
     companion object {
+        /**
+         * 空白字符（弹幕/SC 屏蔽词与去重指纹归一化用）。
+         * 提升为静态常量：原实现每次调用都新建 Regex 实例，正则在弹幕热路径上
+         * （每条消息都过屏蔽与去重）编译开销被反复支付。
+         */
+        private val WS_REGEX = Regex("\\s+")
+
+        /**
+         * 标点（含全角/中文标点）——去重指纹归一化用；与 [WS_REGEX] 同为热路径正则。
+         * 模式里的双引号沿用改动前源码的 \u201C\u201D 转义写法。
+         */
+        private val PUNCT_REGEX = Regex("[\\p{Punct}！？。，、；：\u201C\u201D''（）【】《》]")
+
         /** 恢复风暴窗口内允许的最大恢复次数（5 分钟 6 次）。 */
         private const val MAX_RECOVERIES_PER_WINDOW = 6
         private const val RECOVERY_WINDOW_MS = 5 * 60 * 1000L

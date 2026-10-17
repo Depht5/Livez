@@ -29,6 +29,12 @@ class AppLiveCategory(val category: LiveCategory) {
     /** 是否显示"全部"（对应 Dart showAll） */
     val showAll = MutableStateFlow(category.children.size < 19)
 
-    /** 取前 15 个子分类（对应 Dart take15） */
-    val take15: List<LiveSubCategory> get() = children.take(15)
+    /**
+     * 取前 15 个子分类（对应 Dart take15）。
+     *
+     * 构造期缓存（task 10-17-ui-power-and-recomposition-governance）：`children` 来自 core 的
+     * final data class `LiveCategory` 的不可变 val，`showAll` 只切换展开态、不改 `children`，
+     * 故不存在陈旧风险；原为 getter，每次读取都重新 `take(15)` 并分配一个列表。
+     */
+    val take15: List<LiveSubCategory> = children.take(15)
 }

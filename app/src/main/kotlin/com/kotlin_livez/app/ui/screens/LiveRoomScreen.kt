@@ -278,6 +278,33 @@ fun LiveRoomScreen(
             }
         }
     }
+    // 窗口首选刷新率（task 10-17-ui-power-and-recomposition-governance）：直播流本身
+    // 30–60fps，高刷屏（120/144Hz）下多出的帧对观看无增益、只增显示功耗；进入直播间把
+    // 窗口钉到 60Hz，退出时恢复进入前的值（通常 0f = 系统默认/跟随系统最高）。
+    // 宿主不保证是 Activity（LocalContext 类型无保证，见上方屏幕常亮的既有教训）——
+    // 取不到就静默跳过，不做盲目强转。preferredRefreshRate 属窗口属性，只做 set，
+    // 不触碰系统栏/方向（那是上面 LaunchedEffect(isFullScreen) 的职责）。
+    DisposableEffect(context) {
+        val activity = context as? Activity
+        val window = activity?.window
+        if (window == null) {
+            onDispose { }
+        } else {
+            val attributes = window.attributes
+            val savedRefreshRate = attributes.preferredRefreshRate
+            attributes.preferredRefreshRate = 60f
+            window.attributes = attributes
+            onDispose {
+                // 恢复进入前的值（Activity 若已在转场中销毁，setAttributes 可能抛异常，静默）
+                runCatching {
+                    val restore = window.attributes
+                    restore.preferredRefreshRate = savedRefreshRate
+                    window.attributes = restore
+                }
+            }
+        }
+    }
+
     // 通知权限（后台保活通知可见性）：Android 13+ POST_NOTIFICATIONS 为运行时权限，
     // 未授予时前台服务仍运行但通知被系统抑制——用户以通知为保活生效的依据，进入直播间时请求一次。
     val notificationPermissionLauncher = rememberLauncherForActivityResult(
@@ -436,7 +463,8 @@ fun LiveRoomScreen(
     val qualites by controller.qualites.collectAsStateWithLifecycle()
     val qualityName by controller.currentQualityInfo.collectAsStateWithLifecycle()
     val lineName by controller.currentLineInfo.collectAsStateWithLifecycle()
-    val liveDuration by controller.liveDuration.collectAsStateWithLifecycle()
+    // 直播时长（1Hz）不在此订阅：下沉到 PlayerControlsOverlay（控制层可见时才收集），
+    // 否则隐藏期每秒一次的重组会带上整页（task 10-17-ui-power-and-recomposition-governance）。
     val danmuEnable by ServiceContainer.appSettings.danmuEnable.collectAsStateWithLifecycle()
     val followLive by ServiceContainer.followService.liveList.collectAsStateWithLifecycle()
     val followNotLive by ServiceContainer.followService.notLiveList.collectAsStateWithLifecycle()
@@ -754,6 +782,12 @@ fun LiveRoomScreen(
     // （恢复组合时位置不在底 → 守卫自锁），根因分析见前任务 research 文档。
     var disableAutoScroll by remember { mutableStateOf(false) }
     var chatUserDragging by remember { mutableStateOf(false) }
+    // 同步 UI 滚动锁到控制器（task 10-17-ui-power-and-recomposition-governance）：控制器侧
+    // `_disableAutoScroll` 原先没有 setter、恒为 false，仅被 200 条上限裁剪读取；同步后
+    // 「用户上滑回看历史」期间不再裁掉头部消息（对齐 Dart 语义，代价是该期间无上限增长）。
+    LaunchedEffect(controller, disableAutoScroll) {
+        controller.setDisableAutoScroll(disableAutoScroll)
+    }
     // 贴底判定（供拖动检测与调试共用；留 1 条容差）
     val chatAtBottom by remember(chatListState) {
         derivedStateOf {
@@ -961,7 +995,8 @@ fun LiveRoomScreen(
                 playing = playerState.playing,
                 liveStatus = liveStatus,
                 danmakuEnabled = overlayDanmakuOn,
-                durationText = liveDuration,
+                // 传 Flow 而非值：订阅在控制层内部（隐藏时组件不组合 → 不收集）
+                durationFlow = controller.liveDuration,
                 qualityName = qualityName,
                 lineName = lineName,
                 title = detail?.title.orEmpty(),
@@ -1474,7 +1509,9 @@ private fun ChatTabContent(messages: List<LiveMessage>, listState: LazyListState
         modifier = Modifier.fillMaxSize(),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        items(messages) { msg ->
+        // 稳定 key（task 10-17-ui-power-and-recomposition-governance）：用 LiveMessage.id
+        // 而非列表下标——头部消息被裁掉或新消息入列时，下标 key 会让整段错位并触发全量重组。
+        items(messages, key = { it.id }) { msg ->
             Text(
                 text = buildMessageText(msg),
                 fontSize = 14.sp,
