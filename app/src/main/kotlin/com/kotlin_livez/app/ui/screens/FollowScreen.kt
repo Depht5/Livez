@@ -1,5 +1,10 @@
 package com.kotlin_livez.app.ui.screens
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -68,6 +73,7 @@ import com.kotlin_livez.app.ui.theme.ImagePlaceholder
 import com.kotlin_livez.app.ui.theme.LocalAppDarkTheme
 import com.kotlin_livez.app.ui.theme.cardContainerColor
 import com.kotlin_livez.app.ui.theme.LiveIndicatorRed
+import com.kotlin_livez.core.model.FollowRefreshProgress
 
 /**
  * 关注用户页（Compose 版）—— 对应 Dart `follow_user_page.dart`，
@@ -211,7 +217,16 @@ fun FollowScreen(
                             if (item.id.isNotEmpty()) item.id else "${item.siteId}_${item.roomId}"
                         },
                     ) { item ->
-                        Box(modifier = Modifier.fillMaxWidth().height(spec.mainAxisExtentDp.dp)) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(spec.mainAxisExtentDp.dp)
+                                // 卡片重排/增删动画（本任务范围：**分页器页外**的列表才加）。
+                                // 关注页不在 SitePagerTabs 页内，加 animateItem 不触碰
+                                // ui-compose.md 条目 27 的 C2 负面结论（页内网格逐项 graphicsLayer
+                                // 无稳健改善、已回退）。animateItem 依赖上方稳定 key 生效。
+                                .animateItem(),
+                        ) {
                             FollowItemCard(
                                 item = item,
                                 onClick = { openRoom(item) },
@@ -350,47 +365,70 @@ private fun TagChipBar(
  * 订阅下沉点（task 10-17-ui-power-and-recomposition-governance）：refreshProgress 在本函数
  * 内部 collectAsStateWithLifecycle，使每秒多次的进度 tick 只重组本区，不再带动整页
  * （顶栏 / 分组条 / 关注网格）重组——这是原「在本页收集后当参数传下来」写法的代价所在。
- * **函数名固定为 `RefreshProgressSection`**：后续任务将在本函数内追加 AnimatedVisibility
- * （进度淡入淡出），改名会让那一步找不到落点。
+ *
+ * 进度卡的淡入淡出（task 10-17-ui-animation-fluency-polish）：整体高度展开/收缩 + 淡入淡出，
+ * 取代原先「active 变 false 立即从组合树消失」的硬切换。
+ * **函数名固定为 `RefreshProgressSection`**（任务1 新建，命名不得更改）。
+ *
+ * 与 `PullToRefreshBox.isRefreshing` 的关系（ui-compose.md 条目 19 核对）：本函数只读
+ * `followService.refreshProgress`（**刷新进度**流），不参与 `isRefreshing`（下拉指示器）的
+ * 取值——`FollowScreen` 的 `isRefreshing` 仍直接绑 `followService.updating`（真实刷新态），
+ * 二者是同一刷新过程的两条独立流。因此本改动**没有**把下拉指示器的可见性与其状态脱钩，
+ * 条目 19 的「true→false 必须跨帧可见」前提未被触碰（`updating` 本身的语义由
+ * FollowService 的 400ms delay + generation 守卫保证）。
  */
 @Composable
 private fun RefreshProgressSection(followService: FollowService) {
     val progress by followService.refreshProgress.collectAsStateWithLifecycle()
-    if (!progress.active) {
-        return
+    // 最后一次「激活态」快照：AnimatedVisibility 的退场动画（收缩 + 淡出）期间
+    // progress.active 已为 false，若直接读当前值，卡片内容会在收缩过程中瞬间清空
+    // （stage 变空串、计数归零）。快照在组合期写入（幂等），退场期始终有内容可渲染。
+    var lastActive by remember { mutableStateOf<FollowRefreshProgress?>(null) }
+    if (progress.active) {
+        lastActive = progress
     }
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 8.dp, vertical = 4.dp)
-            .background(MaterialTheme.colorScheme.surfaceContainerHighest, RoundedCornerShape(8.dp))
-            .padding(12.dp),
+    val display = if (progress.active) progress else lastActive
+
+    AnimatedVisibility(
+        visible = progress.active,
+        enter = expandVertically() + fadeIn(),
+        exit = shrinkVertically() + fadeOut(),
     ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(
-                text = progress.stage,
-                fontSize = 14.sp,
-                color = MaterialTheme.colorScheme.onSurface,
-                modifier = Modifier.weight(1f),
-            )
-            Text(text = "${progress.resolvedCount}/${progress.total}", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurface)
-        }
-        if (progress.detail.isNotEmpty()) {
-            Spacer(modifier = Modifier.height(4.dp))
-            Text(text = progress.detail, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
-        Spacer(modifier = Modifier.height(8.dp))
-        if (progress.total > 0) {
-            LinearProgressIndicator(
-                progress = { progress.percent.toFloat() },
-                modifier = Modifier.fillMaxWidth().height(6.dp),
-                color = MaterialTheme.colorScheme.primary,
-            )
-        } else {
-            LinearProgressIndicator(
-                modifier = Modifier.fillMaxWidth().height(6.dp),
-                color = MaterialTheme.colorScheme.primary,
-            )
+        if (display != null) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 8.dp, vertical = 4.dp)
+                    .background(MaterialTheme.colorScheme.surfaceContainerHighest, RoundedCornerShape(8.dp))
+                    .padding(12.dp),
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = display.stage,
+                        fontSize = 14.sp,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        modifier = Modifier.weight(1f),
+                    )
+                    Text(text = "${display.resolvedCount}/${display.total}", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurface)
+                }
+                if (display.detail.isNotEmpty()) {
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(text = display.detail, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                Spacer(modifier = Modifier.height(8.dp))
+                if (display.total > 0) {
+                    LinearProgressIndicator(
+                        progress = { display.percent.toFloat() },
+                        modifier = Modifier.fillMaxWidth().height(6.dp),
+                        color = MaterialTheme.colorScheme.primary,
+                    )
+                } else {
+                    LinearProgressIndicator(
+                        modifier = Modifier.fillMaxWidth().height(6.dp),
+                        color = MaterialTheme.colorScheme.primary,
+                    )
+                }
+            }
         }
     }
 }

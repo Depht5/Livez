@@ -15,7 +15,11 @@ import android.view.View
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.foundation.Image
@@ -51,6 +55,7 @@ import androidx.compose.material3.TabRow
 import androidx.compose.material3.TabRowDefaults.tabIndicatorOffset
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -69,6 +74,12 @@ import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.StrokeJoin
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.graphics.vector.PathParser
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
@@ -333,16 +344,21 @@ fun LiveRoomScreen(
         }
     }
 
-    /* ---------- 调节提示条（亮度/音量；1.2s 自动消失，job 取消防叠加）---------- */
+    /* ---------- 调节提示胶囊（亮度/音量；1.2s 自动消失，job 取消防叠加）---------- */
 
     val coroutineScope = rememberCoroutineScope()
-    var adjustHint by remember { mutableStateOf<String?>(null) }
+    // adjustHint = 当前是否应显示（null 触发退场）；lastAdjustHint = 末次非空快照。
+    // 快照是必需的：AnimatedVisibility 退场期间（adjustHint 已置 null、内容仍在组合）必须
+    // 还有内容可画，否则 180ms 淡出的是一个**空胶囊**（这类动画最常见的错误）。
+    var adjustHint by remember { mutableStateOf<AdjustHintState?>(null) }
+    var lastAdjustHint by remember { mutableStateOf<AdjustHintState?>(null) }
     var adjustHintJob by remember { mutableStateOf<Job?>(null) }
-    fun showAdjustHint(message: String) {
+    fun showAdjustHint(state: AdjustHintState) {
         // 取消旧提示 job 防叠加（等价旧 mainHandler.removeCallbacks(hideJob)）
         adjustHintJob?.cancel()
         adjustHintJob = coroutineScope.launch {
-            adjustHint = message
+            lastAdjustHint = state
+            adjustHint = state
             delay(1200L)
             adjustHint = null
         }
@@ -728,7 +744,14 @@ fun LiveRoomScreen(
                     val attributes = activity.window.attributes
                     attributes.screenBrightness = seekB
                     activity.window.attributes = attributes
-                    showAdjustHint("亮度 ${(seekB * 100).toInt()}")
+                    // 亮度 = 左半屏（图标 + 进度条 + 百分比，对齐 design §2）
+                    showAdjustHint(
+                        AdjustHintState(
+                            isVolume = false,
+                            progress = seekB,
+                            label = "${(seekB * 100).toInt()}%",
+                        ),
+                    )
                 } else {
                     // 音量：绝对映射 + 5 级量化（对齐 Dart _convertVolume：(v/5).round()*5）
                     // + 去重；提示即时、真正 set 经 200ms 节流
@@ -740,7 +763,14 @@ fun LiveRoomScreen(
                     val level = ((seekV * 100) / 5f).roundToInt() * 5
                     if (level == volumeLastLevel) return@detectVerticalDragGestures
                     volumeLastLevel = level
-                    showAdjustHint("音量 $level")
+                    // 音量 = 右半屏；进度条取量化后的档位（与落到系统的档位一致）
+                    showAdjustHint(
+                        AdjustHintState(
+                            isVolume = true,
+                            progress = level / 100f,
+                            label = "$level%",
+                        ),
+                    )
                     volumeSetThrottle.invoke(level)
                 }
             }
@@ -935,11 +965,24 @@ fun LiveRoomScreen(
                 // mpv 首帧渲染（video-params 到达 → width 非空）后隐藏，视频淡入接棒。
                 // 注意必须放在 AndroidView 之前：SurfaceView 图层位于窗口之下，占位图
                 // 在其渲染前显示、渲染后必须移除，否则会永久盖住视频。
+                //
+                // 首帧平滑淡出（task 10-17-ui-animation-fluency-polish）：首帧到达时
+                // 180ms 淡出，alpha 归零后**从组合树移除**（`coverAlpha > 0.01f` 守卫 ——
+                // tween 结束时值精确落在 0f，故必然被移除；这条守卫就是上面「渲染后必须移除」
+                // 规范的落实，**不能**只把 alpha 留在 0 而让占位图常驻组合）。
                 val roomCover = detail?.cover.orEmpty()
-                if (roomCover.isNotEmpty() && playerState.width == null) {
+                val coverAlpha by animateFloatAsState(
+                    targetValue = if (playerState.width == null) 1f else 0f,
+                    animationSpec = tween(durationMillis = 180),
+                    label = "liveRoomCoverAlpha",
+                )
+                if (roomCover.isNotEmpty() && coverAlpha > 0.01f) {
                     NetImage(
                         url = roomCover,
-                        modifier = Modifier.fillMaxSize(),
+                        modifier = Modifier
+                            .fillMaxSize()
+                            // alpha 走 graphicsLayer（绘制期生效），不触发 NetImage 重组
+                            .graphicsLayer { alpha = coverAlpha },
                         contentScale = ContentScale.Crop,
                     )
                 }
@@ -968,25 +1011,33 @@ fun LiveRoomScreen(
                 }
             }
             // 直播间加载/刷新中：居中转圈（task player-ui-polish：刷新与加载使用同样的动画；
-            // detail 未就绪或刷新中且无加载错误 → 转圈；完成后即消失）
-            if ((detail == null || refreshing) && !loadError) {
+            // detail 未就绪或刷新中且无加载错误 → 转圈；完成后即消失）。
+            // 渐显渐隐（task 10-17-ui-animation-fluency-polish）：进 150ms / 出 200ms，
+            // 避免刷新完成瞬间转圈硬切消失。visible=false 时 AnimatedVisibility 不渲染该节点。
+            androidx.compose.animation.AnimatedVisibility(
+                visible = (detail == null || refreshing) && !loadError,
+                modifier = Modifier.fillMaxSize(),
+                enter = fadeIn(tween(150)),
+                exit = fadeOut(tween(200)),
+            ) {
                 Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     CircularProgressIndicator(color = Color.White)
                 }
             }
-            // 调节提示条（亮度/音量）：独立于控件显隐（task player-ui-polish）——
+            // 调节提示胶囊（亮度/音量）：独立于控件显隐（task player-ui-polish）——
             // 控制层 5s 自动隐藏后滑动调音量/亮度，提示仍显示；1.2s 自动消失由上方 job 管理。
-            val hint = adjustHint
-            if (hint != null) {
-                Text(
-                    text = hint,
-                    fontSize = 15.sp,
-                    color = Color.White,
-                    modifier = Modifier
-                        .align(Alignment.Center)
-                        .background(Color(0x66000000), shape = RoundedCornerShape(6.dp))
-                        .padding(horizontal = 16.dp, vertical = 8.dp),
-                )
+            // 动画（task 10-17-ui-animation-fluency-polish）：进 120ms 淡入 + 0.92 缩放，
+            // 出 180ms 淡出；退场期间用 lastAdjustHint 快照渲染内容（否则淡出的是空胶囊）。
+            androidx.compose.animation.AnimatedVisibility(
+                visible = adjustHint != null,
+                modifier = Modifier.align(Alignment.Center),
+                enter = fadeIn(tween(120)) + scaleIn(tween(120), initialScale = 0.92f),
+                exit = fadeOut(tween(180)),
+            ) {
+                val display = adjustHint ?: lastAdjustHint
+                if (display != null) {
+                    AdjustHintCapsule(display)
+                }
             }
             // 控制层覆盖（Compose 版 PlayerControlsOverlay；显隐/计时由本页面驱动）
             PlayerControlsOverlay(
@@ -1682,4 +1733,118 @@ private fun SettingsTabPlaceholder(onOpenSettings: () -> Unit) {
                 .padding(16.dp),
         )
     }
+}
+
+/* ---------- 手势调节胶囊（亮度/音量，task 10-17-ui-animation-fluency-polish）---------- */
+
+/**
+ * 亮度/音量手势调节的展示状态（对齐 design §2 的 `AdjustHintState`）。
+ *
+ * @param isVolume true = 音量（右半屏手势）/ false = 亮度（左半屏手势）—— 决定胶囊左侧图标；
+ * @param progress 0..1，直接喂给 `LinearProgressIndicator`（音量取 5 级量化后的档位，
+ *        与真正落到系统的档位一致）；
+ * @param label 右侧百分比文案（如 "60%"）。数值含义由图标区分，故不再带「亮度/音量」前缀。
+ */
+private data class AdjustHintState(
+    val isVolume: Boolean,
+    val progress: Float,
+    val label: String,
+)
+
+/**
+ * 手势调节胶囊（M3 圆角胶囊）：左图标 + 100dp 进度条 + 右侧百分比文字。
+ * 底色为深色半透明（不跟随主题）——提示叠加在视频区（恒黑底）上，两种主题下对比都足够。
+ */
+@Composable
+private fun AdjustHintCapsule(state: AdjustHintState) {
+    Row(
+        modifier = Modifier
+            .background(Color(0xCC000000), shape = RoundedCornerShape(24.dp))
+            .padding(horizontal = 16.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(
+            imageVector = if (state.isVolume) VolumeHintIcon else BrightnessHintIcon,
+            contentDescription = null,
+            tint = Color.White,
+            modifier = Modifier.size(20.dp),
+        )
+        Spacer(modifier = Modifier.size(10.dp))
+        LinearProgressIndicator(
+            // material3 1.3.2 的进度量是 lambda 形态 `progress: () -> Float`
+            //（`progress: Float` 那个重载 1.3.x 起已 @Deprecated，仅为二进制兼容保留）
+            progress = { state.progress },
+            modifier = Modifier.width(100.dp),
+            color = Color.White,
+            trackColor = Color(0x4DFFFFFF),
+        )
+        Spacer(modifier = Modifier.size(10.dp))
+        Text(text = state.label, fontSize = 13.sp, color = Color.White)
+    }
+}
+
+/**
+ * 音量图标（扬声器 + 两道声波）与亮度图标（太阳）—— 仅手势调节胶囊使用。
+ *
+ * **位置说明（有意为之的临时落点）**：本仓图标统一在 `ui/theme/CustomIcons.kt` 维护，
+ * 但本次任务的文件范围被限定为 `LiveRoomScreen.kt` + `PlayerControls.kt`，两个图标暂放本文件。
+ * 后续若有复用需求，应迁入 `CustomIcons` 并在此改用 `CustomIcons.VolumeUp / Brightness`
+ *（本仓无 material-icons 依赖，图标一律手写 SVG path 转换）。
+ * 绘制风格与 CustomIcons 一致：24 viewport、stroke 2f、圆头 + 圆角连接；
+ * 实际显示色由调用处 `Icon(tint = ...)` 决定，内建 stroke 色仅兜底。
+ */
+private val VolumeHintIcon: ImageVector by lazy {
+    ImageVector.Builder(
+        name = "VolumeHint",
+        defaultWidth = 24.dp,
+        defaultHeight = 24.dp,
+        viewportWidth = 24f,
+        viewportHeight = 24f,
+    ).apply {
+        addPath(
+            pathData = PathParser().parsePathString(
+                """
+                M4 9.5 L7.5 9.5 L12 6 L12 18 L7.5 14.5 L4 14.5 Z
+                M15.5 9.5 A3.5 3.5 0 0 1 15.5 14.5
+                M18.5 7 A7 7 0 0 1 18.5 17
+                """.trimIndent(),
+            ).toNodes(),
+            fill = null,
+            stroke = SolidColor(Color.White),
+            strokeLineWidth = 2f,
+            strokeLineCap = StrokeCap.Round,
+            strokeLineJoin = StrokeJoin.Round,
+        )
+    }.build()
+}
+
+private val BrightnessHintIcon: ImageVector by lazy {
+    ImageVector.Builder(
+        name = "BrightnessHint",
+        defaultWidth = 24.dp,
+        defaultHeight = 24.dp,
+        viewportWidth = 24f,
+        viewportHeight = 24f,
+    ).apply {
+        addPath(
+            pathData = PathParser().parsePathString(
+                """
+                M8 12 A4 4 0 1 1 16 12 A4 4 0 1 1 8 12
+                M18 12 L20 12
+                M17.66 6.34 L16.24 7.76
+                M12 4 L12 6
+                M6.34 6.34 L7.76 7.76
+                M4 12 L6 12
+                M6.34 17.66 L7.76 16.24
+                M12 18 L12 20
+                M17.66 17.66 L16.24 16.24
+                """.trimIndent(),
+            ).toNodes(),
+            fill = null,
+            stroke = SolidColor(Color.White),
+            strokeLineWidth = 2f,
+            strokeLineCap = StrokeCap.Round,
+            strokeLineJoin = StrokeJoin.Round,
+        )
+    }.build()
 }

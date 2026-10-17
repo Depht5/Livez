@@ -4,6 +4,10 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -73,10 +77,15 @@ import java.time.format.DateTimeFormatter
  * 实现；本组件只按参数渲染。
  *
  * **直播时长（1Hz）订阅下沉**（task 10-17-ui-power-and-recomposition-governance）：
- * 时长 Flow 改由本组件在 `visible == true` 时自行 `collectAsStateWithLifecycle()`——
- * 上方 `if (!visible) return` 使控制层隐藏期间本组件**根本不进入组合**，每秒一次的
- * 时长刷新因此不触发任何重组（此前订阅在 LiveRoomScreen 根部，覆盖 95% 以上观看时长
- * 的隐藏期也每秒重组整页）。宿主只传 Flow 本身（StateFlow 属性读取不产生订阅）。
+ * 时长 Flow 改由本组件在**内容参与组合期间**自行 `collectAsStateWithLifecycle()`——
+ * 控制层隐藏时内容不参与组合（含退场动画结束后的移出），每秒一次的时长刷新因此不触发
+ * 任何重组（此前订阅在 LiveRoomScreen 根部，覆盖 95% 以上观看时长的隐藏期也每秒重组整页）。
+ * 宿主只传 Flow 本身（StateFlow 属性读取不产生订阅）。
+ *
+ * **显隐动画**（task 10-17-ui-animation-fluency-polish）：`if (!visible) return` 硬截断改为
+ * `AnimatedVisibility(180ms fadeIn/fadeOut)`；**内容是否参与组合仍严格由 visible 决定**
+ *（退场动画结束即移出组合），这正是上面「时长订阅下沉」与顶栏电量 receiver 不泄漏的依据，
+ * 改动画实现时不得破坏该语义（详见函数体内注释）。
  */
 @Composable
 fun PlayerControlsOverlay(
@@ -100,159 +109,183 @@ fun PlayerControlsOverlay(
     onFullScreenClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    // 等价旧 View 的 GONE：不参与组合，按钮状态随下次显示时的参数重建
-    if (!visible) return
+    // ---- 显隐动画（task 10-17-ui-animation-fluency-polish）----
+    // 原此处是 `if (!visible) return` 硬截断（等价旧 View 的 GONE：隐藏即不参与组合），
+    // 现改为 180ms 淡入淡出，包裹顶栏 / 底栏全部内容。
+    //
+    // ⚠ 生命周期依赖（后人改前必读）：顶栏的 30s 时钟 LaunchedEffect 与电量
+    // BroadcastReceiver 的 DisposableEffect 依赖「控制层隐藏 ⇒ 内容离开组合 ⇒ effect 取消 /
+    // receiver 解除注册」这一语义。AnimatedVisibility 恰好满足：退场动画结束后其 content
+    // 会被移出组合树并 dispose（animation 1.8.2 `AnimatedVisibility.kt` 的 KDoc
+    // "Once the exit transition is finished, the content composable will be removed from the
+    // tree, and disposed"；实现即 `AnimatedEnterExitImpl` 里包裹 content 的
+    // `if (!childTransition.exitFinished || !shouldDisposeAfterExit)` 守卫，
+    // shouldDisposeBlock = { cur, target -> cur == target && target == PostExit }）。
+    // 代价只有「隐藏瞬间 receiver 多注册 180ms」（= 退场动画时长），可接受。
+    // ⚠ **绝不可**改成「内容常驻组合 + 外层 alpha/显隐控制」——那会让 receiver 永久注册、
+    // 后台持续监听 ACTION_BATTERY_CHANGED（静默泄漏，编译期不会有任何提示）。
+    //
+    // 隐藏期零重组同样依赖这条语义：`durationFlow`（1Hz）的订阅放在**内容内部** ——
+    // 控制层隐藏（退场结束即移出组合）时不收集、不重组；位置不可上移到 AnimatedVisibility 之前
+    //（那是 task 10-17 功耗治理的既有结论）。
+    AnimatedVisibility(
+        visible = visible,
+        modifier = modifier.fillMaxSize(),
+        enter = fadeIn(tween(180)),
+        exit = fadeOut(tween(180)),
+    ) {
+        val durationText by durationFlow.collectAsStateWithLifecycle()
 
-    // 时长订阅必须在早返回之后：控制层隐藏时本组件不进入组合，也就不会收集该 Flow
-    //（首帧即取到当前值，无需 host 侧再做初值回填）
-    val durationText by durationFlow.collectAsStateWithLifecycle()
+        // 宿主传入的 modifier 只作用于外层 AnimatedVisibility（Compose 惯例：外部 modifier
+        // 落在组件最外节点），内层铺满容器固定用 Modifier.fillMaxSize()，避免重复叠加。
+        Box(modifier = Modifier.fillMaxSize()) {
 
-    Box(modifier = modifier.fillMaxSize()) {
-
-        /* ---- 顶栏（仅全屏显示，对应旧 topBar + updateFullScreen）---- */
-        if (fullScreen) {
-            // 时间/电量（task fullscreen-status-follow-style-background-play）：
-            // 顶部右侧显示「时间 电量」，控制层可见期间每 30s 刷新时间、注册
-            // ACTION_BATTERY_CHANGED 广播随电量变化更新；控制层隐藏即停止（组件
-            // visible=false 不参与组合，effect 随之取消）。
-            val context = LocalContext.current
-            var timeText by remember { mutableStateOf(currentClockText()) }
-            var batteryPercent by remember { mutableIntStateOf(readBatteryPercent(context, null)) }
-            LaunchedEffect(Unit) {
-                while (true) {
-                    delay(30_000)
-                    timeText = currentClockText()
-                }
-            }
-            DisposableEffect(context) {
-                val receiver = object : BroadcastReceiver() {
-                    override fun onReceive(receiveContext: Context?, intent: Intent?) {
-                        if (intent != null) batteryPercent = readBatteryPercent(receiveContext ?: context, intent)
+            /* ---- 顶栏（仅全屏显示，对应旧 topBar + updateFullScreen）---- */
+            if (fullScreen) {
+                // 时间/电量（task fullscreen-status-follow-style-background-play）：
+                // 顶部右侧显示「时间 电量」，控制层可见期间每 30s 刷新时间、注册
+                // ACTION_BATTERY_CHANGED 广播随电量变化更新；控制层隐藏后停止——隐藏瞬间
+                // 内容仍随退场动画多组合 180ms（receiver 多注册 180ms），退场结束即移出组合、
+                // onDispose 解除注册（语义依据见函数开头「显隐动画」注释，勿改成常驻组合）。
+                val context = LocalContext.current
+                var timeText by remember { mutableStateOf(currentClockText()) }
+                var batteryPercent by remember { mutableIntStateOf(readBatteryPercent(context, null)) }
+                LaunchedEffect(Unit) {
+                    while (true) {
+                        delay(30_000)
+                        timeText = currentClockText()
                     }
                 }
-                ContextCompat.registerReceiver(
-                    context,
-                    receiver,
-                    IntentFilter(Intent.ACTION_BATTERY_CHANGED),
-                    ContextCompat.RECEIVER_NOT_EXPORTED,
-                )
-                onDispose { context.unregisterReceiver(receiver) }
+                DisposableEffect(context) {
+                    val receiver = object : BroadcastReceiver() {
+                        override fun onReceive(receiveContext: Context?, intent: Intent?) {
+                            if (intent != null) batteryPercent = readBatteryPercent(receiveContext ?: context, intent)
+                        }
+                    }
+                    ContextCompat.registerReceiver(
+                        context,
+                        receiver,
+                        IntentFilter(Intent.ACTION_BATTERY_CHANGED),
+                        ContextCompat.RECEIVER_NOT_EXPORTED,
+                    )
+                    onDispose { context.unregisterReceiver(receiver) }
+                }
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(
+                            Brush.verticalGradient(
+                                listOf(Color(0x99000000), Color.Transparent),
+                            ),
+                        )
+                        .padding(horizontal = 12.dp, vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    OverlayIconButton(icon = CustomIcons.Back, onClick = onBackClick)
+                    Text(
+                        text = title,
+                        fontSize = 16.sp,
+                        fontWeight = FontWeight.Medium,
+                        color = Color.White,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f).padding(horizontal = 4.dp),
+                    )
+                    Text(
+                        text = timeText,
+                        fontSize = 13.sp,
+                        color = Color.White,
+                        modifier = Modifier.padding(end = 10.dp),
+                    )
+                    Text(
+                        text = "$batteryPercent%",
+                        fontSize = 13.sp,
+                        color = Color.White,
+                        modifier = Modifier.padding(end = 6.dp),
+                    )
+                    OverlayIconButton(icon = CustomIcons.Menu, onClick = onMenuClick)
+                }
             }
+
+            /* ---- 底栏（渐隐过渡到黑色，对齐旧 bottomBar 布局顺序）---- */
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
+                    .align(Alignment.BottomCenter)
                     .background(
                         Brush.verticalGradient(
-                            listOf(Color(0x99000000), Color.Transparent),
+                            listOf(Color.Transparent, Color(0xCC000000)),
                         ),
                     )
-                    .padding(horizontal = 12.dp, vertical = 10.dp),
+                    .padding(horizontal = 12.dp, vertical = 8.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                OverlayIconButton(icon = CustomIcons.Back, onClick = onBackClick)
-                Text(
-                    text = title,
-                    fontSize = 16.sp,
-                    fontWeight = FontWeight.Medium,
-                    color = Color.White,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f).padding(horizontal = 4.dp),
-                )
-                Text(
-                    text = timeText,
-                    fontSize = 13.sp,
-                    color = Color.White,
-                    modifier = Modifier.padding(end = 10.dp),
-                )
-                Text(
-                    text = "$batteryPercent%",
-                    fontSize = 13.sp,
-                    color = Color.White,
-                    modifier = Modifier.padding(end = 6.dp),
-                )
-                OverlayIconButton(icon = CustomIcons.Menu, onClick = onMenuClick)
-            }
-        }
-
-        /* ---- 底栏（渐隐过渡到黑色，对齐旧 bottomBar 布局顺序）---- */
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .align(Alignment.BottomCenter)
-                .background(
-                    Brush.verticalGradient(
-                        listOf(Color.Transparent, Color(0xCC000000)),
-                    ),
-                )
-                .padding(horizontal = 12.dp, vertical = 8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            // 刷新（refreshRoom）：动画由宿主在视频区显示「与加载相同的居中转圈」，
-            // 控制层按钮保持常显（task player-ui-polish）；竖屏时收窄三键间距。
-            val compactH = if (!fullScreen) 6.dp else 12.dp
-            OverlayIconButton(
-                icon = CustomIcons.Refresh,
-                onClick = onRefreshClick,
-                paddingH = compactH,
-            )
-            // 播放/暂停：仅全屏且开播时显示（refreshButtons 规则）
-            if (fullScreen && liveStatus) {
+                // 刷新（refreshRoom）：动画由宿主在视频区显示「与加载相同的居中转圈」，
+                // 控制层按钮保持常显（task player-ui-polish）；竖屏时收窄三键间距。
+                val compactH = if (!fullScreen) 6.dp else 12.dp
                 OverlayIconButton(
-                    icon = if (playing) CustomIcons.Pause else CustomIcons.Play,
-                    size = 22.dp,
-                    onClick = onPlayPauseClick,
+                    icon = CustomIcons.Refresh,
+                    onClick = onRefreshClick,
+                    paddingH = compactH,
                 )
-            }
-            // 弹幕开关（选中色 #FFD857）
-            OverlayIconButton(
-                icon = if (danmakuEnabled) CustomIcons.DanmakuOn else CustomIcons.DanmakuOff,
-                tint = if (danmakuEnabled) Color(0xFFFFD857) else Color.White,
-                size = 22.dp,
-                onClick = onDanmakuToggle,
-                paddingH = compactH,
-            )
-            // 弹幕设置（对齐 Dart 弹幕开关旁的设置图标按钮）。
-            // 视觉间距补偿：该图标墨迹在 24 viewport 内偏右（左留白 4.5 / 右 2，其余图标
-            // 约 3/3 对称），墨迹间距比相邻按钮对大约 2dp——paddingH 减 2dp 拉平
-            // 「刷新↔弹幕开关」与「弹幕开关↔弹幕设置」的观感间隔（task player-icons-follow-ux）。
-            OverlayIconButton(
-                icon = CustomIcons.DanmuSetting,
-                size = 22.dp,
-                onClick = onDanmakuSettingsClick,
-                paddingH = compactH - 2.dp,
-            )
-            // 直播时长
-            Text(
-                text = durationText,
-                fontSize = 13.sp,
-                color = Color.White,
-                modifier = Modifier.padding(start = 8.dp),
-            )
-            Spacer(modifier = Modifier.weight(1f))
-            // 清晰度入口（空名回退占位文案；回滚为原小号按钮）
-            OverlayButton(
-                text = qualityName.ifEmpty { "清晰度" },
-                onClick = onQualityClick,
-                fontSize = 13.sp,
-                paddingH = 8.dp,
-                paddingV = 6.dp,
-            )
-            // 线路入口：仅全屏显示（refreshButtons 规则；回滚为原小号按钮）
-            if (fullScreen) {
+                // 播放/暂停：仅全屏且开播时显示（refreshButtons 规则）
+                if (fullScreen && liveStatus) {
+                    OverlayIconButton(
+                        icon = if (playing) CustomIcons.Pause else CustomIcons.Play,
+                        size = 22.dp,
+                        onClick = onPlayPauseClick,
+                    )
+                }
+                // 弹幕开关（选中色 #FFD857）
+                OverlayIconButton(
+                    icon = if (danmakuEnabled) CustomIcons.DanmakuOn else CustomIcons.DanmakuOff,
+                    tint = if (danmakuEnabled) Color(0xFFFFD857) else Color.White,
+                    size = 22.dp,
+                    onClick = onDanmakuToggle,
+                    paddingH = compactH,
+                )
+                // 弹幕设置（对齐 Dart 弹幕开关旁的设置图标按钮）。
+                // 视觉间距补偿：该图标墨迹在 24 viewport 内偏右（左留白 4.5 / 右 2，其余图标
+                // 约 3/3 对称），墨迹间距比相邻按钮对大约 2dp——paddingH 减 2dp 拉平
+                // 「刷新↔弹幕开关」与「弹幕开关↔弹幕设置」的观感间隔（task player-icons-follow-ux）。
+                OverlayIconButton(
+                    icon = CustomIcons.DanmuSetting,
+                    size = 22.dp,
+                    onClick = onDanmakuSettingsClick,
+                    paddingH = compactH - 2.dp,
+                )
+                // 直播时长
+                Text(
+                    text = durationText,
+                    fontSize = 13.sp,
+                    color = Color.White,
+                    modifier = Modifier.padding(start = 8.dp),
+                )
+                Spacer(modifier = Modifier.weight(1f))
+                // 清晰度入口（空名回退占位文案；回滚为原小号按钮）
                 OverlayButton(
-                    text = lineName.ifEmpty { "线路" },
-                    onClick = onLineClick,
+                    text = qualityName.ifEmpty { "清晰度" },
+                    onClick = onQualityClick,
                     fontSize = 13.sp,
                     paddingH = 8.dp,
                     paddingV = 6.dp,
                 )
+                // 线路入口：仅全屏显示（refreshButtons 规则；回滚为原小号按钮）
+                if (fullScreen) {
+                    OverlayButton(
+                        text = lineName.ifEmpty { "线路" },
+                        onClick = onLineClick,
+                        fontSize = 13.sp,
+                        paddingH = 8.dp,
+                        paddingV = 6.dp,
+                    )
+                }
+                // 全屏切换（图标随状态切换：窗口态 Fullscreen / 全屏态 ExitFullscreen；点击由宿主处理）
+                OverlayIconButton(
+                    icon = if (fullScreen) CustomIcons.ExitFullscreen else CustomIcons.Fullscreen,
+                    onClick = onFullScreenClick,
+                )
             }
-            // 全屏切换（图标随状态切换：窗口态 Fullscreen / 全屏态 ExitFullscreen；点击由宿主处理）
-            OverlayIconButton(
-                icon = if (fullScreen) CustomIcons.ExitFullscreen else CustomIcons.Fullscreen,
-                onClick = onFullScreenClick,
-            )
         }
     }
 }

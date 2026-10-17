@@ -1,6 +1,7 @@
 package com.kotlin_livez.app.ui.components
 
 import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -20,9 +21,10 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.grid.LazyGridState
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
+import androidx.compose.foundation.text.BasicText
+import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ScrollableTabRow
-import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -39,11 +41,13 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ColorProducer
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.layout
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.Dp
@@ -68,14 +72,18 @@ import kotlinx.coroutines.launch
  * 二次收敛：底栏「重按当前 Tab → 回顶或刷新」的选中态与监听同样从两个页面收敛到这里
  * （原先是两份逐行同构的 `selectedSiteIndex` / `pagerState` / `DisposableEffect` 样板）。
  *
- * 与改动前一致的部分：Tab 内容（logo 24dp + 8dp 间距 + 16sp 站名、选中色手动切换、
- * 点击无涟漪）、指示条逐帧跟随插值、`beyondViewportPageCount` 默认 0（静止只组合当前页）、
+ * 与改动前一致的部分：Tab 内容（logo 24dp + 8dp 间距 + 16sp 站名、点击无涟漪）、
+ * 指示条逐帧跟随插值、`beyondViewportPageCount` 默认 0（静止只组合当前页）、
  * 相邻站点点击与滑动切页走 `animateScrollToPage`。
  *
  * 本次新增：① 标签组装得下时水平居中（见 [rememberCenteredEdgePadding]）；
  * ② 点击相隔 ≥2 个站点的 Tab 时播放「两页过渡」，只组合当前页与目标页（见 [SitePagerTabs]）；
  * ③ 两页过渡用站点级 `movableContentOf` 把目标页**节点树搬移**进 Pager —— 不再是
- * 「覆盖层组合一份、落位时 Pager 再组合一份」（后者每跳一次就多组合一整页，是切换卡顿的主要来源）。
+ * 「覆盖层组合一份、落位时 Pager 再组合一份」（后者每跳一次就多组合一整页，是切换卡顿的主要来源）；
+ * ④ 站名颜色改为**绘制期**连续插值（`BasicText` + `ColorProducer`，见 [SiteTabRow]），
+ * 相邻站点点击的 `animateScrollToPage` 显式传
+ * `tween(PAGE_JUMP_DURATION_MS, FastOutSlowInEasing)` —— 站名与指示条同步跟手，
+ * 且滑页/跨页期间不产生重组。
  */
 
 /* ---------- 尺寸常量（来源：material3 ScrollableTabRow 实现与既有 Tab 样式）---------- */
@@ -148,8 +156,22 @@ private class PagerJump(
  * 实现「页面滑多少、指示条动多少」。该 lambda 在**布局阶段**被调用（见下方 `Modifier.layout`），
  * 读状态只触发重排，不会让调用方每帧重组。
  *
+ * 站名颜色同样逐帧连续：原来按 `if (selected) 选中色 else 未选中色` 离散取色 —— `selectedIndex`
+ * 变更瞬间跳变，跨页过渡期间还会与指示条位置不一致。现改用 [BasicText] 的 `color: ColorProducer`：
+ * 该 lambda **只在绘制阶段**被调用（foundation `TextStringSimpleNode.draw()` 内
+ * `overrideColor?.invoke()`），每帧按 [indicatorPosition] 在「未选中色 → 选中色」之间 `lerp`
+ * （相邻页滑动时两个站名交叉淡化），滑页/跳页动画期间每帧只重绘、**0 次重组**。
+ * 注意：指示条本体仍在**布局**阶段读同一位置（下方 `Modifier.layout`），布局每帧失效重排是既有行为，
+ * 本条只改取色时机，不引入任何 `graphicsLayer` 图层（PagerJump 铁律 5）。
+ *
+ * 为何不用 material3 `Text`：1.3.2 的 `Text` 只有 `color: Color`（无 `ColorProducer` 重载），
+ * 该能力在 foundation 的 [BasicText] 上。`BasicText` 不读 `LocalTextStyle`（`style` 默认
+ * `TextStyle.Default`），故必须把主题下发的 bodyLarge 显式合并进 `style`，
+ * 否则字号/字重/行高会与原来的 `Text(text, fontSize = 16.sp)` 不一致。
+ *
  * @param sites 站点列表（顺序即 Tab 顺序）
- * @param selectedIndex 当前选中站点（驱动站名选中色）
+ * @param selectedIndex 当前选中站点（驱动 [ScrollableTabRow] 的选中项与滚动定位；站名颜色
+ *   已改为绘制期插值，不再依赖它的离散比较）
  * @param indicatorPosition 连续页位置（可为小数；跨多格的过渡进度也由它表达）
  * @param indicatorColor 指示条与选中站名颜色（首页 primary / 分类页 secondary）
  * @param onSelect 点击 Tab 回调（参数为站点下标）
@@ -166,6 +188,13 @@ fun SiteTabRow(
     modifier: Modifier = Modifier,
     trailing: (@Composable RowScope.() -> Unit)? = null,
 ) {
+    // 未选中站名颜色（绘制期插值的起点）；选中色由调用方以 indicatorColor 传入
+    val unselectedColor = MaterialTheme.colorScheme.onSurfaceVariant
+    // 站名排版：与 material3 `Text(text, fontSize = 16.sp)` 等价的样式 —— 基础来自主题下发的
+    // LocalTextStyle（MaterialTheme 里 `ProvideTextStyle(typography.bodyLarge)`），仅覆盖字号。
+    // BasicText 不读 LocalTextStyle，必须显式传入，否则字重/行高/字距会退回 TextStyle.Default。
+    val tabTextStyle = LocalTextStyle.current.merge(TextStyle(fontSize = 16.sp))
+
     Row(
         modifier = modifier
             .fillMaxWidth()
@@ -174,7 +203,7 @@ fun SiteTabRow(
         // 标签滚动区占剩余宽度（居中在「可用区」内进行，不含行尾固定槽，
         // 语义对齐 Dart AppBar 的 title 区不包含 actions）
         BoxWithConstraints(modifier = Modifier.weight(1f)) {
-            val edgePadding = rememberCenteredEdgePadding(sites, maxWidth)
+            val edgePadding = rememberCenteredEdgePadding(sites, maxWidth, tabTextStyle)
             ScrollableTabRow(
                 selectedTabIndex = selectedIndex,
                 modifier = Modifier.fillMaxWidth(),
@@ -236,7 +265,6 @@ fun SiteTabRow(
                 divider = { },
             ) {
                 sites.forEachIndexed { index, site ->
-                    val selected = index == selectedIndex
                     Row(
                         modifier = Modifier
                             .clickable { onSelect(index) }
@@ -249,14 +277,33 @@ fun SiteTabRow(
                             modifier = Modifier.size(TabLogoSize),
                         )
                         Spacer(modifier = Modifier.width(TabLogoGap))
-                        Text(
+                        BasicText(
                             text = site.name,
-                            fontSize = 16.sp,
-                            // 手动切色：custom tab 内容不受 Tab 配色控制（对齐 setTabTextColors）
-                            color = if (selected) {
-                                indicatorColor
-                            } else {
-                                MaterialTheme.colorScheme.onSurfaceVariant
+                            style = tabTextStyle,
+                            // 绘制期取色（ColorProducer 只在 draw 中调用）：
+                            // 连续页位置离本 tab 越近越接近选中色，相邻页交叉淡化。
+                            // 滑页/跨页跳转期间本组合不重组（读状态发生在 draw 阶段，
+                            // 只失效绘制），因此不会像原来那样在 selectedIndex 变更瞬间跳变。
+                            // 不用 material3 Text：其 1.3.2 版本无 color: ColorProducer 重载。
+                            color = ColorProducer {
+                                val fraction =
+                                    (1f - abs(indicatorPosition() - index)).coerceIn(0f, 1f)
+                                when {
+                                    // 端点直接返回原色：ui-graphics 的 Color lerp 在 Oklab 空间插值
+                                    // （`Color.kt:518`，无 t=0/1 快路径），往返转换可能让 8bit 通道
+                                    // 差 ±1 —— 静止态（fraction 恰为 0/1）必须与改动前逐像素一致，
+                                    // 故两个端点短路返回，只有过渡中才做插值。
+                                    fraction >= 1f -> indicatorColor
+                                    fraction <= 0f -> unselectedColor
+                                    // 全限定调用：本文件已 import androidx.compose.ui.util.lerp
+                                    // （Float 插值），颜色插值在同名的 androidx.compose.ui.graphics 下，
+                                    // 避免导入冲突
+                                    else -> androidx.compose.ui.graphics.lerp(
+                                        unselectedColor,
+                                        indicatorColor,
+                                        fraction,
+                                    )
+                                }
                             },
                         )
                     }
@@ -453,7 +500,16 @@ fun SitePagerTabs(
                 animateScrollJob?.cancel()
                 selectedSiteIndex = index
                 animateScrollJob = coroutineScope.launch {
-                    pagerState.animateScrollToPage(index)
+                    // 显式曲线：与跨页过渡（下方 PagerJump）及全局路由转场同为
+                    // tween(280, FastOutSlowInEasing)（默认是 spring(StiffnessMediumLow)，
+                    // 时长/曲线与指示条、站名插值的节奏不一致）
+                    pagerState.animateScrollToPage(
+                        page = index,
+                        animationSpec = tween(
+                            durationMillis = PAGE_JUMP_DURATION_MS,
+                            easing = FastOutSlowInEasing,
+                        ),
+                    )
                 }
             }
             // 跨多页：两页过渡（只组合当前页与目标页）
@@ -462,7 +518,9 @@ fun SitePagerTabs(
                 // 叠加位移；先取消协程，起跳前再由 LaunchedEffect 把 Pager 定格到源页
                 animateScrollJob?.cancel()
                 jump = PagerJump(source = current, target = index)
-                // Tab 选中色即时反馈（对齐 M3 语义：颜色即切、指示条动画跟随）
+                // 逻辑选中态即时置位（供底栏「重按」与失步自愈读取）。
+                // 站名颜色与指示条不再「即切」：两者都由连续页位置插值跟随，
+                // 过渡期 pos 从源页连续走到目标页，站名按离 pos 的距离交叉淡化。
                 selectedSiteIndex = index
             }
         }
@@ -584,9 +642,10 @@ fun SitePagerTabs(
  * **装得下也不会居中**，居中只能由调用方给出「能让内容居中的 edgePadding」。
  *
  * 总宽 = Σ max(TabMinWidth, logo + 间距 + 文字宽 + 左右内边距)。
- * 文字度量必须与真实 `Text` 同款 style：Tab 内 `Text` 只覆盖了 `fontSize`，
- * 其余属性（含 `letterSpacing`）来自 MaterialTheme 下发的 `LocalTextStyle`（= bodyLarge），
- * 直接量默认 style 会偏窄 → 居中偏移。
+ * 文字度量必须与真实站名同款 style：站名 `BasicText` 只覆盖了 `fontSize`，其余属性
+ * （含 `letterSpacing`）来自 MaterialTheme 下发的 `LocalTextStyle`（= bodyLarge），
+ * 直接量默认 style 会偏窄 → 居中偏移。故直接由调用方传入**渲染时用的同一个**
+ * `tabTextStyle`（单一事实源，避免两处各写一份样式后漂移）。
  *
  * 全程按**整数像素**求和与求商（而不是 Dp 小数）：Dp 的小数部分在下游会被各自取整，
  * 临界宽度下「Σ 各 tab 取整后宽度」会略大于容器可用宽 —— 表现为标签组明明放得下却多出
@@ -595,10 +654,13 @@ fun SitePagerTabs(
  * 装不下时回落 [TabEdgePadding]（由 `maxOf` 保证下限）：维持改动前的「左对齐 + 可横向滚动」。
  */
 @Composable
-private fun rememberCenteredEdgePadding(sites: List<Site>, available: Dp): Dp {
+private fun rememberCenteredEdgePadding(
+    sites: List<Site>,
+    available: Dp,
+    textStyle: TextStyle,
+): Dp {
     val measurer = rememberTextMeasurer()
     val density = LocalDensity.current
-    val textStyle = MaterialTheme.typography.bodyLarge.copy(fontSize = 16.sp)
     val totalWidthPx = remember(sites, textStyle, density, measurer) {
         with(density) {
             val minTabWidthPx = TabMinWidth.roundToPx()

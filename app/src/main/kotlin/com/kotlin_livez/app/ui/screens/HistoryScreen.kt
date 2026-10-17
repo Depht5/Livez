@@ -80,21 +80,34 @@ fun HistoryScreen(modifier: Modifier = Modifier) {
         LazyColumn(
             modifier = Modifier.fillMaxSize().background(MaterialTheme.colorScheme.surface),
         ) {
-            itemsIndexed(list) { index, item ->
-                HistoryItemRow(
-                    item = item,
-                    onClick = {
-                        val site = Sites.allSites[item.siteId]
-                        if (site != null) {
-                            Router.openLiveRoom(site, item.roomId)
-                        } else {
-                            Router.toast("无法打开历史记录：站点不存在")
-                        }
-                    },
-                    onLongClick = { pendingDelete = item },
-                )
-                if (index < list.lastIndex) {
-                    HorizontalDivider()
+            itemsIndexed(
+                items = list,
+                // 稳定唯一 key：History.id 即 Room 表主键（`HistoryEntity` 的 @PrimaryKey），
+                // 语义为 "siteId_roomId"（见 `DbModels.History` / `DBEntities.HistoryEntity`），
+                // 写入方 LiveRoomController.addHistory 与导入方 BulkDataImportService 都保证
+                // roomId 非空后再落库 → 该 List 内 id 必不重复。
+                key = { _, item -> item.id },
+            ) { index, item ->
+                // item 根包一层 Column 以把重排动画作用在**整个条目**（行 + 其下分隔线）上：
+                // 直接给行挂 animateItem 而让分隔线留在槽内，长按删除某条后行与线会分离动画。
+                // 本页在 **SitePagerTabs 页外**，故允许加 animateItem（页内网格不加，见
+                // ui-compose.md 条目 27 的 C2 结论）。
+                Column(modifier = Modifier.fillMaxWidth().animateItem()) {
+                    HistoryItemRow(
+                        item = item,
+                        onClick = {
+                            val site = Sites.allSites[item.siteId]
+                            if (site != null) {
+                                Router.openLiveRoom(site, item.roomId)
+                            } else {
+                                Router.toast("无法打开历史记录：站点不存在")
+                            }
+                        },
+                        onLongClick = { pendingDelete = item },
+                    )
+                    if (index < list.lastIndex) {
+                        HorizontalDivider()
+                    }
                 }
             }
         }

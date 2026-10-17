@@ -17,7 +17,7 @@ import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyGridState
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
-import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.grid.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
@@ -116,16 +116,47 @@ fun CategoryScreen(
 
 /**
  * 分类网格行：主分类标题跨全宽、子分类卡片、「显示全部」卡片。
- * 三个行类型均为 `data class`（值等值）：它们不持有 lambda、也未被当作 key 使用
- * （`items` 未传 `key`，位置即身份），故改值等值对现有渲染无行为影响——目的是后续需要
- * 按值比较、或要拿行对象当稳定 key 时不必再改类型。
+ * 三个行类型均为 `data class`（值等值）：它们不持有 lambda，值等值对渲染无行为影响。
  * 注：值等值本身不等于「可跳过重组」——行参数 `AppLiveCategory` 含 MutableStateFlow
- * 属性（非稳定类型），`CategoryRow` 也随之不是稳定类型。
+ * 属性（非稳定类型），`CategoryRow` 也随之不是稳定类型，故**不拿行对象当 key**，
+ * 而是由 `CategorySiteGrid` 从行内容派生显式字符串 key（见下方 `rowKey`）。
  */
 private sealed class CategoryRow {
     data class Header(val cat: AppLiveCategory) : CategoryRow()
     data class Sub(val cat: AppLiveCategory, val sub: LiveSubCategory) : CategoryRow()
     data class ShowMore(val cat: AppLiveCategory) : CategoryRow()
+}
+
+/**
+ * 分类行的「基础」稳定字符串 key（去重兜底在 [CategorySiteGrid] 内统一施加，见那里的
+ * `rowKeys`）。
+ *
+ * ① **为什么 key 不能用行对象本身**：`CategoryRow` 的每个变体都装着 `AppLiveCategory`
+ * （其 `showAll` 是 `MutableStateFlow`——非稳定类型、equals 按引用），`data class` 的值等值
+ * 因此对 `AppLiveCategory` 退化为引用等值；拿行对象当 key，同一逻辑行在数据重建后会得到
+ * 「新身份」，复用/滚动锚定全部失效。故一律用**显式字符串**。
+ *
+ * ② **为什么不能省略去重兜底**：`LazyVerticalGrid` 遇重复 key 会**直接抛运行时异常**
+ * （compose-ui `SubcomposeLayout.kt:481`：Key "..." was already used，`requirePrecondition`）。
+ * 在本次改动（task 10-17-ui-animation-fluency-polish 加 key）之前，
+ * 这个列表**没有** key、位置即身份，重复 id 只会让卡片重复渲染（可接受的瑕疵）；
+ * 加了 key 之后同一输入会升级成**分类页崩溃**。分类页是主路径，故必须兜底。
+ *
+ * 基础 key 的唯一性论证（同一网格内）：
+ * - 三个前缀 `header:` / `sub:` / `more:` 互斥，跨行类型不可能相撞；
+ * - `rows` 由 `categories.flatMap` 生成，每个 `cat` 在网格内只出现一次
+ *   （`categories` 为站点分类树根列表，同站点内 `LiveCategory.id` 唯一）
+ *   ⇒ `header:${cat.id}` / `more:${cat.id}` 唯一；
+ * - `sub:` 用 `${cat.id}:${sub.id}` 限定作用域：只需**同一 cat 的 children 内 `sub.id` 唯一**
+ *   （跨 cat 复用同一个 sub.id 也不会撞，因为带了 cat.id）。各站点的 id 来源：B 站 area `id`、
+ *   斗鱼 `cate1Id`/`cate2Id`、虎牙 `gid`、抖音 `"${id_str},${type}"`——都是 API 标识符，
+ *   正常唯一；但站点实现普遍用 `.str()`/`.str().orEmpty()`，**空串是可能的**（缺字段即空），
+ *   那就会退化为重复 → 由 `rowKeys` 的 `#序号` 兜住。
+ */
+private fun CategoryRow.rowKey(): String = when (this) {
+    is CategoryRow.Header -> "header:${cat.id}"
+    is CategoryRow.Sub -> "sub:${cat.id}:${sub.id}"
+    is CategoryRow.ShowMore -> "more:${cat.id}"
 }
 
 /**
@@ -184,6 +215,24 @@ private fun CategorySiteGrid(
         }
     }
 
+    // 网格 item 的最终 key 列表（与 `rows` 下标一一对应）。
+    // 与 `PagedRoomGridCore.itemKeys` **同一套口径**（便于后人理解）：基础 key 取自
+    // `CategoryRow.rowKey()`，对同一基础 key 的**第 2 次及以后出现**追加 `#序号`——
+    // 因为 `LazyVerticalGrid` 遇重复 key 抛运行时异常，而加 key 之前该列表是「位置即身份」、
+    // 不存在这个崩溃面（详见 `rowKey` 的 ② 段）。正常（无重复）时 key 与基础 key 完全一致，
+    // 首个出现者保持裸 key，其余条目不受影响。
+    // 记忆化 key 直接依赖 `rows`（`rows` 自身仍由 `remember(categories, showAllMap)` 派生，
+    // 展开态照旧驱动重建，见上）。
+    val rowKeys = remember(rows) {
+        val seen = HashMap<String, Int>()
+        rows.map { row ->
+            val base = row.rowKey()
+            val times = seen.getOrDefault(base, 0)
+            seen[base] = times + 1
+            if (times == 0) base else "$base#$times"
+        }
+    }
+
     // 首次可见时触发首屏加载（对齐 Dart EasyRefresh firstRefresh：仅首次构建加载；
     // 条件从控制器状态推导——currentPage 仍为 1 且无数据说明尚未成功加载过，
     // 加载失败后重新进入会自动重试，范式同 HomeScreen）
@@ -230,20 +279,29 @@ private fun CategorySiteGrid(
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                     modifier = Modifier.fillMaxSize(),
                 ) {
-                    items(
+                    itemsIndexed(
                         items = rows,
-                        // 主分类标题跨全宽（随滚动，不做吸顶——用户已决策）
-                        span = { row ->
+                        // 稳定唯一 key（去重后的 rowKeys，下标与 rows 对齐；论证见 CategoryRow.rowKey
+                        // 与上方 rowKeys）：「显示全部」展开/收起、下拉刷新换新数据时，让网格按身份
+                        // 而非位置复用条目，并保证「站点返回空串/重复子分类 id」不会因重复 key 抛异常。
+                        // 本页在 **SitePagerTabs 页内**，故**不加** Modifier.animateItem()
+                        // （逐项 placement 动画 = 逐项 graphicsLayer，ui-compose.md 条目 27 的
+                        // C2 结论已实测回退；条目 26 的 PagerJump 第 5 条铁律同样禁止）。
+                        key = { index, _ -> rowKeys[index] },
+                        // 主分类标题跨全宽（随滚动，不做吸顶——用户已决策）。
+                        // 网格版 itemsIndexed 的 span/contentType 首参是 index，此处仍**只按行类型**
+                        // 判定（与改造前逐字等价，index 未参与），故跨全宽语义未变。
+                        span = { _, row ->
                             if (row is CategoryRow.Header) GridItemSpan(maxLineSpan) else GridItemSpan(1)
                         },
-                        contentType = { row ->
+                        contentType = { _, row ->
                             when (row) {
                                 is CategoryRow.Header -> "header"
                                 is CategoryRow.Sub -> "sub"
                                 is CategoryRow.ShowMore -> "more"
                             }
                         },
-                    ) { row ->
+                    ) { _, row ->
                         when (row) {
                             is CategoryRow.Header -> HeaderText(row.cat.name)
                             is CategoryRow.Sub -> SubCategoryCard(
