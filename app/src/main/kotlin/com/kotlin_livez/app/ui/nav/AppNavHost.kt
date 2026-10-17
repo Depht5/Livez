@@ -4,8 +4,6 @@ import android.net.Uri
 import androidx.compose.animation.ExperimentalSharedTransitionApi
 import androidx.compose.animation.SharedTransitionLayout
 import androidx.compose.animation.SharedTransitionScope
-import androidx.compose.animation.core.Animatable
-import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -33,7 +31,6 @@ import androidx.compose.material3.NavigationRailItem
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
@@ -42,7 +39,6 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.navigation.NavHostController
@@ -343,8 +339,14 @@ private fun MainShell(shell: ShellState) {
  * 持有本就存活，恢复站点索引后位置随之恢复。路由导航由 NavHost 自带 SaveableStateProvider
  * 保存（进直播间返回不丢），与本层嵌套互不影响。
  *
- * 底栏/侧栏切换另有 120ms 微淡入（见下方 `tabAlpha` 注释）：**单分支组合不变**——
- * 不双页同时组合，也不影响各页内部状态（分页器、网格滚动、SitePagerTabs 的跨页铁律）。
+ * **不得**在本 provider 内部套常驻 `graphicsLayer` 容器（Phase 2.3 真机回归修正）：
+ * 底栏/侧栏切换的 120ms 微淡入曾写成 provider 内唯一的根
+ * `Box(Modifier.fillMaxSize().graphicsLayer { alpha = tabAlpha.value })`，真机上点击底栏切换后
+ * **上方画面冻结在上一页**（底栏选中态与触摸命中都已切到新页，直到进/出直播间二级路由才恢复）。
+ * 根因：`SaveableStateProvider(currentIndex)` 底层由 `ReusableContent(currentIndex)` 驱动，切换 key 时
+ * 会**原地复用直接根 `LayoutNode`**；被复用根节点上的硬件加速图层 DisplayList 离屏缓存失步冻结在
+ * 旧页最后一帧，而 hit test 仍遍历语义树命中新分支。故恢复为 provider 直接包裹 `when (currentIndex)`
+ * （与原版 Dart `IndexedStack` 底栏无过渡直切一致）；要再加重绘过渡，只能放在 provider **之外**。
  */
 @Composable
 private fun MainTabContent(
@@ -352,60 +354,31 @@ private fun MainTabContent(
     shell: ShellState,
     tabStateHolder: SaveableStateHolder,
 ) {
-    // Tab 切换的轻量微淡入：0.85f → 1f / 120ms（FastOutSlowInEasing）。
-    // 只做**整页容器**的一层 graphicsLayer alpha 过渡：
-    // - `when (currentIndex)` 仍只组合一个分支（不双页同时组合），各页 rememberSaveable
-    //   照旧由 SaveableStateProvider 保存/恢复；
-    // - 这是页面容器上的图层，**不是**逐列表项的 `Modifier.graphicsLayer()`
-    //   （ui-compose.md PagerJump 铁律 5 禁的是后者，二者不是一回事）；
-    // - 动画期间每帧只重排/重录图层（placeWithLayer 的 layerBlock 在 layout 阶段求值，
-    //   ui 1.8.2 `GraphicsLayerModifier.kt:578`），不触发重组。
-    // 状态提升到 SaveableStateProvider 之外：Tab 切换会换掉 provider 的 key，放里面会被重建。
-    val tabAlpha = remember { Animatable(1f) }
-    var lastTabIndex by remember { mutableIntStateOf(currentIndex) }
-    LaunchedEffect(currentIndex) {
-        if (lastTabIndex != currentIndex) {
-            lastTabIndex = currentIndex
-            // snapTo 而非 animateTo：本帧直接落到 0.85f 起步，避免从上一段的残留值续跑
-            tabAlpha.snapTo(0.85f)
-            tabAlpha.animateTo(
-                targetValue = 1f,
-                animationSpec = tween(durationMillis = 120, easing = FastOutSlowInEasing),
-            )
-        }
-    }
-
     tabStateHolder.SaveableStateProvider(currentIndex) {
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .graphicsLayer { alpha = tabAlpha.value },
-        ) {
-            when (currentIndex) {
-                0 -> HomeScreen(
-                    controller = shell.homeController,
-                    gridStates = shell.homeGridStates,
-                    onOpenLiveRoom = { site, roomId ->
-                        // 直播间已迁路由（Batch 7）：Router.openLiveRoom 导航至
-                        // livertoom/{siteId}/{roomId}（siteId/roomId 经 URL 编码）
-                        Router.openLiveRoom(site, roomId)
-                    },
-                )
-                1 -> FollowScreen(controller = shell.followController)
-                2 -> CategoryScreen(
-                    controller = shell.categoryController,
-                    gridStates = shell.categoryGridStates,
-                    onOpenCategory = { site, sub ->
-                        // 分类详情已迁路由（本批）：path/query 字符串传参，
-                        // 特殊字符经 URL 编码（NavController 解析后自动解码）
-                        val route = "category/${Uri.encode(site.id)}" +
-                            "?categoryId=${Uri.encode(sub.id)}" +
-                            "&categoryName=${Uri.encode(sub.name)}"
-                        Router.navigate(route)
-                    },
-                )
-                else -> MineScreen()
-            }
+        when (currentIndex) {
+            0 -> HomeScreen(
+                controller = shell.homeController,
+                gridStates = shell.homeGridStates,
+                onOpenLiveRoom = { site, roomId ->
+                    // 直播间已迁路由（Batch 7）：Router.openLiveRoom 导航至
+                    // livertoom/{siteId}/{roomId}（siteId/roomId 经 URL 编码）
+                    Router.openLiveRoom(site, roomId)
+                },
+            )
+            1 -> FollowScreen(controller = shell.followController)
+            2 -> CategoryScreen(
+                controller = shell.categoryController,
+                gridStates = shell.categoryGridStates,
+                onOpenCategory = { site, sub ->
+                    // 分类详情已迁路由（本批）：path/query 字符串传参，
+                    // 特殊字符经 URL 编码（NavController 解析后自动解码）
+                    val route = "category/${Uri.encode(site.id)}" +
+                        "?categoryId=${Uri.encode(sub.id)}" +
+                        "&categoryName=${Uri.encode(sub.name)}"
+                    Router.navigate(route)
+                },
+            )
+            else -> MineScreen()
         }
     }
 }

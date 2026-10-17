@@ -285,10 +285,14 @@ private fun CategorySiteGrid(
                         // 稳定唯一 key（去重后的 rowKeys，下标与 rows 对齐；论证见 CategoryRow.rowKey
                         // 与上方 rowKeys）：「显示全部」展开/收起、下拉刷新换新数据时，让网格按身份
                         // 而非位置复用条目，并保证「站点返回空串/重复子分类 id」不会因重复 key 抛异常。
+                        // `getOrElse` 是越界兜底（Phase 2.3）：rowKeys 与 rows 在同一 `remember` 内计算、
+                        // 正常恒同长；但 LazyGrid 的 item provider 会在快照通知时、下一帧重组**之前**
+                        // 重算，历史上正是这类「新数据 + 旧下标数组」的撕裂把首页打崩过 —— 这里绝不允许
+                        // 下标越界抛 IndexOutOfBoundsException。
                         // 本页在 **SitePagerTabs 页内**，故**不加** Modifier.animateItem()
                         // （逐项 placement 动画 = 逐项 graphicsLayer，ui-compose.md 条目 27 的
                         // C2 结论已实测回退；条目 26 的 PagerJump 第 5 条铁律同样禁止）。
-                        key = { index, _ -> rowKeys[index] },
+                        key = { index, row -> rowKeys.getOrElse(index) { "${row.rowKey()}#$index" } },
                         // 主分类标题跨全宽（随滚动，不做吸顶——用户已决策）。
                         // 网格版 itemsIndexed 的 span/contentType 首参是 index，此处仍**只按行类型**
                         // 判定（与改造前逐字等价，index 未参与），故跨全宽语义未变。

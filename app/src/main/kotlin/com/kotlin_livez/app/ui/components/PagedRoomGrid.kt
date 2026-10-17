@@ -1,8 +1,5 @@
 package com.kotlin_livez.app.ui.components
 
-import androidx.compose.animation.Crossfade
-import androidx.compose.animation.core.FastOutSlowInEasing
-import androidx.compose.animation.core.tween
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -44,15 +41,6 @@ import com.kotlin_livez.core.model.LiveRoomItem
 /** 触底加载阈值：最后可见条目距列表末尾不足该数量时预加载下一页（对应 Dart EasyRefresh footer）。 */
 private const val LOAD_MORE_THRESHOLD_ITEMS = 6
 
-/** 状态跨态淡入时长（首屏加载态 ↔ 内容列表 / 空态 / 错误态的整体 Crossfade）。 */
-private const val CROSSFADE_DURATION_MS = 220
-
-/**
- * 分页网格的「整块」UI 态 —— 与原先 `when` 三态覆盖层互斥渲染的语义一一对应，
- * 供 [Crossfade] 做整体淡入淡出（**整体**，不是逐项动画）。
- */
-private enum class PagedGridUiState { Content, Loading, Empty, Error }
-
 /**
  * 分页直播间网格（公共组件）—— 收敛自 HomeScreen 的 SiteRoomGrid 与
  * CategoryDetailScreen 的 DetailRoomGrid 逐行相同的实现
@@ -66,11 +54,13 @@ private enum class PagedGridUiState { Content, Loading, Empty, Error }
  * 结构镜像 Dart `PageGridView` + `LiveRoomGridLayout.resolve`：
  * 下拉刷新 + 触底分页 + 首屏加载/错误重试/空态三态覆盖层 + 卡片网格。
  *
- * task 10-17-ui-animation-fluency-polish 的两处增量（其余仍逐行等价）：
- * 1. **稳定 key**（`itemKey`，本组件在 `SitePagerTabs` 页内）：条目按 `siteId_roomId`
- *    身份复用；搜索页不传 → 保持「位置即身份」。
- * 2. **状态整体 Crossfade**：三态覆盖层由硬切换改为整块淡入淡出。**不给任何 item 挂动画**
- *    （页内网格逐项 `graphicsLayer`/`animateItem` 已被 ui-compose.md 条目 27 的 C2 结论证伪）。
+ * task 10-17-ui-animation-fluency-polish 的增量（其余仍逐行等价）：
+ * 1. **稳定 key**（`itemKey`，本组件在 `SitePagerTabs` 页内）：条目按 `siteId_roomId` 身份复用；
+ *    搜索页不传 → 保持「位置即身份」。**不给任何 item 挂动画**（页内网格逐项
+ *    `graphicsLayer`/`animateItem` 已被 ui-compose.md 条目 27 的 C2 结论证伪）。
+ * 2. **Phase 2.3 真机回归**：状态整体 `Crossfade` **已回退**——首帧多一次状态跳变，稳态在首页
+ *    主路径上多挂一层全屏图层，且真机实测切平台会因「新 list + 旧 keys 撕裂」闪退。
+ *    现恢复为「常驻网格 + 上层三态覆盖层」（与 `CategoryScreen` 同构），`list` 取静态快照。
  */
 
 /**
@@ -157,28 +147,47 @@ fun <T> PagedRoomGridCore(
     itemKey: ((item: T) -> Any)? = null,
     itemContent: @Composable (index: Int, item: T, mainAxisExtentDp: Float) -> Unit,
 ) {
-    val list by listController.list.collectAsStateWithLifecycle()
+    // ⚠ 必须取**本组合帧的静态快照**（`.value`），不得写成 `val list by …collectAsStateWithLifecycle()`。
+    // 属性委托在 `LazyVerticalGrid` 闭包内传 `items = list` 时会实时读快照，并被 `LazyGridItemProvider`
+    // 的 `DerivedSnapshotState` 订阅：网络返回瞬间 `SnapshotStateObserver.drainChanges()` 会在
+    // **下一帧重组之前**重算 item provider，于是 `items` 读到新列表（20 条）而同一闭包捕获的 key
+    // 数组仍是旧帧的空列表（0 条）⇒ 首页切换平台必崩 `IndexOutOfBoundsException: Index 0 out of
+    // bounds for length 0`（Phase 2.3 真机日志）。取 `.value` 后 `items` 与下方 keys 永远同帧同长。
+    val list = listController.list.collectAsStateWithLifecycle().value
     val pageLoading by listController.pageLoading.collectAsStateWithLifecycle()
     val pageEmpty by listController.pageEmpty.collectAsStateWithLifecycle()
     val pageError by listController.pageError.collectAsStateWithLifecycle()
     val errorMsg by listController.errorMsg.collectAsStateWithLifecycle()
     val canLoadMore by listController.canLoadMore.collectAsStateWithLifecycle()
 
-    // item 稳定 key（可选）。设计规定 `siteId_roomId`，但**其唯一性并非结构保证**：
-    // 首页/分类详情按「在线人数」排序分页，翻页之间榜单变动会让同一房间重复出现；
-    // 而 LazyGrid 遇**重复 key 会抛异常**（compose-ui `SubcomposeLayout.kt:481`
-    // "Key ... was already used"）→ 崩溃。故对同一基础 key 的第 2 次及以后出现追加 `#序号`：
-    // 无重复时（正常情形）key 与设计完全一致（首个出现者保持裸 key，其余条目不受影响）。
+    // item 稳定 key（可选）+ 越界兜底 —— 二者在**同一个 `remember(list, itemKey)`** 内一起算
+    // （此前只存 keys 数组、由 `itemsIndexed` 的 key 闭包按下标取，Phase 2.3 收紧为此形态）。
+    // 设计规定 `siteId_roomId`，但**其唯一性并非结构保证**：首页/分类详情按「在线人数」排序分页，
+    // 翻页之间榜单变动会让同一房间重复出现；而 LazyGrid 遇**重复 key 会抛异常**
+    // （compose-ui `SubcomposeLayout.kt:481` "Key ... was already used"）→ 崩溃。
+    // 故对同一基础 key 的第 2 次及以后出现追加 `#序号`：无重复时（正常情形）key 与设计完全一致
+    // （首个出现者保持裸 key，其余条目不受影响）。
     // 与列表一一对应：keys[i] 属于 list[i]，同一 remember 作用域内计算，长度恒定。
-    val itemKeys: List<String>? = remember(list, itemKey) {
-        itemKey?.let { keyOf ->
+    // 兜底再走一层 `getOrElse`：下标越界绝不允许把首页打崩（撕裂机理见上方 `list` 的注释）。
+    val itemKeyOf: ((index: Int, item: T) -> Any)? = remember(list, itemKey) {
+        val keyOf = itemKey
+        if (keyOf == null) {
+            null
+        } else {
             val seen = HashMap<String, Int>()
-            list.map { item ->
+            val keys = list.map { item ->
                 val base = keyOf(item).toString()
                 val times = seen.getOrDefault(base, 0)
                 seen[base] = times + 1
                 if (times == 0) base else "$base#$times"
             }
+            // 必须落到标注了类型的局部量再返回：直接写 `{ index, item -> … }` 作为块内最后一个表达式
+            // 时，解析器会把它当作紧邻的 `map { … }` 的**第二个尾随 lambda** 而报
+            // 「Only one lambda expression is allowed outside a parenthesized argument list」。
+            val byIndex: (index: Int, item: T) -> Any = { index, item ->
+                keys.getOrElse(index) { "${keyOf(item)}#$index" }
+            }
+            byIndex
         }
     }
 
@@ -234,57 +243,47 @@ fun <T> PagedRoomGridCore(
                 )
             },
         ) {
-            // ===== 整块状态跨态淡入（对应 PageGridView 的 Offstage 覆盖 + 平滑过渡）=====
-            // 首屏「加载态 → 内容列表 / 空态 / 错误态」之间做**整体** Crossfade，取代原先
-            // 覆盖层的硬切换。三态与内容态互斥（与下方 when 的原始覆盖层语义逐条一致）：
-            //   原 pageLoading && list.isEmpty() → Loading；pageEmpty → Empty；pageError → Error；
-            //   其余 → Content（网格 + 顶部下拉指示器表达翻页刷新）。
-            // **为什么是「整体」而不是逐项**：本组件位于 `SitePagerTabs` 页内（首页各站点页 /
-            // 分类详情页），逐项 placement 动画 = 逐项 graphicsLayer，而 ui-compose.md 条目 27 的
-            // C2 结论（同设备同协议 A/B 实测）已证伪「网格 item 逐项 graphicsLayer」并回退；
-            // 条目 26 的 PagerJump 第 5 条铁律同样禁止给列表项加 graphicsLayer。
-            // 故这里只整块淡入，**不给任何 item 挂动画**（itemKey 只解决身份复用，不产生动画）。
-            val uiState = when {
-                pageError -> PagedGridUiState.Error
-                pageEmpty -> PagedGridUiState.Empty
-                pageLoading && list.isEmpty() -> PagedGridUiState.Loading
-                else -> PagedGridUiState.Content
-            }
-            Crossfade(
-                targetState = uiState,
-                animationSpec = tween(durationMillis = CROSSFADE_DURATION_MS, easing = FastOutSlowInEasing),
-                modifier = Modifier.fillMaxSize(),
-                label = "pagedRoomGridState",
-            ) { state ->
-                when (state) {
-                    PagedGridUiState.Content -> LazyVerticalGrid(
-                        columns = GridCells.Fixed(spec.columns),
-                        state = gridState,
-                        // 边缘由 contentPadding 承担、列间/行间用 spacing 表达
-                        //（替代现版 GridSpacingDecoration 语义；水平 12dp 对齐 Dart edgeInsetsA12）
-                        contentPadding = PaddingValues(start = 12.dp, top = 4.dp, end = 12.dp, bottom = 12.dp),
-                        horizontalArrangement = Arrangement.spacedBy(12.dp),
-                        verticalArrangement = Arrangement.spacedBy(12.dp),
-                        modifier = Modifier.fillMaxSize(),
-                    ) {
-                        itemsIndexed(
-                            items = list,
-                            // 稳定 key（见上方 itemKeys 注释；itemKey 为 null 时保持位置即身份）
-                            key = itemKeys?.let { keys -> { index: Int, _: T -> keys[index] } },
-                            // fullSpan 命中的 item（如主播搜索结果行）跨整行展示
-                            span = { _, item ->
-                                if (fullSpan?.invoke(item) == true) GridItemSpan(maxLineSpan)
-                                else GridItemSpan(1)
-                            },
-                        ) { index, item ->
-                            Box {
-                                itemContent(index, item, spec.mainAxisExtentDp)
-                            }
+            // ===== 网格常驻 + 三态覆盖层（Phase 2.3 真机回归修正：撤销四态 Crossfade）=====
+            // 这里曾把「首屏加载态 ↔ 内容/空态/错误态」做成整块 Crossfade；真机上导致首页
+            // **切换平台直接闪退**。移除理由各自独立成立：
+            //   ① 首帧状态跳变：`Content`（pageLoading 尚未置位）→ `Loading` → `Content` 会让网格
+            //      被反复挂载/卸载，每轮都要经历一次「空列表测量」（空数据测量会重置滚动位置）；
+            //   ② 稳态多一层全屏图层（非逐项、不违反铁律），在首页主路径上无收益；
+            //   ③ 与 `list` 取静态快照配合后，网格常驻是唯一能让 `LazyGridItemProvider` 的条目集合
+            //      与 key 数组始终同帧的形态。
+            // 恢复为与 `CategoryScreen` 同构的「常驻网格 + 上层 `when` 覆盖层」：三态互斥、语义与
+            // Crossfade 版本逐条一致（pageError → 错误；pageEmpty → 空态；
+            // pageLoading && list.isEmpty() → 首屏转圈；其余 = 网格 + 顶部下拉指示器）。
+            Box(modifier = Modifier.fillMaxSize()) {
+                LazyVerticalGrid(
+                    columns = GridCells.Fixed(spec.columns),
+                    state = gridState,
+                    // 边缘由 contentPadding 承担、列间/行间用 spacing 表达
+                    //（替代现版 GridSpacingDecoration 语义；水平 12dp 对齐 Dart edgeInsetsA12）
+                    contentPadding = PaddingValues(start = 12.dp, top = 4.dp, end = 12.dp, bottom = 12.dp),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                    modifier = Modifier.fillMaxSize(),
+                ) {
+                    itemsIndexed(
+                        items = list,
+                        // 稳定 key（见上方 itemKeyOf 注释；itemKey 为 null 时保持位置即身份）
+                        key = itemKeyOf,
+                        // fullSpan 命中的 item（如主播搜索结果行）跨整行展示
+                        span = { _, item ->
+                            if (fullSpan?.invoke(item) == true) GridItemSpan(maxLineSpan)
+                            else GridItemSpan(1)
+                        },
+                    ) { index, item ->
+                        Box {
+                            itemContent(index, item, spec.mainAxisExtentDp)
                         }
                     }
+                }
 
+                when {
                     // 加载失败：错误信息 + 点击重试
-                    PagedGridUiState.Error -> StatusOverlay(onClick = { listController.refreshData() }) {
+                    pageError -> StatusOverlay(onClick = { listController.refreshData() }) {
                         Text(
                             text = errorTextBuilder(errorMsg),
                             fontSize = 12.sp,
@@ -294,7 +293,7 @@ fun <T> PagedRoomGridCore(
                     }
 
                     // 空态：文案 + 点击刷新
-                    PagedGridUiState.Empty -> StatusOverlay(onClick = { listController.refreshData() }) {
+                    pageEmpty -> StatusOverlay(onClick = { listController.refreshData() }) {
                         Text(
                             text = emptyText,
                             fontSize = 12.sp,
@@ -304,7 +303,7 @@ fun <T> PagedRoomGridCore(
                     }
 
                     // 首屏加载中（尚无数据时居中转圈；已有数据时的翻页刷新由顶部下拉指示器表达）
-                    PagedGridUiState.Loading -> Box(
+                    pageLoading && list.isEmpty() -> Box(
                         modifier = Modifier.fillMaxSize(),
                         contentAlignment = Alignment.Center,
                     ) {
