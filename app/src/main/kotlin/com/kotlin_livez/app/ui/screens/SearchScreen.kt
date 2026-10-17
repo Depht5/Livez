@@ -7,21 +7,21 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.grid.LazyGridState
 import androidx.compose.foundation.text.KeyboardActions
-import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ScrollableTabRow
 import androidx.compose.material3.Tab
 import androidx.compose.material3.TabRowDefaults.SecondaryIndicator
 import androidx.compose.material3.TabRowDefaults.tabIndicatorOffset
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextField
-import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
@@ -32,8 +32,6 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.text.TextStyle
-import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -42,9 +40,10 @@ import com.kotlin_livez.app.app.Site
 import com.kotlin_livez.app.di.ServiceContainer
 import com.kotlin_livez.app.modules.search.AppSearchController
 import com.kotlin_livez.app.ui.Router
+import com.kotlin_livez.app.ui.components.CompactSearchBar
 import com.kotlin_livez.app.ui.components.LiveRoomCard
 import com.kotlin_livez.app.ui.components.PagedRoomGridCore
-import com.kotlin_livez.app.ui.theme.ImageError
+import com.kotlin_livez.app.ui.theme.CustomIcons
 import com.kotlin_livez.app.ui.theme.LiveIndicatorRed
 import com.kotlin_livez.core.model.LiveAnchorItem
 import com.kotlin_livez.core.model.LiveRoomItem
@@ -109,32 +108,38 @@ fun SearchScreen(modifier: Modifier = Modifier) {
         }
     }
 
-    Column(modifier = modifier.fillMaxSize().background(MaterialTheme.colorScheme.surfaceContainerLow).statusBarsPadding()) {
-        // ===== 顶部搜索栏 =====
+    // 根背景用 surface（task 10-17-ui-material3-details-and-redesign）：
+    // 原 surfaceContainerLow 会在状态栏延伸区露出灰色断层（与顶栏白条不一致）。
+    Column(modifier = modifier.fillMaxSize().background(MaterialTheme.colorScheme.surface).statusBarsPadding()) {
+        // ===== 顶部：返回按钮 + 胶囊搜索框 + 模式切换 =====
         Row(
             modifier = Modifier
                 .fillMaxWidth()
                 .background(MaterialTheme.colorScheme.surface)
-                .padding(start = 12.dp, top = 8.dp, end = 12.dp, bottom = 8.dp),
+                .padding(top = 4.dp, end = 12.dp, bottom = 4.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            TextField(
+            // 标准 48dp 返回按钮（与本 App 设置页/账号页同款，task 10-17 顶栏补齐）
+            Box(
+                modifier = Modifier
+                    .size(48.dp)
+                    .clickable { Router.back() },
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    imageVector = CustomIcons.Back,
+                    contentDescription = "返回",
+                    tint = MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier.size(24.dp),
+                )
+            }
+            // 共享胶囊搜索框（task 10-17：与关注页共用一份实现，不再用 56dp 高的 TextField）
+            CompactSearchBar(
                 value = keyword,
                 onValueChange = { keyword = it },
-                placeholder = {
-                    Text(text = "输入关键词搜索", fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                },
-                textStyle = TextStyle(fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurface),
-                singleLine = true,
-                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-                keyboardActions = KeyboardActions(onSearch = { doSearch() }),
-                colors = TextFieldDefaults.colors(
-                    focusedContainerColor = MaterialTheme.colorScheme.surface,
-                    unfocusedContainerColor = MaterialTheme.colorScheme.surface,
-                    focusedIndicatorColor = MaterialTheme.colorScheme.primary,
-                    unfocusedIndicatorColor = ImageError,
-                ),
+                placeholder = "输入关键词搜索",
                 modifier = Modifier.weight(1f),
+                keyboardActions = KeyboardActions(onSearch = { doSearch() }),
             )
             // 模式切换按钮（对齐现版 modeButton：「直播间」↔「主播」，13sp 红系，
             // padding 10/6 提供热区；点击只切控制器状态，不自动重搜——对齐现版行为）
@@ -194,7 +199,8 @@ fun SearchScreen(modifier: Modifier = Modifier) {
                         }
                     }
                 },
-                modifier = Modifier.weight(1f),
+                // 底部手势导航条安全区（结果网格即本页滚动容器；与设置页/账号页同款做法）
+                modifier = Modifier.weight(1f).navigationBarsPadding(),
             )
         } else {
             Box(modifier = Modifier.weight(1f).fillMaxSize())
@@ -266,6 +272,9 @@ private fun AnchorResultRow(
             modifier = Modifier
                 .fillMaxWidth()
                 .background(MaterialTheme.colorScheme.surface)
+                // 点击跳转（Bug 修复）：原链漏挂 clickable，主播搜索结果点了没反应。
+                // 位置：在 background 之后、padding 之前 —— 内边距计入点击热区，水波纹铺满整行。
+                .clickable(onClick = onClick)
                 .padding(start = 16.dp, top = 12.dp, end = 16.dp, bottom = 12.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {

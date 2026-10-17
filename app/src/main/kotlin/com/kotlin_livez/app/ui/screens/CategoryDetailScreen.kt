@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.padding
@@ -97,7 +98,8 @@ fun CategoryDetailScreen(
             errorTextBuilder = { msg -> "加载失败：" + msg.trim().ifEmpty { "未知错误" } + "\n点击刷新" },
             emptyText = "暂无内容\n点击刷新",
             siteId = site.id,
-            modifier = Modifier.weight(1f),
+            // 底部手势导航条安全区（结果网格即本页滚动容器；与设置页/账号页同款做法）
+            modifier = Modifier.weight(1f).navigationBarsPadding(),
         )
     }
 }

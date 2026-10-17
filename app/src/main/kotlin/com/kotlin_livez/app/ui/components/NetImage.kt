@@ -17,15 +17,16 @@ import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import coil.size.Precision
-import com.kotlin_livez.app.ui.theme.ImageError
-import com.kotlin_livez.app.ui.theme.ImagePlaceholder
+import com.kotlin_livez.app.ui.theme.imageErrorColor
+import com.kotlin_livez.app.ui.theme.imagePlaceholderColor
 
 /**
  * 网络图片（Compose 版）—— 对应 Dart `NetImage` 与现版 View 体系 `ui/NetImage.kt`。
  * 语义对齐：
  * - URL 归一化：`//` 前缀补全为 `https:`（[normalizeUrl]，与 View 版逻辑一致）；
  * - 空 URL 直接显示占位灰块，不发起加载；
- * - 加载中显示占位灰块（#F2F2F2）、失败显示失败灰块（#E0E0E0）；
+ * - 加载中显示占位灰块、失败显示失败灰块，色值**主题感知**（浅色 #F2F2F2 / #E0E0E0；
+ *   深色取 `surfaceContainerHighest` / `surfaceContainerHigh`）；
  * - 形状：[cornerRadiusDp] 单值 = 四角同半径圆角；[isRound] = true 时为圆形头像
  *   （等价 View 版 loadRound 传直径/2 的能力）；封面顶部单角圆角场景由调用方用
  *   [shape] 传自定义 Shape（如仅上两角圆角），本组件不逐 API 复刻 View 版。
@@ -41,8 +42,10 @@ fun NetImage(
     isRound: Boolean = false,
     shape: Shape? = null,
     contentScale: ContentScale = ContentScale.Crop,
-    placeholderColor: Color = ImagePlaceholder,
-    errorColor: Color = ImageError,
+    // 主题感知默认值（本任务）：@Composable 出现在默认参数位置合法（同 MaterialTheme.colorScheme.primary
+    // 的用法），签名不变。深色/纯黑下取色槽灰，不再出现亮白占位块。
+    placeholderColor: Color = imagePlaceholderColor(),
+    errorColor: Color = imageErrorColor(),
 ) {
     val context = LocalContext.current
     val pic = normalizeUrl(url)
@@ -77,7 +80,7 @@ fun NetImage(
     val placeholderPainter = remember(placeholderColor) { ColorPainter(placeholderColor) }
     val errorPainter = remember(errorColor) { ColorPainter(errorColor) }
 
-    // 加载中/失败用纯色 painter（对齐 View 版色值：加载中 #F2F2F2、失败 #E0E0E0）。
+    // 加载中/失败用纯色 painter（色值主题感知：浅色对齐 View 版 #F2F2F2 / #E0E0E0）。
     //
     // 为何用 AsyncImage 而不是 SubcomposeAsyncImage（task 10-07-home-jank-jump-clip-fullscreen-video）：
     // SubcomposeAsyncImage 会为每张图做一次**子组合**（subcomposition）+ 额外测量，Coil 官方明确

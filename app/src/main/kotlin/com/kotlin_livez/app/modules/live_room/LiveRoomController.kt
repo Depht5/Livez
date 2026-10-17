@@ -280,6 +280,12 @@ class LiveRoomController(
                 // 进入 Main scope 时已经过期的排队任务不得先 stop 新轮已接管的实例。
                 if (!isCurrentLoad(restarted)) return@launch
                 _loadError.value = false
+                // 断流文案同属「加载错误态」：必须与 `_loadError` 一并清。
+                // 置位方为 `markPlaybackGivenUp(isError=true)`（"播放失败"），只有 `initPlaylist`
+                // 真正开到某条线路时才清（:509）；本轮 loadData 是新会话（create/refreshRoom/
+                // resetRoom 均经此入口），若此处不清，上一房间/上一轮的残留文案会随
+                // `roomHasError` 让错误层盖住新房间的转圈与「未开播」提示。
+                _errorMsg.value = ""
                 _error.value = null
                 errorStackTrace = null
                 cancelRoomBoundJobs()

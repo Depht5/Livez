@@ -38,6 +38,15 @@ val LiveIndicatorRed = Color(0xFFFF3F4B)
 /** 人气/价格橙（对应现版 #FF9800）：人气值、SC 价格、贡献榜名次等。 */
 val LiveOrange = Color(0xFFFF9800)
 
+/**
+ * 「未开播」等弱化状态点：固定中性灰（对应现版 #BDBDBD）。
+ *
+ * 与 [LiveIndicatorRed] 配对使用，画在封面上的半透明深色胶囊（`0x99000000`）内，
+ * 须与胶囊底色保持稳定对比，故**固定色**而非取随主题明暗变化的 `outline`/`onSurfaceVariant`；
+ * 落在纯色容器上的同类灰点（如直播间内关注 Tab）仍用 `colorScheme.outline`。
+ */
+val LiveIndicatorIdleGray = Color(0xFFBDBDBD)
+
 // ===== 图片占位/失败底（中性，桌面/移动通用）=====
 
 /** 图片占位灰块底色（对应 NetImage 占位 #F2F2F2）。 */
@@ -45,6 +54,23 @@ val ImagePlaceholder = Color(0xFFF2F2F2)
 
 /** 图片加载失败灰块底色（对应 NetImage 失败占位 #E0E0E0）。 */
 val ImageError = Color(0xFFE0E0E0)
+
+/**
+ * 主题感知的图片占位色 —— 浅色沿用 [ImagePlaceholder]（#F2F2F2）；深色（含纯黑 amoled）
+ * 取 `surfaceContainerHighest`（深色色板里的高档容器灰，跟随主题/动态取色）。
+ *
+ * 修复点：深色底上固定浅灰占位会亮成白块。色槽而非硬编码——amoled 只覆盖
+ * background/surface/surfaceContainerLowest/Low，`surfaceContainerHighest` 不受影响。
+ * 用于 [com.kotlin_livez.app.ui.components.NetImage] 的默认参数与各调用方的封面底色。
+ */
+@Composable
+fun imagePlaceholderColor(): Color =
+    if (LocalAppDarkTheme.current) MaterialTheme.colorScheme.surfaceContainerHighest else ImagePlaceholder
+
+/** 主题感知的图片加载失败色 —— 浅色 [ImageError]（#E0E0E0）；深色取 `surfaceContainerHigh`。 */
+@Composable
+fun imageErrorColor(): Color =
+    if (LocalAppDarkTheme.current) MaterialTheme.colorScheme.surfaceContainerHigh else ImageError
 
 /**
  * 当前生效的深色态 —— 跟随系统/手动三态解析后的最终结果。

@@ -14,7 +14,8 @@ import androidx.compose.ui.unit.dp
  * 覆盖：直播间关注按钮 / 播放器全屏切换 / 直播间标题栏与播放器控制层按钮
  * （返回 Back / 菜单 Menu / 刷新 Refresh / 播放 Play / 暂停 Pause /
  * 弹幕开关 DanmakuOn/DanmakuOff / 弹幕设置 DanmuSetting）/
- * 底栏 Tab（首页 Home / 关注复用 HeartOutline / 分类 Category / 我的 Mine）。
+ * 底栏 Tab（首页 Home / 关注复用 HeartOutline / 分类 Category / 我的 Mine）/
+ * 人气火苗 Flame / 关闭清空 Close / 手势调节胶囊的音量 VolumeUp 与亮度 Brightness。
  *
  * 实际显示色由调用处 `Icon(tint = ...)` 的 ColorFilter 决定（material3 Icon 的
  * `tint = Color.Unspecified` 会回退为 LocalContentColor.current 染色，故调用处必须显式上色）：
@@ -474,6 +475,134 @@ object CustomIcons {
                 fill = null,
                 stroke = SolidColor(Color.White),
                 strokeLineWidth = 1.8f,
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round,
+            )
+        }.build()
+    }
+
+    /**
+     * 人气火苗（描边轮廓，白色描边）—— 替换卡片/信息栏原先的 🔥 Emoji。
+     * 实际显示色由调用处 `Icon(tint = ...)` 决定（人气橙 LiveOrange）。
+     */
+    val Flame: ImageVector by lazy {
+        ImageVector.Builder(
+            name = "Flame",
+            defaultWidth = 24.dp,
+            defaultHeight = 24.dp,
+            viewportWidth = 24f,
+            viewportHeight = 24f,
+        ).apply {
+            addPath(
+                // 外轮廓：顶部火尖 + 底部半圆（A7 7 大弧）+ 左下内卷小弧
+                pathData = PathParser().parsePathString(
+                    """
+                    M8.5 14.5 A2.5 2.5 0 0 0 11 12
+                    C11 10.62 10.5 10 10 9
+                    C8.928 6.857 9.776 4.946 12 3
+                    C12.5 5.5 14 7.9 16 9.5
+                    C18 11.1 19 13 19 15
+                    A7 7 0 1 1 5 15
+                    C5 13.847 5.433 12.706 6 12
+                    A2.5 2.5 0 0 0 8.5 14.5 Z
+                    """.trimIndent()
+                ).toNodes(),
+                fill = null,
+                stroke = SolidColor(Color.White),
+                strokeLineWidth = 2f,
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round,
+            )
+        }.build()
+    }
+
+    /**
+     * 关闭/清空（单个 × 字形，白色描边）—— 弹幕屏蔽词芯片的 trailingIcon 与
+     * 胶囊搜索框的一键清空按钮共用同一个图标（不要再定义 Clear/Dismiss 近似别名）。
+     */
+    val Close: ImageVector by lazy {
+        ImageVector.Builder(
+            name = "Close",
+            defaultWidth = 24.dp,
+            defaultHeight = 24.dp,
+            viewportWidth = 24f,
+            viewportHeight = 24f,
+        ).apply {
+            addPath(
+                pathData = PathParser().parsePathString(
+                    """
+                    M6 6 L18 18
+                    M18 6 L6 18
+                    """.trimIndent()
+                ).toNodes(),
+                fill = null,
+                stroke = SolidColor(Color.White),
+                strokeLineWidth = 2f,
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round,
+            )
+        }.build()
+    }
+
+    /**
+     * 音量（扬声器 + 两道声波，白色描边）—— 手势调节胶囊的右半屏（音量）提示图标。
+     * 原为 `LiveRoomScreen.kt` 末尾的私有临时落点 `VolumeHintIcon`，本任务迁入此处统一维护。
+     */
+    val VolumeUp: ImageVector by lazy {
+        ImageVector.Builder(
+            name = "VolumeUp",
+            defaultWidth = 24.dp,
+            defaultHeight = 24.dp,
+            viewportWidth = 24f,
+            viewportHeight = 24f,
+        ).apply {
+            addPath(
+                pathData = PathParser().parsePathString(
+                    """
+                    M4 9.5 L7.5 9.5 L12 6 L12 18 L7.5 14.5 L4 14.5 Z
+                    M15.5 9.5 A3.5 3.5 0 0 1 15.5 14.5
+                    M18.5 7 A7 7 0 0 1 18.5 17
+                    """.trimIndent()
+                ).toNodes(),
+                fill = null,
+                stroke = SolidColor(Color.White),
+                strokeLineWidth = 2f,
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round,
+            )
+        }.build()
+    }
+
+    /**
+     * 亮度（太阳：内圆 + 八向辐条，白色描边）—— 手势调节胶囊的左半屏（亮度）提示图标。
+     * 原为 `LiveRoomScreen.kt` 末尾的私有临时落点 `BrightnessHintIcon`，本任务迁入此处统一维护。
+     */
+    val Brightness: ImageVector by lazy {
+        ImageVector.Builder(
+            name = "Brightness",
+            defaultWidth = 24.dp,
+            defaultHeight = 24.dp,
+            viewportWidth = 24f,
+            viewportHeight = 24f,
+        ).apply {
+            addPath(
+                // circle(12, 12, r=4) 展开为 A 弧 + 八条辐条线
+                pathData = PathParser().parsePathString(
+                    """
+                    M8 12 A4 4 0 1 1 16 12 A4 4 0 1 1 8 12
+                    M18 12 L20 12
+                    M17.66 6.34 L16.24 7.76
+                    M12 4 L12 6
+                    M6.34 6.34 L7.76 7.76
+                    M4 12 L6 12
+                    M6.34 17.66 L7.76 16.24
+                    M12 18 L12 20
+                    M17.66 17.66 L16.24 16.24
+                    """.trimIndent()
+                ).toNodes(),
+                fill = null,
+                stroke = SolidColor(Color.White),
+                strokeLineWidth = 2f,
                 strokeLineCap = StrokeCap.Round,
                 strokeLineJoin = StrokeJoin.Round,
             )

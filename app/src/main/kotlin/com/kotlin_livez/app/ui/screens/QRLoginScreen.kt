@@ -4,11 +4,16 @@ import android.annotation.SuppressLint
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -16,6 +21,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextAlign
@@ -26,12 +32,14 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.kotlin_livez.app.modules.mine.account.bilibili.BiliBiliQRLoginController
 import com.kotlin_livez.app.modules.mine.account.bilibili.QRStatus
 import com.kotlin_livez.app.ui.Router
+import com.kotlin_livez.app.ui.theme.CustomIcons
 
 /**
  * B 站扫码登录页（Compose 版）—— 对应 Dart `qr_login_page.dart`，
  * 替换现版 View 体系 `ui/QRLoginActivity.kt`，注册为 "qrlogin" 路由。
  *
- * 结构镜像：标题「B 站扫码登录」18sp 居中 + 状态文案 13sp #888 居中 +
+ * 结构镜像：顶栏（48dp 返回按钮 + 居中标题「B 站扫码登录」18sp；返回按钮为
+ * task 10-17-ui-material3-details-and-redesign 补的标准顶栏按钮）+ 状态文案 13sp #888 居中 +
  * WebView 打开官方扫码确认页（qrcodeUrl）。控制器负责 generate + 3s 轮询 +
  * set-cookie 保存账号；登录成功 onExit → popBackStack（对齐原 finish）。
  *
@@ -80,15 +88,37 @@ fun QRLoginScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
     }
 
     Column(modifier = modifier.fillMaxSize().background(MaterialTheme.colorScheme.surface).statusBarsPadding()) {
-        Text(
-            text = "B 站扫码登录",
-            fontSize = 18.sp,
-            color = MaterialTheme.colorScheme.onSurface,
-            textAlign = TextAlign.Center,
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(top = 16.dp, bottom = 8.dp),
-        )
+        // 顶栏：48dp 返回按钮 + 居中标题（右侧同宽占位保持标题居中；与本 App 分类详情页同款）
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(48.dp)
+                    .clickable { Router.back() },
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    imageVector = CustomIcons.Back,
+                    contentDescription = "返回",
+                    tint = MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier.size(24.dp),
+                )
+            }
+            Text(
+                text = "B 站扫码登录",
+                fontSize = 18.sp,
+                color = MaterialTheme.colorScheme.onSurface,
+                textAlign = TextAlign.Center,
+                maxLines = 1,
+                modifier = Modifier
+                    .weight(1f)
+                    .padding(vertical = 12.dp),
+            )
+            // 右侧占位使标题居中（与返回按钮对称）
+            Box(modifier = Modifier.size(48.dp))
+        }
         Text(
             text = statusText,
             fontSize = 13.sp,

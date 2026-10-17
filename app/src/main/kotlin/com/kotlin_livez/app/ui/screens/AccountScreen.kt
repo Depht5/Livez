@@ -270,7 +270,10 @@ fun AccountScreen(modifier: Modifier = Modifier) {
                         showLogoutConfirm = false
                         account.logoutBilibili()
                     },
-                ) { Text(text = "退出") }
+                ) {
+                    // 破坏性动作统一 error 色（task 10-17；清除账号语义同「取消关注」）
+                    Text(text = "退出", color = MaterialTheme.colorScheme.error)
+                }
             },
             dismissButton = {
                 TextButton(onClick = { showLogoutConfirm = false }) { Text(text = "取消") }

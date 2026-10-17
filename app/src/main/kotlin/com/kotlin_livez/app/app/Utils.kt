@@ -33,6 +33,21 @@ object Utils {
         }
     }
 
+    /**
+     * 完整时刻文案（`yyyy-MM-dd HH:mm`，如 `2026-10-17 21:05`）——
+     * 观看记录等需要**绝对时间**的场景（task 10-17-ui-material3-details-and-redesign）。
+     *
+     * 本函数是全仓唯一共享出口：页面/控制器一律复用它，不要再内联
+     * `SimpleDateFormat("yyyy-MM-dd HH:mm")` 或自建同模式的 `DateTimeFormatter`。
+     * 格式与 [dateFormatWithYear] 同源（同一模式常量，不存在第二份格式字符串）。
+     *
+     * 注：Dart 参考的历史页用的是 `Utils.parseTime`（今天→HH:mm 的相对格式）；
+     * 本函数按任务要求提供固定完整格式。
+     */
+    fun formatDateTime(epochMillis: Long): String =
+        LocalDateTime.ofInstant(Instant.ofEpochMilli(epochMillis), ZoneId.systemDefault())
+            .format(dateFormatWithYear)
+
     /** 对应 Dart parseVersion：如 "1.2.8" → 010208。 */
     fun parseVersion(version: String): Int {
         var num = ""

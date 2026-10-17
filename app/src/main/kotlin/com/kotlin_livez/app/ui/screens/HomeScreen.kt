@@ -2,6 +2,7 @@ package com.kotlin_livez.app.ui.screens
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
@@ -10,7 +11,9 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.lazy.grid.LazyGridState
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ripple
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
@@ -86,11 +89,19 @@ fun HomeScreen(
             modifier = Modifier.fillMaxSize(),
             // 行尾固定搜索入口：48dp 触控区 + 23dp 图标（用户定标；task mine-page-cleanup）
             trailing = {
+                // 无界圆形涟漪（本任务）：48dp 图标按钮统一 ripple(bounded = false, radius = 20.dp)。
+                // 父级（SiteTabRow 的 Row 与本页 Column）均无 clip，涟漪不会被裁剪。
+                val interactionSource = remember { MutableInteractionSource() }
+                val indication = remember { ripple(bounded = false, radius = 20.dp) }
                 Box(
                     modifier = Modifier
                         .align(Alignment.CenterVertically)
                         .size(48.dp)
-                        .clickable { Router.openFeature("search", "搜索") },
+                        .clickable(
+                            interactionSource = interactionSource,
+                            indication = indication,
+                            onClick = { Router.openFeature("search", "搜索") },
+                        ),
                     contentAlignment = Alignment.Center,
                 ) {
                     Icon(

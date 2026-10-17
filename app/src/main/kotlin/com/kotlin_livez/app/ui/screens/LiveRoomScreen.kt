@@ -15,6 +15,7 @@ import android.view.View
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
@@ -44,20 +45,26 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Tab
 import androidx.compose.material3.TabRow
 import androidx.compose.material3.TabRowDefaults.tabIndicatorOffset
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.ripple
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -73,13 +80,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.SolidColor
-import androidx.compose.ui.graphics.StrokeCap
-import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.graphics.vector.PathParser
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
@@ -114,10 +117,12 @@ import com.kotlin_livez.app.ui.DanmakuOverlayView
 import com.kotlin_livez.app.ui.Router
 import com.kotlin_livez.app.ui.deviceOrientationPolicy
 import com.kotlin_livez.app.ui.useWideLayout
+import com.kotlin_livez.app.ui.components.DanmuSettingsRows
 import com.kotlin_livez.app.ui.components.DanmuSettingsSheet
 import com.kotlin_livez.app.ui.components.DanmuSettingsSidePanel
 import com.kotlin_livez.app.ui.components.DanmuShieldSheet
 import com.kotlin_livez.app.ui.components.LineDialog
+import com.kotlin_livez.app.ui.components.LiveSettingsRows
 import com.kotlin_livez.app.ui.components.LiveSettingsSheet
 import com.kotlin_livez.app.ui.components.LiveSettingsSidePanel
 import com.kotlin_livez.app.ui.components.NetImage
@@ -128,6 +133,7 @@ import com.kotlin_livez.app.ui.components.ROOM_MENU_ITEMS_PORTRAIT
 import com.kotlin_livez.app.ui.components.RoomMenuAction
 import com.kotlin_livez.app.ui.components.RoomMenuDialog
 import com.kotlin_livez.app.ui.components.RoomSheet
+import com.kotlin_livez.app.ui.components.SheetClickRow
 import com.kotlin_livez.app.ui.nav.liveRoomContainerSharedElement
 import com.kotlin_livez.app.ui.nav.liveRoomCoverSharedElement
 import com.kotlin_livez.app.ui.theme.CustomIcons
@@ -473,9 +479,18 @@ fun LiveRoomScreen(
     val online by controller.online.collectAsStateWithLifecycle()
     val liveStatus by controller.liveStatus.collectAsStateWithLifecycle()
     val loadError by controller.loadError.collectAsStateWithLifecycle()
+    // 断流/播放失败文案（task 10-17-ui-material3-details-and-redesign）：控制器在播放失败
+    // 路径写入 `_errorMsg = "播放失败"`；两处清空——`loadData` 入口（换房/刷新即新会话，
+    // 不清会粘住上一房间的文案并顶掉「未开播」）与真正开到线路时（`initPlaylist`）。
+    val errorMsg by controller.errorMsg.collectAsStateWithLifecycle()
     val messages by controller.messages.collectAsStateWithLifecycle()
     val superChats by controller.superChats.collectAsStateWithLifecycle()
     val contributionUsers by controller.contributionRankUsers.collectAsStateWithLifecycle()
+    // 贡献榜加载态（task 10-17-ui-material3-details-and-redesign）：「加载中」先于「空列表」
+    // 判定，避免在途请求期间显示「暂无贡献榜数据」。
+    // 注意它盖不住**首帧**：`fetchContributionRank` 在详情到位后才启动，此前 loading 仍是
+    // false（控制器侧既有口径，本任务未改），故刚进房切到贡献榜仍可能先闪一下空态。
+    val contributionRankLoading by controller.contributionRankLoading.collectAsStateWithLifecycle()
     val qualites by controller.qualites.collectAsStateWithLifecycle()
     val qualityName by controller.currentQualityInfo.collectAsStateWithLifecycle()
     val lineName by controller.currentLineInfo.collectAsStateWithLifecycle()
@@ -486,6 +501,12 @@ fun LiveRoomScreen(
     val followNotLive by ServiceContainer.followService.notLiveList.collectAsStateWithLifecycle()
     // 播放状态（▶/⏸ 图标）
     val playerState by PlayerEngine.instance.state.collectAsStateWithLifecycle()
+    // 「当前所在房间」数据源（关注 Tab 的高亮判定）：必须读控制器 rxSite/rxRoomId 而**不是**
+    // 路由参数 —— 直播间内换房走 `controller.resetRoom`（关注 Tab 点击、自动换台），
+    // 不改变本页路由的 siteId/roomId；rxSite/rxRoomId 在 create/resetRoom 两处同步更新
+    //（`_rxSite`/`_rxRoomId`，同样喂给 CurrentRoomService）。首帧兜底用路由参数避免闪一下无高亮。
+    val rxSite by controller.rxSite.collectAsStateWithLifecycle()
+    val rxRoomId by controller.rxRoomId.collectAsStateWithLifecycle()
 
     // 视频源宽高比（width/height/aspect 均由 mpv video-params 属性监听维护）：
     // 优先采用 aspect（video-params/aspect = DAR 显示宽高比）——变形分辨率（anamorphic）
@@ -507,6 +528,23 @@ fun LiveRoomScreen(
     LaunchedEffect(liveStatus) {
         if (!liveStatus) controlsVisible = false
     }
+
+    /* ---------- 视频区覆盖层互斥（错误层 / 加载转圈 / 未开播）---------- */
+
+    // 错误态 = 加载失败或断流文案非空；**刷新中不显示**（重试已按下，此刻应显示转圈）。
+    // 错误层与另两个覆盖层**同一居中位置**，故错误层必须与它们互斥：
+    //   ① 错误层 `showRoomError`（本文件 roomVideo 内新增）；
+    //   ② 加载转圈：`(detail == null || refreshing) && !showRoomError`（:1057）；
+    //   ③ 「未开播」覆盖层：`!liveStatus && !showRoomError`（:1046，加载失败时无法断言未开播）。
+    // 注意 ② 与 ③ 之间**并不互斥**（本任务未改）：`!liveStatus` 且 `detail == null || refreshing`
+    // 时两者同帧可见（例：刷新一个已下播的房间），旧写法同样如此。
+    // 即「同帧最多一个可见」只对**错误层 vs ②③** 成立。
+    // 与旧写法（转圈 `(detail == null || refreshing) && !loadError`）的关系：`!refreshing`
+    // 时等效（`loadError` 恒被 `showRoomError` 覆盖）；额外修掉两处旧行为的空档：
+    // ① 仅 `errorMsg` 非空时旧写法会与错误层同时渲染；② `refreshing && loadError` 时
+    // 旧写法两者都不显示（一片空白），现由转圈兜住。
+    val roomHasError = loadError || errorMsg.isNotEmpty()
+    val showRoomError = roomHasError && !refreshing
 
     // 播放器初始化失败（缺 native so 等）→ 提示，页面保持可用
     LaunchedEffect(controller) {
@@ -878,6 +916,10 @@ fun LiveRoomScreen(
 
     /** 标题栏片段：宽屏在播放器列顶部、窄屏在最顶部；全屏时隐藏（守卫留在片段内）。 */
     val roomTitleBar: @Composable () -> Unit = {
+        // 顶栏两个图标按钮的无界圆形涟漪（PRD Requirement 1）：48dp 热区内直径 40dp 的
+        // 圆形波纹，不再是无反馈的静默按钮。`ripple()` 是普通函数（material3 1.3.x），
+        // remember 缓存避免每次重组新建工厂。
+        val iconRipple = remember { ripple(bounded = false, radius = 20.dp) }
         if (!isFullScreen) {
             Box(
                 modifier = Modifier
@@ -891,7 +933,7 @@ fun LiveRoomScreen(
                         .size(48.dp)
                         .clickable(
                             interactionSource = remember { MutableInteractionSource() },
-                            indication = null,
+                            indication = iconRipple,
                             onClick = { leaveRoom() },
                         ),
                     contentAlignment = Alignment.Center,
@@ -922,7 +964,7 @@ fun LiveRoomScreen(
                         .size(48.dp)
                         .clickable(
                             interactionSource = remember { MutableInteractionSource() },
-                            indication = null,
+                            indication = iconRipple,
                             onClick = { activeSheet = RoomSheet.Menu },
                         ),
                     contentAlignment = Alignment.Center,
@@ -1004,24 +1046,64 @@ fun LiveRoomScreen(
                 factory = { danmakuOverlay },
                 modifier = Modifier.fillMaxSize(),
             )
-            // 未开播覆盖层：白字居中（对应原 unliveOverlay）
-            if (!liveStatus) {
+            // 未开播覆盖层：白字居中（对应原 unliveOverlay）；错误层显示时让位
+            //（两者同处居中位置会互相压字，且加载失败时无法断言「未开播」）
+            if (!liveStatus && !showRoomError) {
                 Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     Text(text = "未开播", fontSize = 16.sp, color = Color.White)
                 }
             }
             // 直播间加载/刷新中：居中转圈（task player-ui-polish：刷新与加载使用同样的动画；
-            // detail 未就绪或刷新中且无加载错误 → 转圈；完成后即消失）。
+            // detail 未就绪或刷新中且无错误态 → 转圈；完成后即消失）。
             // 渐显渐隐（task 10-17-ui-animation-fluency-polish）：进 150ms / 出 200ms，
             // 避免刷新完成瞬间转圈硬切消失。visible=false 时 AnimatedVisibility 不渲染该节点。
+            // 与下方错误层互斥：`!showRoomError` 取代原 `!loadError`（见 showRoomError 定义处）。
             androidx.compose.animation.AnimatedVisibility(
-                visible = (detail == null || refreshing) && !loadError,
+                visible = (detail == null || refreshing) && !showRoomError,
                 modifier = Modifier.fillMaxSize(),
                 enter = fadeIn(tween(150)),
                 exit = fadeOut(tween(200)),
             ) {
                 Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     CircularProgressIndicator(color = Color.White)
+                }
+            }
+            // 错误/断流覆盖层（task 10-17-ui-material3-details-and-redesign）：加载失败或
+            // 播放断流（errorMsg 非空）且非刷新中 → 居中给出半透明圆角容器 + 错误文案 +
+            // M3「重试」按钮。点击重试与竖屏底栏刷新按钮**同一条通路**
+            //（refreshing=true → controller.refreshRoom()，8s 兜底复位见上方 refreshing 区），
+            // 顺带让转圈接管视觉反馈。
+            androidx.compose.animation.AnimatedVisibility(
+                visible = showRoomError,
+                modifier = Modifier.fillMaxSize(),
+                enter = fadeIn(tween(150)),
+                exit = fadeOut(tween(200)),
+            ) {
+                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    Column(
+                        modifier = Modifier
+                            // 半透明深底（与手势调节胶囊同源色 0xCC000000）：叠在恒黑的
+                            // 视频区上，深浅两套主题下对比都足够，故不跟随主题取色。
+                            .background(Color(0xCC000000), shape = RoundedCornerShape(12.dp))
+                            .padding(horizontal = 20.dp, vertical = 16.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                    ) {
+                        Text(
+                            text = errorMsg.ifEmpty { "加载失败" },
+                            fontSize = 14.sp,
+                            color = Color.White,
+                            textAlign = TextAlign.Center,
+                        )
+                        FilledTonalButton(
+                            onClick = {
+                                refreshing = true
+                                controller.refreshRoom()
+                            },
+                            modifier = Modifier.padding(top = 12.dp),
+                        ) {
+                            Text(text = "重试", fontSize = 14.sp)
+                        }
+                    }
                 }
             }
             // 调节提示胶囊（亮度/音量）：独立于控件显隐（task player-ui-polish）——
@@ -1083,8 +1165,10 @@ fun LiveRoomScreen(
             // - 挂在视频区 Box 内（全屏时视频区铺满整窗），与控制层同为 Compose 覆盖层，
             //   绘制于 mpv SurfaceView 之上（PlayerControlsOverlay 已验证的同款模式）；
             // - 竖屏形态走根级 when 分支的 ModalBottomSheet（下方加了 !isFullScreen 守卫）。
-            // 全限定调用：此处处于根 Column 的 ColumnScope 作用域内，foundation 的
-            // ColumnScope.AnimatedVisibility（禁用级 @Deprecated）会遮蔽顶层同名函数。
+            // 全限定调用的真实原因（勘误，见 ui-compose.md 条目 29 §8）：**本文件没有
+            // import 顶层 AnimatedVisibility**，故一律全限定；此处的作用域是 Box（BoxScope），
+            // 并不是 ColumnScope，故「被 ColumnScope 扩展遮蔽」的旧归因是注释漂移。
+            // 本文件内的 AnimatedVisibility 全部保持全限定写法（勿改成 import 混用）。
             androidx.compose.animation.AnimatedVisibility(
                 visible = isFullScreen && activeSheet == RoomSheet.DanmuSettings,
                 enter = slideInHorizontally(animationSpec = tween(200)) { fullX -> fullX },
@@ -1146,40 +1230,76 @@ fun LiveRoomScreen(
                 }
             }
             // 关注按钮（task follow-tab-and-room-follow）：未关注 = 灰色空心爱心
-            // HeartOutline，已关注 = 红色实心爱心 HeartFilled；点击切换关注状态
-            Icon(
-                imageVector = if (followed) CustomIcons.HeartFilled else CustomIcons.HeartOutline,
-                contentDescription = null,
-                // Icon 的 ColorFilter 染色决定实际颜色（tint=Unspecified 会回退为
-                // LocalContentColor 染黑）：显式按状态上色——已关注红 #FF0000；
-                // 未关注浅色灰 #808080，深色下浅灰 #B0B0B0（深灰底对比不足，
-                // task 08-29-dark-mode 用户定标；经 LocalAppDarkTheme 感知手动切换）
-                tint = if (followed) {
+            // HeartOutline，已关注 = 红色实心爱心 HeartFilled；点击切换关注状态。
+            // task 10-17-ui-material3-details-and-redesign 升级：40dp 圆形触控热区
+            //（原 31dp 方角热区，小于无障碍最小触控尺寸）+ 颜色渐变 + 缩放微动画。
+            // 颜色过渡：Icon 的 ColorFilter 染色决定实际颜色（tint=Unspecified 会回退为
+            // LocalContentColor 染黑）——已关注红 #FF0000；未关注浅色灰 #808080，
+            // 深色下浅灰 #B0B0B0（深灰底对比不足，task 08-29-dark-mode 用户定标；
+            // 经 LocalAppDarkTheme 感知手动切换）。target 值语义与旧写法逐字相同，
+            // 仅改为经 animateColorAsState 过渡（关注态切换时不再硬切）。
+            val followTint by animateColorAsState(
+                targetValue = if (followed) {
                     Color(0xFFFF0000)
                 } else if (LocalAppDarkTheme.current) {
                     Color(0xFFB0B0B0)
                 } else {
                     Color(0xFF808080)
                 },
+                animationSpec = tween(durationMillis = 200),
+                label = "roomFollowTint",
+            )
+            // 缩放微动画：未关注 0.94 → 已关注 1.0（点击瞬间的轻微放大反馈；
+            // 落在绘制期，不参与本行重组之外的任何布局变化）
+            val followScale by animateFloatAsState(
+                targetValue = if (followed) 1f else 0.94f,
+                animationSpec = tween(durationMillis = 200),
+                label = "roomFollowScale",
+            )
+            Box(
                 modifier = Modifier
-                    // 顺序关键：padding 外层撑点击区、size 最内层决定爱心本体尺寸
-                    //（反序会让 padding 挤压渲染区，爱心实际只显示 size−padding）
+                    .size(40.dp)
+                    // clip 先于 clickable：涟漪被圆角裁剪，不溢出为直角方形
+                    .clip(CircleShape)
                     .clickable {
                         if (followed) {
                             controller.removeFollowUser()
                         } else {
                             controller.followUser()
                         }
-                    }
-                    .padding(horizontal = 4.dp, vertical = 4.dp)
-                    .size(23.dp),
-            )
-            Text(
-                text = "🔥 ${Utils.onlineToString(online)}",
-                fontSize = 14.sp,
-                // 人气橙色（现版 #FF9800，主题常量暂无此色值）
-                color = LiveOrange,
-            )
+                    },
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    imageVector = if (followed) CustomIcons.HeartFilled else CustomIcons.HeartOutline,
+                    contentDescription = null,
+                    tint = followTint,
+                    modifier = Modifier
+                        .size(23.dp)
+                        .graphicsLayer {
+                            scaleX = followScale
+                            scaleY = followScale
+                        },
+                )
+            }
+            // 人气值：矢量火焰图标（CustomIcons.Flame）替代 "🔥" Emoji
+            //（task 10-17-ui-material3-details-and-redesign）——Emoji 在部分
+            // 定制 ROM 字体下字形不一致/缺字，矢量图标跨设备稳定且可 tint。
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    imageVector = CustomIcons.Flame,
+                    contentDescription = null,
+                    // 人气橙色（现版 #FF9800，取自主题常量 LiveOrange）
+                    tint = LiveOrange,
+                    modifier = Modifier.size(14.dp),
+                )
+                Spacer(modifier = Modifier.size(2.dp))
+                Text(
+                    text = Utils.onlineToString(online),
+                    fontSize = 14.sp,
+                    color = LiveOrange,
+                )
+            }
         }
     }
 
@@ -1223,19 +1343,58 @@ fun LiveRoomScreen(
                     ChatTabContent(
                         messages = messages,
                         listState = chatListState,
+                        showJumpToBottom = disableAutoScroll,
+                        onJumpToBottom = {
+                            // 只改页面级意图标志（任务1 落的 `setDisableAutoScroll` 同步 effect
+                            // 随之生效，不另起一套反向同步），再平滑滚回最新消息。
+                            // 滚到底后由既有「贴底 → 恢复跟随」链路接管
+                            //（LaunchedEffect(chatUserDragging, chatAtBottom)），
+                            // 后续新消息继续按 LaunchedEffect(messages) 贴底。
+                            disableAutoScroll = false
+                            if (messages.isNotEmpty()) {
+                                coroutineScope.launch {
+                                    chatListState.animateScrollToItem(messages.lastIndex)
+                                }
+                            }
+                        },
                     )
                 }
                 TAB_KEY_SUPER_CHAT -> SuperChatTabContent(superChats)
                 TAB_KEY_FOLLOW -> FollowTabContent(
                     items = followLive + followNotLive,
+                    // 当前房间取控制器状态（随 resetRoom 换房更新），路由参数仅作首帧兜底
+                    currentSiteId = rxSite?.id ?: siteId,
+                    currentRoomId = rxRoomId.ifEmpty { roomId },
                     onOpenRoom = { follow ->
                         val target = Sites.allSites[follow.siteId] ?: return@FollowTabContent
                         controller.resetRoom(target, follow.roomId)
                     },
                 )
-                TAB_KEY_CONTRIBUTION_RANK -> ContributionRankTabContent(contributionUsers)
-                TAB_KEY_SETTINGS -> SettingsTabPlaceholder(
-                    onOpenSettings = { activeSheet = RoomSheet.LiveSettings },
+                TAB_KEY_CONTRIBUTION_RANK -> ContributionRankTabContent(
+                    items = contributionUsers,
+                    loading = contributionRankLoading,
+                )
+                TAB_KEY_SETTINGS -> SettingsTabContent(
+                    controller = controller,
+                    viewportHeight = danmakuOverlay.height.toFloat(),
+                    qualityText = qualityName,
+                    lineText = lineName,
+                    onOpenQuality = {
+                        // 空列表拦截与 ⋮ 菜单/控制层入口一致（toast 后不打开）
+                        if (controller.qualites.value.isEmpty()) {
+                            Router.toast("暂无清晰度信息")
+                        } else {
+                            activeSheet = RoomSheet.Quality
+                        }
+                    },
+                    onOpenLine = {
+                        if (controller.playUrls.value.isEmpty()) {
+                            Router.toast("暂无播放线路")
+                        } else {
+                            activeSheet = RoomSheet.Line
+                        }
+                    },
+                    onOpenDanmuShield = { activeSheet = RoomSheet.DanmuShield },
                 )
             }
         }
@@ -1549,41 +1708,85 @@ private fun buildTabEntries(siteId: String): List<RoomTab> {
  * 聊天列表 —— 对应原 MessagesAdapter：
  * 用户名（灰）+ 正文（深色）两段式；系统消息整行灰色；行距 8dp。
  * 上滑暂停自动滚底、贴底恢复（等价原 RecyclerView.canScrollVertically(1) 判断）。
+ *
+ * 根容器为 `Box`（task 10-17-ui-material3-details-and-redesign）：底层仍是原来的
+ * `LazyColumn`（key 与列表动画一字未动），其上叠加「↓ 回到底部」悬浮胶囊。
+ *
+ * @param showJumpToBottom 是否显示回到底部胶囊（= 页面级 `disableAutoScroll`，
+ *        由用户在列表内上滑离底置位；胶囊点击经 [onJumpToBottom] 回到页面级状态）。
+ * @param onJumpToBottom 胶囊点击：恢复自动跟随并平滑滚回最新消息。
  */
 @Composable
-private fun ChatTabContent(messages: List<LiveMessage>, listState: LazyListState) {
+private fun ChatTabContent(
+    messages: List<LiveMessage>,
+    listState: LazyListState,
+    showJumpToBottom: Boolean,
+    onJumpToBottom: () -> Unit,
+) {
     // 弹幕气泡开关（设置 → 其他；task 08-29-chat-pin-bubble-follow-grid）
     val danmuBubble by ServiceContainer.appSettings.danmuBubble.collectAsStateWithLifecycle()
     // 自动跟随逻辑在页面级（chatListState 声明处）：意图守卫 + 每消息贴底
-    LazyColumn(
-        state = listState,
-        modifier = Modifier.fillMaxSize(),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-        // 稳定 key（task 10-17-ui-power-and-recomposition-governance）：用 LiveMessage.id
-        // 而非列表下标——头部消息被裁掉或新消息入列时，下标 key 会让整段错位并触发全量重组。
-        items(messages, key = { it.id }) { msg ->
-            Text(
-                text = buildMessageText(msg),
-                fontSize = 14.sp,
-                // 弹幕气泡：开启时加主题容器色圆角背景（与单选对话框选中药丸同源
-                // primaryContainer alpha 0.7；无阴影，用户定标）；关闭为现状纯文本。
-                // padding 外层为两模式一致的页边距，背景仅包裹文本内容（气泡状）。
-                modifier = Modifier
-                    .padding(horizontal = 12.dp, vertical = 4.dp)
-                    .then(
-                        if (danmuBubble) {
-                            Modifier
-                                .background(
-                                    MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.7f),
-                                    RoundedCornerShape(8.dp),
-                                )
-                                .padding(horizontal = 10.dp, vertical = 6.dp)
-                        } else {
-                            Modifier
-                        },
-                    ),
-            )
+    Box(modifier = Modifier.fillMaxSize()) {
+        LazyColumn(
+            state = listState,
+            modifier = Modifier.fillMaxSize(),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            // 稳定 key（task 10-17-ui-power-and-recomposition-governance）：用 LiveMessage.id
+            // 而非列表下标——头部消息被裁掉或新消息入列时，下标 key 会让整段错位并触发全量重组。
+            items(messages, key = { it.id }) { msg ->
+                Text(
+                    text = buildMessageText(msg),
+                    fontSize = 14.sp,
+                    // 弹幕气泡：开启时加主题容器色圆角背景（与单选对话框选中药丸同源
+                    // primaryContainer alpha 0.7；无阴影，用户定标）；关闭为现状纯文本。
+                    // padding 外层为两模式一致的页边距，背景仅包裹文本内容（气泡状）。
+                    modifier = Modifier
+                        .padding(horizontal = 12.dp, vertical = 4.dp)
+                        .then(
+                            if (danmuBubble) {
+                                Modifier
+                                    .background(
+                                        MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.7f),
+                                        RoundedCornerShape(8.dp),
+                                    )
+                                    .padding(horizontal = 10.dp, vertical = 6.dp)
+                            } else {
+                                Modifier
+                            },
+                        ),
+                )
+            }
+        }
+        // 「↓ 回到底部」悬浮胶囊（task 10-17-ui-material3-details-and-redesign）：
+        // 用户上滑浏览历史弹幕（disableAutoScroll=true）时浮现，点击恢复自动跟随并滚回最新。
+        // 仅由 disableAutoScroll 驱动，**不引入任何第二套跟随状态**；隐藏稳态下
+        // AnimatedVisibility 整块跳过组合（ui-compose 条目 29 §1 的组合门契约）。
+        // 全限定调用：本文件未 import 顶层 AnimatedVisibility（既有惯例，勿改成 import）。
+        androidx.compose.animation.AnimatedVisibility(
+            visible = showJumpToBottom,
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .padding(bottom = 12.dp),
+            enter = fadeIn(tween(150)) + scaleIn(tween(150), initialScale = 0.92f),
+            exit = fadeOut(tween(150)),
+        ) {
+            // Surface 自带 clip(shape) → 内容里的点击涟漪被胶囊圆角裁剪
+            //（PRD「圆角裁剪水波纹」的同一要求）；shadowElevation = 4.dp 让胶囊浮在列表之上。
+            Surface(
+                shape = RoundedCornerShape(20.dp),
+                color = MaterialTheme.colorScheme.primaryContainer,
+                shadowElevation = 4.dp,
+            ) {
+                Text(
+                    text = "↓ 回到底部",
+                    fontSize = 12.sp,
+                    color = MaterialTheme.colorScheme.onPrimaryContainer,
+                    modifier = Modifier
+                        .clickable(onClick = onJumpToBottom)
+                        .padding(horizontal = 14.dp, vertical = 8.dp),
+                )
+            }
         }
     }
 }
@@ -1611,26 +1814,79 @@ private fun buildMessageText(item: LiveMessage) = buildAnnotatedString {
 
 /* ---------- SC / 头条 Tab：醒目留言列表 ---------- */
 
-/** SC 列表 —— 价格醒目（橙）+ 用户名（红）+ 留言（对齐原 SuperChatAdapter）。 */
+/** 各 Tab 的空状态提示（居中、13sp 弱化色）——SC / 贡献榜共用的统一观感。 */
+@Composable
+private fun EmptyTabHint(text: String) {
+    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+        Text(
+            text = text,
+            fontSize = 13.sp,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            textAlign = TextAlign.Center,
+        )
+    }
+}
+
+/**
+ * SC（醒目留言）列表 —— 对齐原 SuperChatAdapter，task 10-17-ui-material3-details-and-redesign
+ * 升级为 M3 圆角卡片：头像 [LiveSuperChatMessage.face] + 用户名 + 醒目金额胶囊 + 正文，
+ * 无数据时居中提示「暂无醒目留言」。
+ */
 @Composable
 private fun SuperChatTabContent(items: List<LiveSuperChatMessage>) {
+    if (items.isEmpty()) {
+        EmptyTabHint(text = "暂无醒目留言")
+        return
+    }
     LazyColumn(modifier = Modifier.fillMaxSize()) {
         items(items) { item ->
-            Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 10.dp)) {
-                Text(
-                    text = "💬 ${item.userName}（醒目留言）",
-                    fontSize = 13.sp,
-                    color = LiveIndicatorRed,
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 12.dp, vertical = 6.dp)
+                    // clip 先于 background：内容底色严格被圆角裁剪（PRD 的圆角裁剪要求）
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(MaterialTheme.colorScheme.surfaceContainerHigh)
+                    .padding(12.dp),
+            ) {
+                NetImage(
+                    url = item.face,
+                    modifier = Modifier.size(36.dp),
+                    isRound = true,
                 )
-                Spacer(modifier = Modifier.size(4.dp))
-                Text(text = item.message, fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurface)
-                Spacer(modifier = Modifier.size(4.dp))
-                Text(
-                    text = "¥${item.price}",
-                    fontSize = 12.sp,
-                    // 价格橙色（现版 #FF9800）
-                    color = LiveOrange,
-                )
+                Column(modifier = Modifier.weight(1f).padding(start = 10.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            text = item.userName,
+                            fontSize = 14.sp,
+                            color = MaterialTheme.colorScheme.onSurface,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            // 用户名吃满剩余宽度 → 金额胶囊右对齐（长昵称省略而不挤压胶囊）
+                            modifier = Modifier.weight(1f),
+                        )
+                        Spacer(modifier = Modifier.size(6.dp))
+                        // 金额胶囊：LiveOrange 底 + 白字（醒目留言的核心信息，对齐原 Adapter）
+                        Text(
+                            text = "¥${item.price}",
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Medium,
+                            color = Color.White,
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(10.dp))
+                                .background(LiveOrange)
+                                .padding(horizontal = 8.dp, vertical = 2.dp),
+                        )
+                    }
+                    if (item.message.isNotEmpty()) {
+                        Text(
+                            text = item.message,
+                            fontSize = 14.sp,
+                            color = MaterialTheme.colorScheme.onSurface,
+                            modifier = Modifier.padding(top = 6.dp),
+                        )
+                    }
+                }
             }
         }
     }
@@ -1638,28 +1894,82 @@ private fun SuperChatTabContent(items: List<LiveSuperChatMessage>) {
 
 /* ---------- 贡献榜 Tab ---------- */
 
-/** 贡献榜列表 —— 名次（橙）+ 昵称 + 贡献值（对齐原 ContributionRankAdapter）。 */
+/**
+ * 贡献榜前三名徽章底盘色（金/银/铜）。
+ * 就近定义于本文件的原因：主题常量集中在 `ui/theme/AppTheme.kt`，但该文件在
+ * task 10-17-ui-material3-details-and-redesign 中由另一并行实现占用，故不新增主题常量。
+ */
+private val RankGoldColor = Color(0xFFE6A700)
+private val RankSilverColor = Color(0xFF9E9E9E)
+private val RankBronzeColor = Color(0xFFB87333)
+
+/**
+ * 贡献榜列表 —— 对齐原 ContributionRankAdapter，task 10-17-ui-material3-details-and-redesign
+ * 升级：接入 [LiveRoomController.contributionRankLoading] 加载态、空状态提示、
+ * 圆形头像 [LiveContributionRankItem.avatar]、前三名金/银/铜圆形序号徽章。
+ *
+ * @param loading 榜单加载中（控制器 `contributionRankLoading`）——加载中优先于空态，
+ *        否则首帧会把「尚未返回」误显示成「暂无数据」。
+ */
 @Composable
-private fun ContributionRankTabContent(items: List<LiveContributionRankItem>) {
+private fun ContributionRankTabContent(items: List<LiveContributionRankItem>, loading: Boolean) {
+    if (loading) {
+        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            CircularProgressIndicator()
+        }
+        return
+    }
+    if (items.isEmpty()) {
+        EmptyTabHint(text = "暂无贡献榜数据")
+        return
+    }
     LazyColumn(modifier = Modifier.fillMaxSize()) {
         items(items) { item ->
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 14.dp, vertical = 10.dp),
+                    .padding(horizontal = 14.dp, vertical = 8.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text(
-                    text = "${item.rank}",
-                    fontSize = 14.sp,
-                    color = LiveOrange,
-                    modifier = Modifier.padding(end = 12.dp),
+                // 名次徽章：前三名金/银/铜圆形底盘（白字），其余为弱化圆形底盘（次级文字色）
+                Box(
+                    modifier = Modifier
+                        .size(24.dp)
+                        .clip(CircleShape)
+                        .background(
+                            when (item.rank) {
+                                1 -> RankGoldColor
+                                2 -> RankSilverColor
+                                3 -> RankBronzeColor
+                                else -> MaterialTheme.colorScheme.surfaceContainerHighest
+                            },
+                        ),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(
+                        text = "${item.rank}",
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Medium,
+                        color = if (item.rank in 1..3) {
+                            Color.White
+                        } else {
+                            MaterialTheme.colorScheme.onSurfaceVariant
+                        },
+                    )
+                }
+                Spacer(modifier = Modifier.size(10.dp))
+                NetImage(
+                    url = item.avatar,
+                    modifier = Modifier.size(32.dp),
+                    isRound = true,
                 )
                 Text(
                     text = item.userName,
                     fontSize = 14.sp,
                     color = MaterialTheme.colorScheme.onSurface,
-                    modifier = Modifier.weight(1f),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f).padding(start = 10.dp),
                 )
                 Text(text = item.scoreText, fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
@@ -1670,26 +1980,47 @@ private fun ContributionRankTabContent(items: List<LiveContributionRankItem>) {
 /* ---------- 关注 Tab：直播间内关注列表 ---------- */
 
 /**
- * 直播间内关注列表（简化版）—— 直播中优先 + 未开播（复用 FollowService 数据），
- * 行样式对齐原 FollowTabAdapter：标题/平台+房间标题/直播状态徽标；点击换房。
+ * 直播间内关注列表 —— 直播中优先 + 未开播（复用 FollowService 数据），
+ * 行样式对齐原 FollowTabAdapter。task 10-17-ui-material3-details-and-redesign 升级：
+ * 主播圆形头像 [FollowUser.face]、**当前所在房间**高亮底色、右侧带状态圆点的
+ * 「直播中/未开播」胶囊。
+ *
+ * @param currentSiteId/[currentRoomId] 当前正在观看的房间身份（调用处传控制器的
+ *        `rxSite/rxRoomId`，随 `resetRoom` 换房更新）——与列表项一致的行加高亮底色
+ *        （提示「你正在看这个房间」），点击仍走 [onOpenRoom] 换房（同一房间时为幂等重置）。
  */
 @Composable
 private fun FollowTabContent(
     items: List<FollowUser>,
+    currentSiteId: String,
+    currentRoomId: String,
     onOpenRoom: (FollowUser) -> Unit,
 ) {
     LazyColumn(modifier = Modifier.fillMaxSize()) {
         items(items) { item ->
             val siteName = Sites.allSites[item.siteId]?.name ?: item.siteId
             val sub = if (item.roomTitle.isEmpty()) siteName else "$siteName · ${item.roomTitle}"
+            val isCurrentRoom = item.siteId == currentSiteId && item.roomId == currentRoomId
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
+                    .background(
+                        if (isCurrentRoom) {
+                            MaterialTheme.colorScheme.surfaceContainerHigh
+                        } else {
+                            Color.Transparent
+                        },
+                    )
                     .clickable(onClick = { onOpenRoom(item) })
-                    .padding(horizontal = 16.dp, vertical = 12.dp),
+                    .padding(horizontal = 16.dp, vertical = 10.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Column(modifier = Modifier.weight(1f)) {
+                NetImage(
+                    url = item.face,
+                    modifier = Modifier.size(36.dp),
+                    isRound = true,
+                )
+                Column(modifier = Modifier.weight(1f).padding(horizontal = 10.dp)) {
                     Text(
                         text = item.userName,
                         fontSize = 15.sp,
@@ -1697,41 +2028,107 @@ private fun FollowTabContent(
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
-                    Text(text = sub, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(
+                        text = sub,
+                        fontSize = 12.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
                 }
-                Text(
-                    text = when (item.liveStatus) {
-                        2 -> "直播中"
-                        0 -> "状态未知"
-                        else -> "未开播"
-                    },
-                    fontSize = 12.sp,
-                    color = if (item.liveStatus == 2) LiveIndicatorRed else MaterialTheme.colorScheme.outline,
-                )
+                // 状态胶囊：圆点 + 文案（直播中 = 红点，与 FollowItemCard 的红色状态圆点同源；
+                // 未开播/状态未知 = 弱化灰点）。0=未知 1=未直播 2=直播中（FollowUser.liveStatus）
+                Row(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(MaterialTheme.colorScheme.surfaceContainerHighest)
+                        .padding(horizontal = 8.dp, vertical = 3.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(6.dp)
+                            .clip(CircleShape)
+                            .background(
+                                if (item.liveStatus == 2) LiveIndicatorRed else MaterialTheme.colorScheme.outline,
+                            ),
+                    )
+                    Spacer(modifier = Modifier.size(4.dp))
+                    Text(
+                        text = when (item.liveStatus) {
+                            2 -> "直播中"
+                            0 -> "状态未知"
+                            else -> "未开播"
+                        },
+                        fontSize = 11.sp,
+                        color = if (item.liveStatus == 2) {
+                            LiveIndicatorRed
+                        } else {
+                            MaterialTheme.colorScheme.onSurfaceVariant
+                        },
+                    )
+                }
             }
         }
     }
 }
 
-/* ---------- 设置 Tab 入口 ---------- */
+/* ---------- 设置 Tab：内联设置面板 ---------- */
 
-/** 设置 Tab：入口说明（点击打开直播设置弹层，对齐原 tabPlaceholder 点击行为）。 */
+/**
+ * 设置 Tab —— task 10-17-ui-material3-details-and-redesign：由原「引导文案占位」
+ * （SettingsTabPlaceholder，已删除）升级为**可滚动的内联设置面板**，
+ * 复用弹层同款行组件（不新增第二份实现，避免与弹层漂移）：
+ * 直播设置（[LiveSettingsRows]：自动退出开关 + 时长滑条）→ 清晰度/线路快捷入口
+ *（[SheetClickRow]，右侧显示当前值）→ 弹幕设置（[DanmuSettingsRows]：弹幕显示 8 项）
+ * → 弹幕关键词屏蔽入口（打开 [DanmuShieldSheet] 弹层）。
+ *
+ * 各入口只改 `activeSheet`/发动作，不做控制器逻辑（沿用「弹层只发动作与持久化」惯例）；
+ * 清晰度/线路的空列表拦截在调用处（与 ⋮ 菜单、控制层入口一致）。
+ */
 @Composable
-private fun SettingsTabPlaceholder(onOpenSettings: () -> Unit) {
-    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-        Text(
-            text = "直播间设置请使用顶部⋮菜单",
-            fontSize = 13.sp,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            textAlign = TextAlign.Center,
-            modifier = Modifier
-                .clickable(
-                    interactionSource = remember { MutableInteractionSource() },
-                    indication = null,
-                    onClick = onOpenSettings,
-                )
-                .padding(16.dp),
+private fun SettingsTabContent(
+    controller: LiveRoomController,
+    viewportHeight: Float,
+    qualityText: String,
+    lineText: String,
+    onOpenQuality: () -> Unit,
+    onOpenLine: () -> Unit,
+    onOpenDanmuShield: () -> Unit,
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .padding(horizontal = 20.dp, vertical = 4.dp),
+    ) {
+        // 直播设置：自动退出开关 + 退出时长滑条（与弹层共用同一组行）
+        LiveSettingsRows(controller)
+        // 清晰度 / 播放线路快捷入口（右侧显示当前档位，空值回退为「点击切换」）
+        SheetClickRow(
+            label = "清晰度",
+            onClick = onOpenQuality,
+            value = qualityText.ifEmpty { "点击切换" },
         )
+        SheetClickRow(
+            label = "播放线路",
+            onClick = onOpenLine,
+            value = lineText.ifEmpty { "点击切换" },
+        )
+        HorizontalDivider(
+            thickness = 1.dp,
+            color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f),
+            modifier = Modifier.padding(top = 10.dp),
+        )
+        // 弹幕设置：弹幕显示 8 项（默认开启/显示表情/显示区域/显示几行/不透明度/字号/粗细/速度）
+        DanmuSettingsRows(viewportHeight)
+        HorizontalDivider(
+            thickness = 1.dp,
+            color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f),
+            modifier = Modifier.padding(top = 10.dp),
+        )
+        // 弹幕关键词屏蔽入口（打开屏蔽弹层；屏蔽开关与关键词增删都在弹层内）
+        SheetClickRow(label = "弹幕关键词屏蔽", onClick = onOpenDanmuShield)
     }
 }
 
@@ -1764,7 +2161,7 @@ private fun AdjustHintCapsule(state: AdjustHintState) {
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Icon(
-            imageVector = if (state.isVolume) VolumeHintIcon else BrightnessHintIcon,
+            imageVector = if (state.isVolume) CustomIcons.VolumeUp else CustomIcons.Brightness,
             contentDescription = null,
             tint = Color.White,
             modifier = Modifier.size(20.dp),
@@ -1781,70 +2178,4 @@ private fun AdjustHintCapsule(state: AdjustHintState) {
         Spacer(modifier = Modifier.size(10.dp))
         Text(text = state.label, fontSize = 13.sp, color = Color.White)
     }
-}
-
-/**
- * 音量图标（扬声器 + 两道声波）与亮度图标（太阳）—— 仅手势调节胶囊使用。
- *
- * **位置说明（有意为之的临时落点）**：本仓图标统一在 `ui/theme/CustomIcons.kt` 维护，
- * 但本次任务的文件范围被限定为 `LiveRoomScreen.kt` + `PlayerControls.kt`，两个图标暂放本文件。
- * 后续若有复用需求，应迁入 `CustomIcons` 并在此改用 `CustomIcons.VolumeUp / Brightness`
- *（本仓无 material-icons 依赖，图标一律手写 SVG path 转换）。
- * 绘制风格与 CustomIcons 一致：24 viewport、stroke 2f、圆头 + 圆角连接；
- * 实际显示色由调用处 `Icon(tint = ...)` 决定，内建 stroke 色仅兜底。
- */
-private val VolumeHintIcon: ImageVector by lazy {
-    ImageVector.Builder(
-        name = "VolumeHint",
-        defaultWidth = 24.dp,
-        defaultHeight = 24.dp,
-        viewportWidth = 24f,
-        viewportHeight = 24f,
-    ).apply {
-        addPath(
-            pathData = PathParser().parsePathString(
-                """
-                M4 9.5 L7.5 9.5 L12 6 L12 18 L7.5 14.5 L4 14.5 Z
-                M15.5 9.5 A3.5 3.5 0 0 1 15.5 14.5
-                M18.5 7 A7 7 0 0 1 18.5 17
-                """.trimIndent(),
-            ).toNodes(),
-            fill = null,
-            stroke = SolidColor(Color.White),
-            strokeLineWidth = 2f,
-            strokeLineCap = StrokeCap.Round,
-            strokeLineJoin = StrokeJoin.Round,
-        )
-    }.build()
-}
-
-private val BrightnessHintIcon: ImageVector by lazy {
-    ImageVector.Builder(
-        name = "BrightnessHint",
-        defaultWidth = 24.dp,
-        defaultHeight = 24.dp,
-        viewportWidth = 24f,
-        viewportHeight = 24f,
-    ).apply {
-        addPath(
-            pathData = PathParser().parsePathString(
-                """
-                M8 12 A4 4 0 1 1 16 12 A4 4 0 1 1 8 12
-                M18 12 L20 12
-                M17.66 6.34 L16.24 7.76
-                M12 4 L12 6
-                M6.34 6.34 L7.76 7.76
-                M4 12 L6 12
-                M6.34 17.66 L7.76 16.24
-                M12 18 L12 20
-                M17.66 17.66 L16.24 16.24
-                """.trimIndent(),
-            ).toNodes(),
-            fill = null,
-            stroke = SolidColor(Color.White),
-            strokeLineWidth = 2f,
-            strokeLineCap = StrokeCap.Round,
-            strokeLineJoin = StrokeJoin.Round,
-        )
-    }.build()
 }

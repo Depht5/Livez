@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Switch
@@ -17,6 +18,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
@@ -67,7 +69,14 @@ fun SettingClickRow(
     }
 }
 
-/** 开关行：标题+副标题+右侧 Switch（对齐旧版 switchRow；选中态用 primary）。 */
+/**
+ * 开关行：标题+副标题+右侧 Switch（对齐旧版 switchRow；选中态用 primary）。
+ *
+ * 整行 `toggleable`（本任务）：点击行任意位置（含右侧留白）都能切换，提升大屏/单手可达性；
+ * `Role.Switch` 让无障碍读到「开关」语义。**回调只在行上挂一次** —— Switch 自身的
+ * `onCheckedChange` 传 null（避免「点开关」时行 toggleable 与开关回调双触发；
+ * Switch 仍按 `enabled` 正常显隐灰显）。
+ */
 @Composable
 fun SettingSwitchRow(
     title: String,
@@ -80,6 +89,12 @@ fun SettingSwitchRow(
     Row(
         modifier = modifier
             .fillMaxWidth()
+            .toggleable(
+                value = checked,
+                enabled = enabled,
+                role = Role.Switch,
+                onValueChange = onChange,
+            )
             .padding(start = 16.dp, top = 8.dp, end = 8.dp, bottom = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -91,8 +106,8 @@ fun SettingSwitchRow(
         )
         Switch(
             checked = checked,
-            // 禁用时 onCheckedChange 传 null → Switch 不可交互（系统灰显）
-            onCheckedChange = if (enabled) onChange else null,
+            // 整行已由上方 toggleable 处理点击与语义，此处传 null 防双重回调
+            onCheckedChange = null,
             enabled = enabled,
             colors = SwitchDefaults.colors(checkedTrackColor = MaterialTheme.colorScheme.primary),
         )

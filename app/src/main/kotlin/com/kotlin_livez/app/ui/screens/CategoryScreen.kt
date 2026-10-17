@@ -31,6 +31,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -383,7 +384,6 @@ private fun SubCategoryCard(
 ) {
     // 深色/纯黑主题下跳过 2dp 阴影（task 10-17-ui-power-and-recomposition-governance）：
     // 深色底上阴影几乎不可见，却仍要按 elevation 录一层阴影绘制指令，纯属浪费。
-    // 只动 shadow 这一条件，modifier 链顺序（clip/clickable）保持原样。
     val cardShadow = if (LocalAppDarkTheme.current) {
         Modifier
     } else {
@@ -393,6 +393,9 @@ private fun SubCategoryCard(
         modifier = Modifier
             .height(84.dp)
             .then(cardShadow)
+            // 圆角涟漪裁剪（本任务）：先 clip 再 background/clickable，防水波纹溢出圆角。
+            // clip 排在 `.shadow` **之后** —— 阴影画在自己的图层上，clip 在其前会连阴影一起裁掉。
+            .clip(RoundedCornerShape(8.dp))
             .background(cardContainerColor(), RoundedCornerShape(8.dp))
             .clickable(onClick = onClick)
             .padding(start = 8.dp, top = 10.dp, end = 8.dp, bottom = 10.dp),

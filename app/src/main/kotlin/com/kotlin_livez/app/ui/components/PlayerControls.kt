@@ -20,6 +20,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
+import androidx.compose.material3.ripple
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -318,9 +319,14 @@ private fun OverlayButton(
 }
 
 /**
- * 控制层图标按钮：去涟漪、显式上色（Icon 的 ColorFilter 染色；控制层背景为深色渐隐，
+ * 控制层图标按钮：显式上色（Icon 的 ColorFilter 染色；控制层背景为深色渐隐，
  * 默认白色图标确定可见，避免 fallback 到 LocalContentColor 染黑；弹幕开关等双色场景
  * 经 tint 参数传入）。全部图标统一 20dp（默认值，调用处不传 size）。
+ *
+ * 涟漪（本任务）：由「去涟漪」（indication = null）改为**无界圆形涟漪**
+ * `ripple(bounded = false, radius = 20.dp)` —— 触控区是 44×36（size=22dp 时 46×38）的矩形，
+ * 默认 bounded 涟漪会渗出直角方块；无界圆形反馈更贴合图标按钮。用
+ * `clickable(interactionSource, indication, onClick)` 重载（位置参数写法已废弃）。
  */
 @Composable
 private fun OverlayIconButton(
@@ -331,6 +337,9 @@ private fun OverlayIconButton(
     paddingH: Dp = 12.dp,
     paddingV: Dp = 8.dp,
 ) {
+    val interactionSource = remember { MutableInteractionSource() }
+    // ripple() 是普通函数（material3 1.3.x），remember 缓存避免每次重组新建工厂
+    val indication = remember { ripple(bounded = false, radius = 20.dp) }
     Icon(
         imageVector = icon,
         contentDescription = null,
@@ -341,8 +350,8 @@ private fun OverlayIconButton(
             // 顺序关键：padding 在外层撑开点击区，size 在最内层决定图标本体渲染尺寸；
             // 反序（size 外、padding 内）会使内容区 = size − padding ≤ 0，图标不渲染
             .clickable(
-                interactionSource = remember { MutableInteractionSource() },
-                indication = null,
+                interactionSource = interactionSource,
+                indication = indication,
                 onClick = onClick,
             )
             .padding(horizontal = paddingH, vertical = paddingV)

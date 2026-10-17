@@ -29,12 +29,12 @@ import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
@@ -49,9 +49,9 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -65,14 +65,16 @@ import com.kotlin_livez.app.modules.follow_user.FollowGroupOption
 import com.kotlin_livez.app.modules.follow_user.FollowUserController
 import com.kotlin_livez.app.services.FollowService
 import com.kotlin_livez.app.ui.Router
+import com.kotlin_livez.app.ui.components.CompactSearchBar
 import com.kotlin_livez.app.ui.components.NetImage
 import com.kotlin_livez.app.ui.nav.liveRoomContainerSharedElement
 import com.kotlin_livez.app.ui.nav.liveRoomCoverSharedElement
 import com.kotlin_livez.app.ui.components.resolveLiveRoomGrid
-import com.kotlin_livez.app.ui.theme.ImagePlaceholder
 import com.kotlin_livez.app.ui.theme.LocalAppDarkTheme
 import com.kotlin_livez.app.ui.theme.cardContainerColor
+import com.kotlin_livez.app.ui.theme.imagePlaceholderColor
 import com.kotlin_livez.app.ui.theme.LiveIndicatorRed
+import com.kotlin_livez.app.ui.theme.LiveIndicatorIdleGray
 import com.kotlin_livez.core.model.FollowRefreshProgress
 
 /**
@@ -133,6 +135,9 @@ fun FollowScreen(
     val siteSort by ServiceContainer.appSettings.siteSort.collectAsStateWithLifecycle()
     // 真实刷新态（启动/进页/定时/手动共用）：绑定下拉刷新指示器
     val updating by ServiceContainer.followService.updating.collectAsStateWithLifecycle()
+    // 空态判据：「本页确实没有关注」。由 `FollowUserController.filterData()` 每次重建分页列表时
+    // 同步置位（`pageEmpty.value = items.isEmpty()`），与 `list` 同源；写法与 HistoryScreen 一致。
+    val pageEmpty by effectiveController.pageEmpty.collectAsStateWithLifecycle()
     // 注：refreshProgress 的订阅已下沉到 RefreshProgressSection 内部——刷新进度每秒多次 tick，
     // 在本页收集会让整页（顶栏/分组条/网格）跟着重组（task 10-17-ui-power-and-recomposition-governance）。
 
@@ -236,6 +241,16 @@ fun FollowScreen(
                         }
                     }
                 }
+
+                // 空态：列表为空且已确认无数据（`pageEmpty`）时居中提示（task 10-17；对齐 HistoryScreen 写法）。
+                // 不读 `updating`：刷新开始时它先变 true，会让空态在刷新过程中闪断一次
+                // （pageEmpty 在同一次 filterData 内与 list 同步，刷新前后都保持为真）；
+                // 也不读进页首帧：pageEmpty 初值 false，首次加载完成前不会闪现空态。
+                // **不得**改读 refreshProgress：该流的订阅已下沉到 RefreshProgressSection
+                // 内部（见上方注释），在本页收集会让每秒多次的进度 tick 重新带动整页重组。
+                if (list.isEmpty() && pageEmpty) {
+                    EmptyHint(text = "暂无关注的用户")
+                }
             }
         }
     }
@@ -272,7 +287,9 @@ private fun openRoom(item: FollowUser) {
 
 /**
  * 顶栏：白底、水平居中排布——「状态分组/平台分组」切换文字按钮（13sp 红字）+
- * 搜索框（占位「搜索关注的用户」，14sp，占满剩余宽度）+「刷新」红底白字按钮。
+ * 共享胶囊搜索框 [CompactSearchBar]（占位「搜索关注的用户」，占满剩余宽度；
+ * task 10-17 起与搜索页共用同一实现，替换原 56dp 高的 OutlinedTextField）+
+ * 「刷新」红底白字按钮。
  * 各回调一律具名传参（trailing lambda 绑定最后参数的既有 gotcha）。
  */
 @Composable
@@ -295,17 +312,19 @@ private fun FollowTopBar(
             fontSize = 13.sp,
             color = MaterialTheme.colorScheme.primary,
             modifier = Modifier
+                // 先 clip 再 clickable（本任务）：分组切换与右侧「刷新」胶囊同为 14dp 圆角，
+                // 水波纹随圆角裁剪而非溢出为直角矩形
+                .clip(RoundedCornerShape(14.dp))
                 .clickable(onClick = onToggleMode)
                 .padding(horizontal = 8.dp, vertical = 6.dp),
         )
         Spacer(modifier = Modifier.width(4.dp))
-        OutlinedTextField(
+        // 共享胶囊搜索框（task 10-17：与搜索页共用一份实现，替换原 56dp 高的 OutlinedTextField）
+        CompactSearchBar(
             value = keyword,
             onValueChange = onKeywordChange,
+            placeholder = "搜索关注的用户",
             modifier = Modifier.weight(1f),
-            placeholder = { Text(text = "搜索关注的用户", fontSize = 14.sp, color = MaterialTheme.colorScheme.outline) },
-            textStyle = TextStyle(fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurface),
-            singleLine = true,
         )
         Spacer(modifier = Modifier.width(8.dp))
         Text(
@@ -313,6 +332,8 @@ private fun FollowTopBar(
             fontSize = 13.sp,
             color = MaterialTheme.colorScheme.surface,
             modifier = Modifier
+                // 先 clip 再 background/clickable（本任务）：防胶囊水波纹溢出为直角矩形
+                .clip(RoundedCornerShape(14.dp))
                 .background(MaterialTheme.colorScheme.primary, RoundedCornerShape(14.dp))
                 .clickable(onClick = onRefreshAll)
                 .padding(horizontal = 10.dp, vertical = 6.dp),
@@ -346,6 +367,8 @@ private fun TagChipBar(
                 fontWeight = if (selected) FontWeight.Medium else FontWeight.Normal,
                 color = if (selected) MaterialTheme.colorScheme.surface else MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier
+                    // 先 clip 再 background/clickable（本任务）：防胶囊水波纹溢出为直角矩形
+                    .clip(RoundedCornerShape(14.dp))
                     .background(
                         if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceContainerHigh,
                         RoundedCornerShape(14.dp),
@@ -439,7 +462,8 @@ private fun RefreshProgressSection(followService: FollowService) {
  * - 标题位 = 用户名（原卡片为房间标题）；
  * - 主播名位 = 关注页描述行文本（roomTitle 非空 →「平台 · 标题」，空 → 仅平台名）；
  * - 不显示热度；
- * - 封面右上角状态角标：直播中（红底白字）/ 未开播（半透明黑白字）；状态未知（0）不显示。
+ * - 封面右上角状态角标（task 10-17 升级）：半透明深色胶囊 + 状态圆点——直播中为红色圆点、
+ *   未开播为灰色圆点，文案白色；状态未知（0）不显示。
  * 封面 = roomCover（空 URL 显示占位底）。点击进直播间、长按弹取消关注确认。
  */
 @OptIn(ExperimentalFoundationApi::class)
@@ -453,7 +477,6 @@ private fun FollowItemCard(
     val site = Sites.allSites[item.siteId]
     // 深色/纯黑主题下跳过 2dp 阴影（task 10-17-ui-power-and-recomposition-governance）：
     // 与 LiveRoomCard / SubCategoryCard 同策略——深色底上阴影不可见却仍要录绘制指令。
-    // 只动 shadow 这一条件，modifier 链的 clip/clickable 顺序保持原样（归后续任务）。
     val cardShadow = if (LocalAppDarkTheme.current) {
         Modifier
     } else {
@@ -464,6 +487,10 @@ private fun FollowItemCard(
             .liveRoomContainerSharedElement(item.siteId, item.roomId)
             .then(modifier)
             .then(cardShadow)
+            // 圆角涟漪裁剪（本任务）：先 clip 再 background/combinedClickable，防长按/点击
+            // 水波纹溢出圆角。clip 必须排在 `.shadow` **之后**：阴影画在自己的图层上，
+            // 若 clip 在前会被同一圆角连阴影一起裁掉。
+            .clip(RoundedCornerShape(8.dp))
             .background(cardContainerColor(), RoundedCornerShape(8.dp))
             .combinedClickable(
                 onClick = onClick,
@@ -476,22 +503,40 @@ private fun FollowItemCard(
                 modifier = Modifier
                     .liveRoomCoverSharedElement(item.siteId, item.roomId)
                     .fillMaxSize()
-                    .background(ImagePlaceholder),
+                    // 封面底色主题感知（深色不再亮白，本任务）
+                    .background(imagePlaceholderColor()),
                 shape = RoundedCornerShape(topStart = 8.dp, topEnd = 8.dp),
             )
             if (item.liveStatus != 0) {
                 val live = item.liveStatus == 2
-                // 角标：两种状态统一半透明黑底白字（用户定标：不再用直播红；缩小背景）
-                Text(
-                    text = if (live) "直播中" else "未开播",
-                    fontSize = 9.sp,
-                    color = Color.White,
+                // 角标（task 10-17-ui-material3-details-and-redesign）：半透明深色胶囊 +
+                // 红色状态圆点（直播中）/ 弱化灰点（未开播）。圆点色与直播间内关注 Tab 的
+                // 状态胶囊同源（LiveIndicatorRed = 直播强调红），白字保证封面上的可读性。
+                // 灰点取 AppTheme 的 LiveIndicatorIdleGray（固定色，不随主题明暗）——
+                // 它画在半透明深色胶囊上，取 outline/onSurfaceVariant 会在深色下低对比。
+                Row(
                     modifier = Modifier
                         .align(Alignment.TopEnd)
                         .padding(4.dp)
-                        .background(Color(0x99000000), RoundedCornerShape(4.dp))
-                        .padding(horizontal = 4.dp, vertical = 1.dp),
-                )
+                        // 先 clip 再 background：胶囊底色严格被圆角裁剪
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(Color(0x99000000))
+                        .padding(horizontal = 6.dp, vertical = 2.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(6.dp)
+                            .clip(CircleShape)
+                            .background(if (live) LiveIndicatorRed else LiveIndicatorIdleGray),
+                    )
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text(
+                        text = if (live) "直播中" else "未开播",
+                        fontSize = 9.sp,
+                        color = Color.White,
+                    )
+                }
             }
         }
         Column(
@@ -525,5 +570,21 @@ private fun FollowItemCard(
                 modifier = Modifier.fillMaxWidth(),
             )
         }
+    }
+}
+
+/**
+ * 居中空态提示 —— 文案风格对齐仓库既有空态（直播间 `EmptyTabHint` 的 13sp
+ * onSurfaceVariant 居中、PagedRoomGrid 的「暂无…」措辞）；不可点击，故不影响
+ * 其下网格区域的下拉刷新手势。
+ */
+@Composable
+private fun EmptyHint(text: String) {
+    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+        Text(
+            text = text,
+            fontSize = 13.sp,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
     }
 }

@@ -4,13 +4,18 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -19,17 +24,19 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.InputChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextField
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
@@ -176,6 +183,8 @@ fun QualityDialog(
 /**
  * 播放线路选择：标签「线路1..N」（等价旧 showPlayUrlsSheet）；
  * 空列表由宿主拦截（toast「暂无播放线路」后不打开）。
+ * 列表区限高 360dp + 可滚动（task 10-17-ui-material3-details-and-redesign）：
+ * 部分平台（如斗鱼）线路数可达十几条，线数多时弹窗会被撑满屏高。
  */
 @Composable
 fun LineDialog(
@@ -189,7 +198,11 @@ fun LineDialog(
         title = { Text(text = "播放线路", fontSize = 17.sp, color = MaterialTheme.colorScheme.onSurface) },
         confirmButton = {},
         text = {
-            Column {
+            Column(
+                modifier = Modifier
+                    .heightIn(max = 360.dp)
+                    .verticalScroll(rememberScrollState()),
+            ) {
                 repeat(count) { index ->
                     Row(
                         modifier = Modifier
@@ -241,9 +254,13 @@ fun DanmuSettingsSheet(
  * 全屏右侧小窗共用（task 08-29-nav-anim-danmu-panel）。
  * 数值行内联实现而非复用 SettingSliderRow：旧行型需要整数步进 + 单位后缀 +
  * valueLabel（如粗细的 极细..极粗），SettingSliderRow 的 Float API 不适用。
+ *
+ * 可见性为 `internal`（task 10-17-ui-material3-details-and-redesign）：竖屏底部弹窗、
+ * 全屏右侧小窗之外，直播间内联「设置」Tab（`LiveRoomScreen.SettingsTabContent`）
+ * 也要复用同一组行，避免第三份实现漂移。
  */
 @Composable
-private fun DanmuSettingsRows(viewportHeight: Float) {
+internal fun DanmuSettingsRows(viewportHeight: Float) {
     val settings = ServiceContainer.appSettings
     val danmuEnable by settings.danmuEnable.collectAsStateWithLifecycle()
     val danmuRenderEmoji by settings.danmuRenderEmoji.collectAsStateWithLifecycle()
@@ -390,15 +407,28 @@ private val DANMU_AREA_OPTIONS = listOf(
 /* ---------- 弹幕设置（全屏右侧小窗） ---------- */
 
 /**
- * 全屏弹幕设置右侧小窗 —— 对齐原项目 Utils.showRightDialog(弹幕设置, width=400)：
- * topRight 全高面板、透明遮罩点外部关闭、头部 back+标题+分隔线；行内容与竖屏
- * 底部弹窗共用 [DanmuSettingsRows]。滑入/滑出动画由宿主 AnimatedVisibility 承担
- * （200ms，右缘进/出），本组件只负责静态布局。
+ * 全屏右侧小窗公共壳层（task 10-17-ui-material3-details-and-redesign 抽取）——
+ * 对齐原项目 `Utils.showRightDialog(title, width=400)`：全高面板贴右缘、透明遮罩
+ * 点外部关闭、头部「返回箭头 + 标题」+ 分隔线、内容区可滚动。供弹幕设置
+ * （[DanmuSettingsSidePanel]）与直播设置（[LiveSettingsSidePanel]）共用。
+ *
+ * **抽取前的两处实现逐字等价**（原两份除标题与内容外完全同构）：
+ * 遮罩 `fillMaxSize` + `pointerInput { detectTapGestures { onDismiss() } }`；
+ * 面板 `align(CenterEnd)` + `fillMaxHeight()` + `width(400.dp)` +
+ * `background(surface, RoundedCornerShape(topStart = 4.dp, bottomStart = 4.dp))`；
+ * 头部 `fillMaxWidth().height(48.dp)` + 48dp 无 ripple 关闭热区（`CustomIcons.Back` 24dp）
+ * + 16sp/Medium 标题；分隔线 `HorizontalDivider(1.dp, outlineVariant)`；
+ * 内容 Column `fillMaxWidth().verticalScroll(rememberScrollState()).padding(12.dp)`。
+ *
+ * 滑入/滑出动画仍由宿主 AnimatedVisibility 承担（200ms，右缘进/出），本组件只负责静态布局。
+ *
+ * @param content 面板内容（吃内层 Column 的作用域，可纵向排列多组设置行）。
  */
 @Composable
-fun DanmuSettingsSidePanel(
-    viewportHeight: Float,
+private fun FullscreenSidePanel(
+    title: String,
     onDismiss: () -> Unit,
+    content: @Composable ColumnScope.() -> Unit,
 ) {
     Box(modifier = Modifier.fillMaxSize()) {
         // 透明遮罩：点外部关闭 + 挡住下层手势（对齐原项目 maskColor transparent）
@@ -441,7 +471,7 @@ fun DanmuSettingsSidePanel(
                     )
                 }
                 Text(
-                    text = "弹幕设置",
+                    text = title,
                     fontSize = 16.sp,
                     fontWeight = FontWeight.Medium,
                     color = MaterialTheme.colorScheme.onSurface,
@@ -453,10 +483,23 @@ fun DanmuSettingsSidePanel(
                     .fillMaxWidth()
                     .verticalScroll(rememberScrollState())
                     .padding(12.dp),
-            ) {
-                DanmuSettingsRows(viewportHeight)
-            }
+                content = content,
+            )
         }
+    }
+}
+
+/**
+ * 全屏弹幕设置右侧小窗 —— 壳层见 [FullscreenSidePanel]；行内容与竖屏底部弹窗
+ * 共用 [DanmuSettingsRows]。
+ */
+@Composable
+fun DanmuSettingsSidePanel(
+    viewportHeight: Float,
+    onDismiss: () -> Unit,
+) {
+    FullscreenSidePanel(title = "弹幕设置", onDismiss = onDismiss) {
+        DanmuSettingsRows(viewportHeight)
     }
 }
 
@@ -464,11 +507,13 @@ fun DanmuSettingsSidePanel(
 
 /**
  * 直播设置行内容（自动退出开关 + 退出分钟数滑条）—— 竖屏底部弹窗与全屏右侧小窗共用
- * （对齐弹幕设置的双形态：DanmuSettingsSheet / DanmuSettingsSidePanel 共用 DanmuSettingsRows）。
+ * （对齐弹幕设置的双形态：DanmuSettingsSheet / DanmuSettingsSidePanel 共用 DanmuSettingsRows）；
+ * 直播间内联「设置」Tab（`LiveRoomScreen.SettingsTabContent`）同样复用本组行，
+ * 故可见性为 `internal`（task 10-17-ui-material3-details-and-redesign）。
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun LiveSettingsRows(controller: LiveRoomController) {
+internal fun LiveSettingsRows(controller: LiveRoomController) {
     val settings = ServiceContainer.appSettings
     val autoExitEnable by controller.autoExitEnable.collectAsStateWithLifecycle()
     val minutes by settings.roomAutoExitDuration.collectAsStateWithLifecycle()
@@ -525,80 +570,29 @@ fun LiveSettingsSheet(
 }
 
 /**
- * 全屏直播设置右侧小窗 —— 对齐原项目 Utils.showRightDialog(直播设置, width=400) 与
- * [DanmuSettingsSidePanel] 同款壳层：topRight 全高面板、透明遮罩点外部关闭、头部
- * back+标题+分隔线；行内容与竖屏底部弹窗共用 [LiveSettingsRows]。
- * 滑入/滑出动画由宿主 AnimatedVisibility 承担（200ms，右缘进/出），本组件只负责静态布局。
+ * 全屏直播设置右侧小窗 —— 壳层见 [FullscreenSidePanel]；行内容与竖屏底部弹窗
+ * 共用 [LiveSettingsRows]。
  */
 @Composable
 fun LiveSettingsSidePanel(
     controller: LiveRoomController,
     onDismiss: () -> Unit,
 ) {
-    Box(modifier = Modifier.fillMaxSize()) {
-        // 透明遮罩：点外部关闭 + 挡住下层手势（对齐原项目 maskColor transparent）
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .pointerInput(Unit) { detectTapGestures { onDismiss() } },
-        )
-        // 面板：全高、宽 400dp（对齐原项目 width=400）、左侧圆角 4dp、surface 底色
-        Column(
-            modifier = Modifier
-                .align(Alignment.CenterEnd)
-                .fillMaxHeight()
-                .width(400.dp)
-                .background(
-                    MaterialTheme.colorScheme.surface,
-                    shape = RoundedCornerShape(topStart = 4.dp, bottomStart = 4.dp),
-                ),
-        ) {
-            // 头部：返回箭头 + 标题（对齐原 ListTile leading arrow_back + title）
-            Row(
-                modifier = Modifier.fillMaxWidth().height(48.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Box(
-                    modifier = Modifier
-                        .size(48.dp)
-                        .clickable(
-                            interactionSource = remember { MutableInteractionSource() },
-                            indication = null,
-                            onClick = onDismiss,
-                        ),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Icon(
-                        imageVector = CustomIcons.Back,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.onSurface,
-                        modifier = Modifier.size(24.dp),
-                    )
-                }
-                Text(
-                    text = "直播设置",
-                    fontSize = 16.sp,
-                    fontWeight = FontWeight.Medium,
-                    color = MaterialTheme.colorScheme.onSurface,
-                )
-            }
-            HorizontalDivider(thickness = 1.dp, color = MaterialTheme.colorScheme.outlineVariant)
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .verticalScroll(rememberScrollState())
-                    .padding(12.dp),
-            ) {
-                LiveSettingsRows(controller)
-            }
-        }
+    FullscreenSidePanel(title = "直播设置", onDismiss = onDismiss) {
+        LiveSettingsRows(controller)
     }
 }
 
 /* ---------- 弹幕屏蔽 ---------- */
 
-/** 弹幕屏蔽：三个屏蔽开关 + 关键词增删（点 ✕ 词删除；输入框 + 行按钮添加）。 */
-@OptIn(ExperimentalMaterial3Api::class)
+/**
+ * 弹幕屏蔽：三个屏蔽开关 + 关键词芯片流（task 10-17-ui-material3-details-and-redesign）。
+ * 结构：开关区 → **固定输入栏**（`OutlinedTextField` + 「添加」`FilledTonalButton`）→
+ * 芯片区（`FlowRow` + `InputChip`，限高可滚动）。
+ * 增删接口与数据层不变：添加走 `settings.addShieldList`，点芯片（或芯片尾部 ✕）走
+ * `settings.removeShieldList`；`shieldList` 为 StateFlow，增删后自动重组。
+ */
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 fun DanmuShieldSheet(onDismiss: () -> Unit) {
     val settings = ServiceContainer.appSettings
@@ -609,12 +603,19 @@ fun DanmuShieldSheet(onDismiss: () -> Unit) {
     val shieldList by settings.shieldList.collectAsStateWithLifecycle()
     var input by remember { mutableStateOf("") }
 
+    /** 添加当前输入框内容（空输入提示，成功则清空输入框）——与旧「添加屏蔽词」行语义一致。 */
+    fun addShieldWord() {
+        val word = input.trim()
+        if (word.isEmpty()) {
+            Router.toast("请输入关键词")
+        } else {
+            settings.addShieldList(word)
+            input = ""
+        }
+    }
+
     ModalBottomSheet(onDismissRequest = onDismiss) {
-        Column(
-            modifier = Modifier
-                .verticalScroll(rememberScrollState())
-                .padding(start = 20.dp, end = 20.dp, bottom = 24.dp),
-        ) {
+        Column(modifier = Modifier.padding(start = 20.dp, end = 20.dp, bottom = 24.dp)) {
             SheetTitle(text = "弹幕屏蔽")
             SheetSwitchRow(label = "启用弹幕屏蔽", checked = shieldEnable) {
                 settings.setDanmuShieldEnable(it)
@@ -626,42 +627,70 @@ fun DanmuShieldSheet(onDismiss: () -> Unit) {
                 settings.setDanmuUserShieldEnable(it)
             }
 
+            // 固定输入栏（不随下方芯片区滚动）：输入框吃满剩余宽度 + 右侧「添加」按钮；
+            // 单行输入（避免换行累积把输入栏撑高）。
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(top = 12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                OutlinedTextField(
+                    value = input,
+                    onValueChange = { input = it },
+                    placeholder = { Text(text = "输入要屏蔽的关键词", fontSize = 14.sp) },
+                    singleLine = true,
+                    shape = RoundedCornerShape(8.dp),
+                    modifier = Modifier.weight(1f),
+                )
+                FilledTonalButton(
+                    onClick = { addShieldWord() },
+                    modifier = Modifier.padding(start = 8.dp),
+                ) {
+                    Text(text = "添加", fontSize = 14.sp)
+                }
+            }
+
             Text(
                 text = "已屏蔽关键词 ${shieldList.size} 个：",
                 fontSize = 13.sp,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(top = 12.dp),
             )
-            for (word in shieldList) {
+            if (shieldList.isEmpty()) {
                 Text(
-                    text = "✕ $word",
+                    text = "暂无屏蔽关键词",
                     fontSize = 13.sp,
-                    color = MaterialTheme.colorScheme.onSurface,
-                    modifier = Modifier
-                        .clickable { settings.removeShieldList(word) }
-                        .padding(horizontal = 8.dp, vertical = 4.dp),
+                    color = MaterialTheme.colorScheme.outline,
+                    modifier = Modifier.padding(top = 8.dp),
                 )
-            }
-
-            TextField(
-                value = input,
-                onValueChange = { input = it },
-                placeholder = { Text(text = "输入要屏蔽的关键词", fontSize = 14.sp) },
-                shape = RoundedCornerShape(8.dp),
-                modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
-            )
-            SheetClickRow(
-                label = "添加屏蔽词",
-                onClick = {
-                    val word = input.trim()
-                    if (word.isEmpty()) {
-                        Router.toast("请输入关键词")
-                    } else {
-                        settings.addShieldList(word)
-                        input = ""
+            } else {
+                // 芯片区：等距换行排布；限高 240dp + 内部纵向滚动，芯片很多时不会把
+                // 弹层撑满屏（输入栏与开关区始终可见）。
+                FlowRow(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 4.dp)
+                        .heightIn(max = 240.dp)
+                        .verticalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    for (word in shieldList) {
+                        InputChip(
+                            selected = true,
+                            // 点整块芯片即删除该词（尾部 ✕ 是同义的更直观提示）
+                            onClick = { settings.removeShieldList(word) },
+                            label = { Text(text = word, fontSize = 13.sp) },
+                            trailingIcon = {
+                                Icon(
+                                    imageVector = CustomIcons.Close,
+                                    contentDescription = "删除关键词",
+                                    modifier = Modifier.size(16.dp),
+                                )
+                            },
+                        )
                     }
-                },
-            )
+                }
+            }
         }
     }
 }
@@ -705,9 +734,13 @@ private fun SheetSwitchRow(
     }
 }
 
-/** 可点击行：文字行（对齐旧 clickRow）；可选右侧值（如「全屏」「3/4屏」）。 */
+/**
+ * 可点击行：文字行（对齐旧 clickRow）；可选右侧值（如「全屏」「3/4屏」）。
+ * 可见性为 `internal`：直播间内联「设置」Tab 的清晰度/线路/关键词屏蔽入口复用同款行
+ *（task 10-17-ui-material3-details-and-redesign）。
+ */
 @Composable
-private fun SheetClickRow(
+internal fun SheetClickRow(
     label: String,
     onClick: () -> Unit,
     value: String? = null,
