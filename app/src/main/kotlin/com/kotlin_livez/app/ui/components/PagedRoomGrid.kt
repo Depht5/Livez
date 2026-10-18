@@ -27,7 +27,9 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -37,9 +39,15 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.kotlin_livez.app.app.controller.BasePageController
 import com.kotlin_livez.core.model.LiveRoomItem
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.withTimeoutOrNull
 
 /** 触底加载阈值：最后可见条目距列表末尾不足该数量时预加载下一页（对应 Dart EasyRefresh footer）。 */
 private const val LOAD_MORE_THRESHOLD_ITEMS = 6
+
+/** 下拉刷新启动宽限：onRefresh 后若这么久内 pageLoading 仍未变真，视为本次下拉是 no-op（关键词为空 /
+ *  2s 刷新冷却 early-return），直接收回指示器。沿用 FollowService.emptyTargetsCollapseDelayMs 的既有范式。 */
+private const val PULL_REFRESH_START_GRACE_MS = 400L
 
 /**
  * 分页直播间网格（公共组件）—— 收敛自 HomeScreen 的 SiteRoomGrid 与
@@ -145,6 +153,10 @@ fun <T> PagedRoomGridCore(
     fullSpan: ((item: T) -> Boolean)? = null,
     autoFirstLoad: Boolean = true,
     itemKey: ((item: T) -> Any)? = null,
+    /** 空会话占位文案：仅当「无错误、非空态、非加载中、列表为空」且本参数非 null 时，居中显示一段
+     *  非交互文案（不挂 pointer 修饰，不抢下拉手势）。默认 null = 既有行为（首页/分类/关注不受影响）。
+     *  搜索页传「输入关键词搜索」——覆盖"尚未发起搜索 / 会话未开始"这一原本三态全不命中而空白的状态。 */
+    emptyPlaceholderText: String? = null,
     itemContent: @Composable (index: Int, item: T, mainAxisExtentDp: Float) -> Unit,
 ) {
     // ⚠ 必须取**本组合帧的静态快照**（`.value`），不得写成 `val list by …collectAsStateWithLifecycle()`。
@@ -226,17 +238,36 @@ fun <T> PagedRoomGridCore(
         val spec = resolveLiveRoomGrid(maxWidth.value)
         val pullState = rememberPullToRefreshState()
 
+        // 下拉指示器自保（见 ui-compose.md 条目 19）：onRefresh 若因关键词为空 / 2s 冷却被 early-return，
+        // pageLoading 不产生 true→false 变化沿，M3 指示器会永久停在阈值位。用本地状态兜底，保证必定归位。
+        var pullRefreshing by remember(listController) { mutableStateOf(false) }
+        val refreshing = pageLoading || pullRefreshing
+        LaunchedEffect(listController, pullRefreshing) {
+            if (!pullRefreshing) return@LaunchedEffect
+            // ① 宽限期内等请求真正开始（BaseController.loadData 的 scope 为 Main.immediate，
+            //    refreshData() 返回前 pageLoading 已同步置位 ⇒ 正常刷新这里立即返回，不额外等满 400ms）；
+            // ② 未开始 ⇒ 视为 no-op，宽限期满直接收回。
+            val started = withTimeoutOrNull(PULL_REFRESH_START_GRACE_MS) {
+                listController.pageLoading.first { it }
+            }
+            if (started != null) listController.pageLoading.first { !it }   // 请求已开始：等它结束再收回
+            pullRefreshing = false
+        }
+
         // 下拉刷新（对应 Dart RefreshIndicator / 现版 SwipeRefreshLayout）：
-        // isRefreshing 绑定控制器加载状态，刷完自动收起（对齐现版 collect pageLoading 收起逻辑）
+        // isRefreshing 绑定「控制器加载状态 + 本地自保状态」，刷完自动收起
         PullToRefreshBox(
-            isRefreshing = pageLoading,
-            onRefresh = { listController.refreshData() },
+            isRefreshing = refreshing,
+            onRefresh = {
+                pullRefreshing = true
+                listController.refreshData()
+            },
             state = pullState,
             modifier = Modifier.fillMaxSize(),
             // 刷新指示器颜色对齐现版 setColorSchemeColors(#3498DB)
             indicator = {
                 PullToRefreshDefaults.Indicator(
-                    isRefreshing = pageLoading,
+                    isRefreshing = refreshing,
                     state = pullState,
                     modifier = Modifier.align(Alignment.TopCenter),
                     color = indicatorColor,
@@ -308,6 +339,13 @@ fun <T> PagedRoomGridCore(
                         contentAlignment = Alignment.Center,
                     ) {
                         CircularProgressIndicator(color = indicatorColor)
+                    }
+
+                    // 未开始请求（搜索页无关键词 / 会话未开始）：三态全不命中时显式占位，
+                    // 避免结果区一片空白。默认参数为 null ⇒ 首页/分类/关注恒不渲染本分支。
+                    else -> if (emptyPlaceholderText != null && list.isEmpty()) {
+                        // 复用共享空态组件（见 ui-compose.md 条目 31 第 5 点：新页面不要再各写一份）
+                        EmptyHint(text = emptyPlaceholderText)
                     }
                 }
             }

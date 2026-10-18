@@ -23,7 +23,6 @@ import androidx.compose.material3.TabRowDefaults.SecondaryIndicator
 import androidx.compose.material3.TabRowDefaults.tabIndicatorOffset
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -38,7 +37,6 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.kotlin_livez.app.app.Site
 import com.kotlin_livez.app.di.ServiceContainer
-import com.kotlin_livez.app.modules.search.AppSearchController
 import com.kotlin_livez.app.ui.Router
 import com.kotlin_livez.app.ui.components.CompactSearchBar
 import com.kotlin_livez.app.ui.components.LiveRoomCard
@@ -65,25 +63,22 @@ import com.kotlin_livez.core.model.LiveRoomItem
  * 切换站点 Tab 经 controller.setTabIndex（其内部在有关键词且结果为空时自动补拉）；
  * 点击任意类型结果都进直播间（Router.openLiveRoom，直播间 Batch 7 才迁路由）。
  *
- * 控制器生命周期选型：路由级 remember 创建 + DisposableEffect 销毁——与现版
- * SearchActivity「onCreate 创建 / onDestroy 销毁」语义一致（每次进入页面都是全新
- * 搜索会话，返回即丢弃，不存在跨路由保活的既有行为）。
+ * 控制器生命周期选型：**进程级会话**（`ServiceContainer.appSearchController`），跨路由保活——
+ * 进直播间是压栈路由、搜索页会话不销毁（对齐 Dart `app_pages.dart:105` 的
+ * `BindingsBuilder.put`，而非被替换的 View 版 SearchActivity）；返回后关键词/结果/模式/站点都在。
  */
 @Composable
 fun SearchScreen(modifier: Modifier = Modifier) {
-    // 控制器路由级生命周期：remember 创建 + DisposableEffect 销毁
-    //（对齐原 Activity onCreate/onDestroy 的 controller 生命周期）
-    val controller = remember { AppSearchController(ServiceContainer.appSettings) }
-    DisposableEffect(controller) {
-        onDispose { controller.dispose() }
-    }
+    // 进程级搜索会话（对齐 Dart：进直播间是压栈不销毁，返回必须是同一会话）
+    val controller = ServiceContainer.appSearchController
 
     val sites = controller.sites
 
     // 搜索关键词（rememberSaveable：进程重建后保留输入）
     var keyword by rememberSaveable { mutableStateOf("") }
-    // 当前站点 Tab（初值对齐现版 controller.index——AppSearchController 会按上次搜索站点初始化）
-    var selectedSiteIndex by rememberSaveable { mutableIntStateOf(controller.index) }
+    // 站点 Tab 以存活控制器为准：不再 rememberSaveable——陈旧恢复会与进程级控制器冲突，
+    // 导致「界面高亮旧站点、控制器认为在第 0 个」；composition 重建时直接读 controller.index。
+    var selectedSiteIndex by remember { mutableIntStateOf(controller.index) }
     val siteIndex = selectedSiteIndex.coerceIn(0, sites.lastIndex.coerceAtLeast(0))
 
     // 搜索模式（0=直播间，1=主播）：控制器 StateFlow 驱动按钮文案
@@ -171,6 +166,9 @@ fun SearchScreen(modifier: Modifier = Modifier) {
                 // 关闭首屏自动加载（对齐现版：进入搜索页不自动搜索——空关键词下
                 // 自动 loadData 会误置 pageEmpty，刚进页面就显示空态覆盖层）
                 autoFirstLoad = false,
+                // 未发起搜索 / 会话未开始（如进程重建后）时居中显示占位——
+                // 否则三态一个分支都不命中，结果区表现为一片空白
+                emptyPlaceholderText = "输入关键词搜索",
                 // 主播结果行跨整行展示（直播间卡片保持单格）
                 fullSpan = { it !is LiveRoomItem },
                 itemContent = { index, item, mainAxisExtentDp ->

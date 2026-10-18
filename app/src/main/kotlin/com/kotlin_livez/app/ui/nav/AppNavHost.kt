@@ -173,7 +173,7 @@ private fun SharedTransitionScope.NavHostContent(
         // 观看历史（Batch 4）：控制器在 Screen 内 remember 创建、出栈销毁
         composable("history") { HistoryScreen() }
 
-        // 搜索（Batch 5）：控制器在 Screen 内 remember 创建、出栈销毁
+        // 搜索（Batch 5）：控制器在 `ServiceContainer` 内进程级保活（跨路由保留搜索会话）
         composable("search") {
             CompositionLocalProvider(LocalNavAnimatedVisibilityScope provides this) {
                 SearchScreen()

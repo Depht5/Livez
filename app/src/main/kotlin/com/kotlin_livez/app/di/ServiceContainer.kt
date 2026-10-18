@@ -9,6 +9,7 @@ import com.kotlin_livez.app.services.DBService
 import com.kotlin_livez.app.services.DouyinAccountService
 import com.kotlin_livez.app.services.DouyuAccountService
 import com.kotlin_livez.app.modules.live_room.LiveRoomController
+import com.kotlin_livez.app.modules.search.AppSearchController
 import com.kotlin_livez.app.services.LocalStorageService
 
 /**
@@ -40,6 +41,10 @@ object ServiceContainer {
 
     /** 应用设置控制器（对应 Dart AppSettingsController）。 */
     val appSettings: AppSettingsController by lazy { AppSettingsController(localStorage) }
+
+    /** 搜索会话控制器（对应 Dart 路由 Binding 注册的 AppSearchController）——
+     *  直播间是压栈路由，返回时搜索会话必须仍是同一份（关键词/结果/模式/站点都在）。 */
+    val appSearchController: AppSearchController by lazy { AppSearchController(appSettings) }
 
     /** 关注服务（对应 Dart FollowService）。 */
     val followService: FollowService by lazy {

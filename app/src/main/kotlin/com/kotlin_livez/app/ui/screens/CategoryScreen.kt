@@ -28,7 +28,9 @@ import androidx.compose.material3.pulltorefresh.rememberPullToRefreshState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -47,6 +49,13 @@ import com.kotlin_livez.app.ui.components.SitePagerTabs
 import com.kotlin_livez.app.ui.theme.LocalAppDarkTheme
 import com.kotlin_livez.app.ui.theme.cardContainerColor
 import com.kotlin_livez.core.model.LiveSubCategory
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.withTimeoutOrNull
+
+/** 下拉刷新启动宽限：onRefresh 后若这么久内 pageLoading 仍未变真，视为本次下拉是 no-op
+ *（2s 刷新冷却 early-return），直接收回指示器。与 `PagedRoomGrid.kt` 同一范式
+ *（ui-compose.md 条目 19；第 3 个消费者出现时应收敛为共享实现）。 */
+private const val PULL_REFRESH_START_GRACE_MS = 400L
 
 /**
  * 分类页（Compose 版）—— 对应 Dart `modules/category/category_page.dart`（站点 TabBar）+
@@ -252,16 +261,34 @@ private fun CategorySiteGrid(
         val columns = (maxWidth.value / 80f).toInt().coerceIn(1, 12)
         val pullState = rememberPullToRefreshState()
 
+        // 下拉指示器自保（见 ui-compose.md 条目 19）：onRefresh 若因 2s 冷却被 early-return，
+        // pageLoading 不产生 true→false 变化沿，M3 指示器会永久停在阈值位。用本地状态兜底，保证必定归位。
+        var pullRefreshing by remember(listController) { mutableStateOf(false) }
+        val refreshing = pageLoading || pullRefreshing
+        LaunchedEffect(listController, pullRefreshing) {
+            if (!pullRefreshing) return@LaunchedEffect
+            // 宽限期内等请求真正开始（loadData 的 scope 为 Main.immediate ⇒ 正常刷新这里立即返回，
+            // 不额外等满 400ms）；未开始 ⇒ 视为 no-op，宽限期满直接收回。
+            val started = withTimeoutOrNull(PULL_REFRESH_START_GRACE_MS) {
+                listController.pageLoading.first { it }
+            }
+            if (started != null) listController.pageLoading.first { !it }
+            pullRefreshing = false
+        }
+
         // 下拉刷新（对应 Dart EasyRefresh MaterialHeader / 现版 SwipeRefreshLayout）
         PullToRefreshBox(
-            isRefreshing = pageLoading,
-            onRefresh = { listController.refreshData() },
+            isRefreshing = refreshing,
+            onRefresh = {
+                pullRefreshing = true
+                listController.refreshData()
+            },
             state = pullState,
             modifier = Modifier.fillMaxSize(),
             // 刷新指示器颜色对齐现版 setColorSchemeColors(#3498DB，现映射 secondary)
             indicator = {
                 PullToRefreshDefaults.Indicator(
-                    isRefreshing = pageLoading,
+                    isRefreshing = refreshing,
                     state = pullState,
                     modifier = Modifier.align(Alignment.TopCenter),
                     color = MaterialTheme.colorScheme.secondary,
