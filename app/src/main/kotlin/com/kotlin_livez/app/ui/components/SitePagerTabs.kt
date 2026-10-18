@@ -52,6 +52,7 @@ import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.util.lerp
@@ -64,15 +65,26 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 
 /**
- * 站点标签行 + 站点横向分页器（首页 / 分类页**唯一实现**）—— 对应 Dart
+ * 站点标签行 + 站点横向分页器（首页 / 分类页 / 搜索页**唯一实现**）—— 对应 Dart
  * `home_page.dart` / `category_page.dart` 的 `TabBar` + `TabBarView`。
  *
  * 收敛原因：首页与分类页原有两份逐行同构的 `SiteTabRow` + `HorizontalPager`，
  * 本次两项改动（标签居中、切换跳过中间页）两边都要，必须只有一份实现，否则必然漂移。
  * 二次收敛：底栏「重按当前 Tab → 回顶或刷新」的选中态与监听同样从两个页面收敛到这里
  * （原先是两份逐行同构的 `selectedSiteIndex` / `pagerState` / `DisposableEffect` 样板）。
+ * 三次收敛（task 10-18-search-swipe-site-pager）：搜索页也改为复用本组件（原页面私有的
+ * `SiteTextTabRow` 已删），站点选中态与结果区分页器不再各写一份样板。
  *
- * 与改动前一致的部分：Tab 内容（logo 24dp + 8dp 间距 + 16sp 站名、点击无涟漪）、
+ * 搜索页的取参（纯文字观感不变，见下方各参数）：`showLogo = false`（不渲染平台 logo）、
+ * `siteNameFontSize = 14.sp`（保持原字号）、`bottomNavTabIndex = null`（搜索是路由、不属底栏，
+ * 不注册「重按底栏」监听），并经 `onSiteChanged` 把选中站点回写
+ * `AppSearchController.setTabIndex`（沿用其「有关键词且该站点结果为空则自动补拉」语义）。
+ * **有意偏离 Dart**：Dart 搜索页的 `TabBarView` 是 `NeverScrollableScrollPhysics`
+ * （`search_page.dart:91`，上游刻意禁用滑动）；本组件按需求方要求**不随 Dart 禁用滑动**，
+ * 搜索页结果区可左右滑动切平台 —— 日后勿当「对齐 Dart」把它改回去。
+ *
+ * 默认取参下与改动前一致的部分：Tab 内容（logo 24dp + 8dp 间距 + 16sp 站名、点击无涟漪；
+ * 搜索页关 logo、站名 14sp，见 `showLogo` / `siteNameFontSize`）、
  * 指示条逐帧跟随插值、`beyondViewportPageCount` 默认 0（静止只组合当前页）、
  * 相邻站点点击与滑动切页走 `animateScrollToPage`。
  *
@@ -175,6 +187,11 @@ private class PagerJump(
  * @param indicatorPosition 连续页位置（可为小数；跨多格的过渡进度也由它表达）
  * @param indicatorColor 指示条与选中站名颜色（首页 primary / 分类页 secondary）
  * @param onSelect 点击 Tab 回调（参数为站点下标）
+ * @param showLogo 是否渲染平台 logo 与 logo-站名间距（默认 true = 首页/分类页既有观感；
+ *   搜索页传 false，保持纯文字 Tab）。同时决定居中度量是否计入 logo 宽度
+ *   （见 [rememberCenteredEdgePadding]，漏传会让纯文字 Tab 的居中偏移多算一个 logo 宽）
+ * @param siteNameFontSize 站名字号（null = 16sp 现状；搜索页传 14.sp 保持原字号）。
+ *   渲染与居中度量共用同一个 style（单一事实源）
  * @param trailing 行尾固定槽（首页 = 搜索入口；分类页不传）。声明为 RowScope 扩展，
  *   便于调用方用 `Modifier.align(Alignment.CenterVertically)` 垂直居中
  */
@@ -186,14 +203,17 @@ fun SiteTabRow(
     indicatorColor: Color,
     onSelect: (Int) -> Unit,
     modifier: Modifier = Modifier,
+    showLogo: Boolean = true,
+    siteNameFontSize: TextUnit? = null,
     trailing: (@Composable RowScope.() -> Unit)? = null,
 ) {
     // 未选中站名颜色（绘制期插值的起点）；选中色由调用方以 indicatorColor 传入
     val unselectedColor = MaterialTheme.colorScheme.onSurfaceVariant
-    // 站名排版：与 material3 `Text(text, fontSize = 16.sp)` 等价的样式 —— 基础来自主题下发的
+    // 站名排版：与 material3 `Text(text, fontSize = …)` 等价的样式 —— 基础来自主题下发的
     // LocalTextStyle（MaterialTheme 里 `ProvideTextStyle(typography.bodyLarge)`），仅覆盖字号。
     // BasicText 不读 LocalTextStyle，必须显式传入，否则字重/行高/字距会退回 TextStyle.Default。
-    val tabTextStyle = LocalTextStyle.current.merge(TextStyle(fontSize = 16.sp))
+    // 字号可被调用方覆盖（siteNameFontSize，默认 16sp = 首页/分类页现状）。
+    val tabTextStyle = LocalTextStyle.current.merge(TextStyle(fontSize = siteNameFontSize ?: 16.sp))
 
     Row(
         modifier = modifier
@@ -203,7 +223,7 @@ fun SiteTabRow(
         // 标签滚动区占剩余宽度（居中在「可用区」内进行，不含行尾固定槽，
         // 语义对齐 Dart AppBar 的 title 区不包含 actions）
         BoxWithConstraints(modifier = Modifier.weight(1f)) {
-            val edgePadding = rememberCenteredEdgePadding(sites, maxWidth, tabTextStyle)
+            val edgePadding = rememberCenteredEdgePadding(sites, maxWidth, tabTextStyle, showLogo)
             ScrollableTabRow(
                 selectedTabIndex = selectedIndex,
                 modifier = Modifier.fillMaxWidth(),
@@ -271,12 +291,16 @@ fun SiteTabRow(
                             .padding(horizontal = TabContentPadding, vertical = 12.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        Image(
-                            painter = painterResource(site.logoRes),
-                            contentDescription = site.name,
-                            modifier = Modifier.size(TabLogoSize),
-                        )
-                        Spacer(modifier = Modifier.width(TabLogoGap))
+                        // 平台 logo 可关（showLogo = false：搜索页保持纯文字 Tab）：
+                        // 关时不渲染 logo 与间距，其余（clickable / padding / 站名绘制期取色）不动
+                        if (showLogo) {
+                            Image(
+                                painter = painterResource(site.logoRes),
+                                contentDescription = site.name,
+                                modifier = Modifier.size(TabLogoSize),
+                            )
+                            Spacer(modifier = Modifier.width(TabLogoGap))
+                        }
                         BasicText(
                             text = site.name,
                             style = tabTextStyle,
@@ -316,7 +340,8 @@ fun SiteTabRow(
 }
 
 /**
- * 站点横向分页器 —— 标签行 + 分页器 + 「跳过中间页」两页过渡 + 底栏重按联动。
+ * 站点横向分页器 —— 标签行 + 分页器 + 「跳过中间页」两页过渡 + 底栏重按联动
+ * （首页 / 分类页 / 搜索页共用）。
  *
  * 背景（为什么需要它）：点 Tab 走 `animateScrollToPage` 时滚动位置连续穿过中间页，
  * `HorizontalPager` 会依次组合与视口相交的页 —— 从 B 站切到抖音会把斗鱼/虎牙的卡片
@@ -339,11 +364,24 @@ fun SiteTabRow(
  * @param sites 站点列表
  * @param gridStates 各站点网格滚动状态（键 = 站点 id，由壳层持有）
  * @param indicatorColor 指示条/选中色
- * @param bottomNavTabIndex 本页在底栏中的下标（底栏「重按当前 Tab」事件的载荷即此下标：
- *   首页 = 0 / 分类页 = 2）
  * @param onRefreshSite 底栏重按且当前站点列表已回顶时的刷新回调（页面侧传
  *   `controller.xxxListControllers[site.id]?.refreshData()`）
- * @param pageContent 单页内容（首页传 PagedRoomGrid / 分类页传分类网格）
+ * @param pageContent 单页内容（首页传 PagedRoomGrid / 分类页传分类网格 / 搜索页传结果网格）
+ * @param bottomNavTabIndex 本页在底栏中的下标（底栏「重按当前 Tab」事件的载荷即此下标：
+ *   首页 = 0 / 分类页 = 2）；传 `null` = 本页不属底栏（搜索是路由），**不注册**该监听
+ * @param showLogo 站点 Tab 是否渲染平台 logo（默认 true = 首页/分类页既有观感；
+ *   搜索页传 false = 保持纯文字 Tab），透传给 [SiteTabRow]
+ * @param siteNameFontSize 站名字号（null = 16sp 现状；搜索页传 14.sp 保持原字号），
+ *   透传给 [SiteTabRow]
+ * @param onSiteChanged 逻辑选中站点变化时的回调（滑动落位回写 / 相邻点击 / 跨页点击 /
+ *   首次组合同步四条路径都发射，见下）。搜索页据此回写
+ *   `AppSearchController.setTabIndex` —— 沿用其「有关键词且该站点结果为空则自动补拉」语义；
+ *   默认 null = 无回调（首页/分类页行为不变）
+ * @param initialSiteIndex 无已保存状态时的初始选中站点（默认 0 = 首页/分类页既有行为）。
+ *   搜索页传 `AppSearchController.index`：页面层不再自持站点下标（改由本组件持有），
+ *   若不给初值，重新进入搜索路由时会把选中平台拉回第 0 个 —— 与 ui-compose.md 条目 32 第 2 点
+ *   「站点 Tab 下标要以存活控制器为准」冲突。**仅在无 saveable 恢复值时生效**：
+ *   自直播间返回（back stack 保留的 saveable state）仍按恢复值。
  * @param trailing 透传给 [SiteTabRow] 的行尾槽
  */
 @Composable
@@ -351,19 +389,32 @@ fun SitePagerTabs(
     sites: List<Site>,
     gridStates: Map<String, LazyGridState>,
     indicatorColor: Color,
-    bottomNavTabIndex: Int,
     onRefreshSite: (Site) -> Unit,
     pageContent: @Composable (site: Site, gridState: LazyGridState) -> Unit,
     modifier: Modifier = Modifier,
+    bottomNavTabIndex: Int? = null,
+    showLogo: Boolean = true,
+    siteNameFontSize: TextUnit? = null,
+    onSiteChanged: ((Int) -> Unit)? = null,
+    initialSiteIndex: Int = 0,
     trailing: (@Composable RowScope.() -> Unit)? = null,
 ) {
     val lastIndex = sites.lastIndex.coerceAtLeast(0)
 
     // 当前站点 Tab（rememberSaveable：进程重建/底栏 Tab 切换回来后恢复选中态，亦作 pager 的
     // initialPage 兜底）。点击（含两页过渡）与滑动两条路径分别即时置位 / 落位回写。
-    var selectedSiteIndex by rememberSaveable { mutableIntStateOf(0) }
+    // 初值取 initialSiteIndex（默认 0）—— 见该参数注释：搜索页必须传控制器下标。
+    var selectedSiteIndex by rememberSaveable { mutableIntStateOf(initialSiteIndex) }
     // 越界保护：设置里站点排序变化导致索引失效时回落到第一个站点
     val siteIndex = selectedSiteIndex.coerceIn(0, lastIndex)
+
+    // 选中站点变化通知（可选回调，搜索页据此回写 controller.setTabIndex）。
+    // `in sites.indices` 兜底越界：回写路径的下标来自 pagerState，站点列表变化瞬间理论上可能越界。
+    // 发射点共三处，覆盖四条路径：① onSelect 相邻站点分支、② onSelect 跨多页分支（点击路径）、
+    // ③ LaunchedEffect(pagerState.currentPage) 的落位回写（滑动/相邻动画落位 + 首次组合初始同步）。
+    val notifySite: (Int) -> Unit = { index ->
+        if (index in sites.indices) onSiteChanged?.invoke(index)
+    }
 
     // 横向翻页器（foundation 1.7 stable API）：站点页左右滑动切换；
     // 默认不预组合邻页（beyondViewportPageCount=0），滑动中邻页被组合时其内部
@@ -411,28 +462,34 @@ fun SitePagerTabs(
     // 滚动状态与选中站点都由本组件持有，故监听从两个页面收敛到此处（原 HomeScreen/CategoryScreen
     // 各有一份逐行同构的 DisposableEffect）。
     DisposableEffect(bottomNavTabIndex, sites) {
-        val job = EventBus.listen<Int>(EventBus.kBottomNavigationBarClicked) { index ->
-            if (index == bottomNavTabIndex) {
-                // 注意读**逻辑选中**站点（selectedSiteIndex）而不是 pagerState.currentPage：
-                // 后者是延迟落位的（280ms 跨页过渡期间仍停在源页），用它会在「点跨页 Tab 后立刻
-                // 双击底栏」时刷新到**源站点**。selectedSiteIndex 由 rememberSaveable 持有
-                // （remember 出来的稳定实例），闭包每次执行都读到最新值，不能用每次重组重算的局部变量。
-                val current = selectedSiteIndex.coerceIn(0, sites.lastIndex.coerceAtLeast(0))
-                val site = sites[current]
-                val gridState = gridStates[site.id]
-                if (gridState != null) {
-                    val scrolled =
-                        gridState.firstVisibleItemIndex > 0 || gridState.firstVisibleItemScrollOffset > 0
-                    if (scrolled) {
-                        // 对齐 Dart scrollController.animateTo(0, 200ms)
-                        coroutineScope.launch { gridState.animateScrollToItem(0) }
-                    } else {
-                        onRefreshSite(site)
+        // 非底栏页面（搜索页）传 null：本页不属底栏，没有「重按当前 Tab」语义，不注册监听
+        val tabIndex = bottomNavTabIndex
+        if (tabIndex == null) {
+            onDispose { }
+        } else {
+            val job = EventBus.listen<Int>(EventBus.kBottomNavigationBarClicked) { index ->
+                if (index == tabIndex) {
+                    // 注意读**逻辑选中**站点（selectedSiteIndex）而不是 pagerState.currentPage：
+                    // 后者是延迟落位的（280ms 跨页过渡期间仍停在源页），用它会在「点跨页 Tab 后立刻
+                    // 双击底栏」时刷新到**源站点**。selectedSiteIndex 由 rememberSaveable 持有
+                    // （remember 出来的稳定实例），闭包每次执行都读到最新值，不能用每次重组重算的局部变量。
+                    val current = selectedSiteIndex.coerceIn(0, sites.lastIndex.coerceAtLeast(0))
+                    val site = sites[current]
+                    val gridState = gridStates[site.id]
+                    if (gridState != null) {
+                        val scrolled =
+                            gridState.firstVisibleItemIndex > 0 || gridState.firstVisibleItemScrollOffset > 0
+                        if (scrolled) {
+                            // 对齐 Dart scrollController.animateTo(0, 200ms)
+                            coroutineScope.launch { gridState.animateScrollToItem(0) }
+                        } else {
+                            onRefreshSite(site)
+                        }
                     }
                 }
             }
+            onDispose { job.cancel() }
         }
-        onDispose { job.cancel() }
     }
 
     // 过渡驱动：起跳对象即动画载体。
@@ -471,6 +528,20 @@ fun SitePagerTabs(
         }
     }
 
+    // 回写调用方只在**落位**时进行（不是跨过中线就回写）。
+    // 搜索页的 onSiteChanged → setTabIndex 是「有关键词且该站点结果为空则补拉」的**唯一**入口
+    // （该页 autoFirstLoad = false）：若跟着 currentPage 走，一次跨多站的快速滑动会把途经站点
+    // 逐个触发搜索请求与 lastSearchSiteId 写入。settledPage 在手势/滚动动画进行中停在源页，
+    // 落位才更新 ⇒ 途经站点不再被请求（与「点 Tab 才加载」的改动前语义一致）。
+    // 点击路径（相邻 / 跨多页）已在 onSelect 内即时回写，这里是幂等重复（setTabIndex 同值早退）。
+    // 首次组合也走这里：settledPage == 初始页 ⇒ 把调用方的选中态对齐到 Pager 实际页，
+    // 解决「进程重建后 pager 恢复页 ≠ 调用方 index」的失配。
+    LaunchedEffect(pagerState.settledPage) {
+        if (jump == null && animateScrollJob?.isActive != true) {
+            notifySite(pagerState.settledPage)
+        }
+    }
+
     // 失步自愈守卫：280ms 过渡中途离开组合（进搜索页 / 切底栏 —— selectedSiteIndex 是
     // rememberSaveable、pagerState 的 Saver 存的是**尚未落位**的源页）再返回，或过渡中途双击底栏，
     // 都会留下「逻辑选中站点 ≠ Pager 页码」。空闲态（无过渡、无进行中滚动）下以逻辑选中站点为准拉回。
@@ -499,6 +570,8 @@ fun SitePagerTabs(
                 // 先取消上一次相邻点击的滚动，再置选中态并起新动画
                 animateScrollJob?.cancel()
                 selectedSiteIndex = index
+                // 点击路径也要通知：滑动路径由落位回写发射，这里不能漏（否则点击切站不回写调用方）
+                notifySite(index)
                 animateScrollJob = coroutineScope.launch {
                     // 显式曲线：与跨页过渡（下方 PagerJump）及全局路由转场同为
                     // tween(280, FastOutSlowInEasing)（默认是 spring(StiffnessMediumLow)，
@@ -522,6 +595,9 @@ fun SitePagerTabs(
                 // 站名颜色与指示条不再「即切」：两者都由连续页位置插值跟随，
                 // 过渡期 pos 从源页连续走到目标页，站名按离 pos 的距离交叉淡化。
                 selectedSiteIndex = index
+                // 跨页过渡期间 currentPage 仍停在源页（落位回写被 jump 守卫挡住），
+                // 故目标站点必须在这里通知调用方
+                notifySite(index)
             }
         }
     }
@@ -546,6 +622,8 @@ fun SitePagerTabs(
                 },
                 indicatorColor = indicatorColor,
                 onSelect = onSelect,
+                showLogo = showLogo,
+                siteNameFontSize = siteNameFontSize,
                 trailing = trailing,
             )
 
@@ -641,7 +719,8 @@ fun SitePagerTabs(
  * （下限 [TabMinWidth]），从 `edgePadding` 起依次左排，容器为 `CenterStart` 对齐 ——
  * **装得下也不会居中**，居中只能由调用方给出「能让内容居中的 edgePadding」。
  *
- * 总宽 = Σ max(TabMinWidth, logo + 间距 + 文字宽 + 左右内边距)。
+ * 总宽 = Σ max(TabMinWidth, logo + 间距 + 文字宽 + 左右内边距)；
+ * 纯文字 Tab（`showLogo = false`，搜索页）不计 logo 与间距那一项。
  * 文字度量必须与真实站名同款 style：站名 `BasicText` 只覆盖了 `fontSize`，其余属性
  * （含 `letterSpacing`）来自 MaterialTheme 下发的 `LocalTextStyle`（= bodyLarge），
  * 直接量默认 style 会偏窄 → 居中偏移。故直接由调用方传入**渲染时用的同一个**
@@ -658,14 +737,17 @@ private fun rememberCenteredEdgePadding(
     sites: List<Site>,
     available: Dp,
     textStyle: TextStyle,
+    showLogo: Boolean,
 ): Dp {
     val measurer = rememberTextMeasurer()
     val density = LocalDensity.current
-    val totalWidthPx = remember(sites, textStyle, density, measurer) {
+    // remember 的 keys 必须含 showLogo：logo 宽度计入与否会改变总宽（漏传 ⇒ 纯文字 Tab 居中偏移）
+    val totalWidthPx = remember(sites, textStyle, showLogo, density, measurer) {
         with(density) {
             val minTabWidthPx = TabMinWidth.roundToPx()
             val fixedChromePx =
-                TabLogoSize.roundToPx() + TabLogoGap.roundToPx() + TabContentPadding.roundToPx() * 2
+                (if (showLogo) TabLogoSize.roundToPx() + TabLogoGap.roundToPx() else 0) +
+                    TabContentPadding.roundToPx() * 2
             sites.sumOf { site ->
                 val textWidthPx = measurer.measure(site.name, style = textStyle).size.width
                 maxOf(minTabWidthPx, fixedChromePx + textWidthPx)
