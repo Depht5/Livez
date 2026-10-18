@@ -37,6 +37,7 @@ import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
@@ -614,7 +615,14 @@ fun DanmuShieldSheet(onDismiss: () -> Unit) {
         }
     }
 
-    ModalBottomSheet(onDismissRequest = onDismiss) {
+    // `skipPartiallyExpanded = true`：本 Sheet 内含输入框，软键盘弹出会把可用高度压小，
+    // 而默认值（false）在「内容高度 > 可用高度 / 2」时会把锚点回退到半展开（PartiallyExpanded），
+    // 把下半部分（输入栏与芯片区）推到键盘后方；屏蔽词一多必然命中。直接全展开与键盘共存即可。
+    // material3 1.3.2 的 ModalBottomSheet 根容器已自带 imePadding()，故不在此重复加 IME 内边距。
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+    ) {
         Column(modifier = Modifier.padding(start = 20.dp, end = 20.dp, bottom = 24.dp)) {
             SheetTitle(text = "弹幕屏蔽")
             SheetSwitchRow(label = "启用弹幕屏蔽", checked = shieldEnable) {

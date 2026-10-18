@@ -288,6 +288,11 @@ class LiveRoomController(
                 _errorMsg.value = ""
                 _error.value = null
                 errorStackTrace = null
+                // 贡献榜状态同属「新会话复位」：本入口由 create/refreshRoom/resetRoom 共用，
+                // 必须回到「尚未开始请求」（loading=false / fetched=false），再由随后的
+                // `fetchContributionRank()` 推进到「请求中 → 已结束」。UI 正是靠 fetched=false
+                // 显示转圈，否则首帧会先闪一下「暂无贡献榜数据」。
+                clearContributionRankState()
                 cancelRoomBoundJobs()
                 // 先摘除所有权再 stop，防止另一轮 load 将迟到的旧实例当成当前实例。
                 liveDanmaku?.also {
@@ -373,6 +378,10 @@ class LiveRoomController(
         val oldId = roomId
         val resolvedRoomId = loadedDetail.roomId
         _rxRoomId.value = resolvedRoomId
+        // 关注项主键已从 oldId 迁到 resolvedRoomId，currentRoom 必须同步：它是 UI 关注列表
+        // 比对 `${siteId}_${roomId}` 判定「当前房间」（高亮 / 置顶）的唯一依据，不同步就会
+        // 匹配不到纠偏后的房间。Dart 上游同样不重设 setRoom，故这是 Kotlin 侧有意分叉。
+        currentRoom.setRoom(targetSite.liveSite, resolvedRoomId)
         if (_followed.value) {
             dbService.deleteFollow("${targetSite.id}_$oldId")
             dbService.addFollow(
@@ -1375,6 +1384,9 @@ class LiveRoomController(
                 if (isCurrentLoad(loadGeneration)) {
                     Log.logPrint(e)
                     _contributionRankLoading.value = false
+                    // 请求已结束（无论成败）：必须一并置 fetched，让 UI 从「转圈」落到空态。
+                    // 只清 loading 的话，UI 的 `!fetched && !loadError` 会在接口异常时永久转圈。
+                    _contributionRankFetched.value = true
                 }
             }
         }

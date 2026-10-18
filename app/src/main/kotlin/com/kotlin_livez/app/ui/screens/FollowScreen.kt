@@ -66,6 +66,7 @@ import com.kotlin_livez.app.modules.follow_user.FollowUserController
 import com.kotlin_livez.app.services.FollowService
 import com.kotlin_livez.app.ui.Router
 import com.kotlin_livez.app.ui.components.CompactSearchBar
+import com.kotlin_livez.app.ui.components.EmptyHint
 import com.kotlin_livez.app.ui.components.NetImage
 import com.kotlin_livez.app.ui.nav.liveRoomContainerSharedElement
 import com.kotlin_livez.app.ui.nav.liveRoomCoverSharedElement
@@ -570,21 +571,5 @@ private fun FollowItemCard(
                 modifier = Modifier.fillMaxWidth(),
             )
         }
-    }
-}
-
-/**
- * 居中空态提示 —— 文案风格对齐仓库既有空态（直播间 `EmptyTabHint` 的 13sp
- * onSurfaceVariant 居中、PagedRoomGrid 的「暂无…」措辞）；不可点击，故不影响
- * 其下网格区域的下拉刷新手势。
- */
-@Composable
-private fun EmptyHint(text: String) {
-    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-        Text(
-            text = text,
-            fontSize = 13.sp,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
     }
 }

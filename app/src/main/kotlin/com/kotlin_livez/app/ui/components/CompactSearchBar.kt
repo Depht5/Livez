@@ -4,7 +4,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
@@ -33,9 +33,14 @@ import com.kotlin_livez.app.ui.theme.CustomIcons
  *
  * 由搜索页与关注页**共用一份实现**（不要在两处各写一份）：
  * 标准 `TextField`/`OutlinedTextField` 的 56dp 最低高度会撑高顶栏并把文字上下裁切，
- * 这里改为 `BasicTextField` + 自绘胶囊容器——固定 38dp 高、`RoundedCornerShape(19.dp)`、
+ * 这里改为 `BasicTextField` + 自绘胶囊容器——最小 38dp 高、`RoundedCornerShape(19.dp)`、
  * `surfaceContainerHigh` 填充、无外边框；左侧 [CustomIcons.Search] 18dp 图标 +
- * 中间单行输入与占位符 + 输入非空时右侧的 [CustomIcons.Close] 一键清空按钮。
+ * 中间单行输入与占位符 + 输入非空时右侧的 [CustomIcons.Close] 一键清空按钮（36dp 触控热区）。
+ *
+ * 高度用 `heightIn(min = 38.dp)` 而非定高：默认字号下内容最高 36dp（清空按钮）< 38dp，
+ * 胶囊仍是精确 38dp、不撑高顶栏；系统大字号下 14sp 的单行行高（含 fontPadding ≈ 1.3~1.45×字号）
+ * 会先接近、再超过 38dp（推算交叉点约在 `fontScale` ≳ 2.0，未真机实测），此后胶囊自适应上浮，
+ * 宁可变高也不把文字上下裁掉。代价：高度超过 38dp 时 `RoundedCornerShape(19.dp)` 不再是严格胶囊形。
  *
  * 多参数组件——**调用处一律具名传参**，不用 trailing lambda（ui-compose.md gotcha 2）。
  *
@@ -55,11 +60,13 @@ fun CompactSearchBar(
 ) {
     Row(
         modifier = modifier
-            .height(38.dp)
+            .heightIn(min = 38.dp)
             // 先 clip 再 background/clickable 的同一口径：胶囊底色被圆角裁剪
             .clip(RoundedCornerShape(19.dp))
             .background(MaterialTheme.colorScheme.surfaceContainerHigh)
-            .padding(horizontal = 12.dp),
+            // 右内边距只留 4dp：清空按钮自带 36dp 触控区，视觉边距由它贡献（见下方按钮），
+            // 无按钮时输入框自身的 8dp 内边距仍让文字距右缘 12dp。
+            .padding(start = 12.dp, end = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Icon(
@@ -98,10 +105,12 @@ fun CompactSearchBar(
             },
         )
         if (value.isNotEmpty()) {
-            // 清空按钮：24dp 圆形触控区（图标 16dp）；圆形裁剪让水波纹不外溢
+            // 清空按钮：36dp 圆形触控区（图标仍 16dp）；圆形裁剪让水波纹不外溢。
+            // 36dp 而非贴合图标的 24dp —— 触控热区吃满胶囊高度，默认字号下 36dp < 最小 38dp
+            // 不撑高胶囊，大字号下也仍是可点尺寸。
             Box(
                 modifier = Modifier
-                    .size(24.dp)
+                    .size(36.dp)
                     .clip(CircleShape)
                     .clickable { onValueChange("") },
                 contentAlignment = Alignment.Center,

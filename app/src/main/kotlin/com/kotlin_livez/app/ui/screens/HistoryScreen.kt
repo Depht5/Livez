@@ -34,7 +34,6 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -45,6 +44,7 @@ import com.kotlin_livez.app.di.ServiceContainer
 import com.kotlin_livez.app.models.History
 import com.kotlin_livez.app.modules.mine.history.HistoryController
 import com.kotlin_livez.app.ui.Router
+import com.kotlin_livez.app.ui.components.EmptyHint
 import com.kotlin_livez.app.ui.components.NetImage
 import com.kotlin_livez.app.ui.theme.CustomIcons
 import kotlinx.coroutines.launch
@@ -275,21 +275,5 @@ private fun HistoryItemRow(
                 overflow = TextOverflow.Ellipsis,
             )
         }
-    }
-}
-
-/**
- * 居中空态提示 —— 文案风格对齐仓库既有空态（直播间 `EmptyTabHint` 的 13sp
- * onSurfaceVariant 居中、PagedRoomGrid 的「暂无…」措辞）。
- */
-@Composable
-private fun EmptyHint(text: String) {
-    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-        Text(
-            text = text,
-            fontSize = 13.sp,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            textAlign = TextAlign.Center,
-        )
     }
 }

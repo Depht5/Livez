@@ -121,6 +121,7 @@ import com.kotlin_livez.app.ui.components.DanmuSettingsRows
 import com.kotlin_livez.app.ui.components.DanmuSettingsSheet
 import com.kotlin_livez.app.ui.components.DanmuSettingsSidePanel
 import com.kotlin_livez.app.ui.components.DanmuShieldSheet
+import com.kotlin_livez.app.ui.components.EmptyHint
 import com.kotlin_livez.app.ui.components.LineDialog
 import com.kotlin_livez.app.ui.components.LiveSettingsRows
 import com.kotlin_livez.app.ui.components.LiveSettingsSheet
@@ -486,11 +487,16 @@ fun LiveRoomScreen(
     val messages by controller.messages.collectAsStateWithLifecycle()
     val superChats by controller.superChats.collectAsStateWithLifecycle()
     val contributionUsers by controller.contributionRankUsers.collectAsStateWithLifecycle()
-    // 贡献榜加载态（task 10-17-ui-material3-details-and-redesign）：「加载中」先于「空列表」
+    // 贡献榜三态（task 10-18-ui-closure-leftovers-fixes-and-decisions）：「加载中」先于「空列表」
     // 判定，避免在途请求期间显示「暂无贡献榜数据」。
-    // 注意它盖不住**首帧**：`fetchContributionRank` 在详情到位后才启动，此前 loading 仍是
-    // false（控制器侧既有口径，本任务未改），故刚进房切到贡献榜仍可能先闪一下空态。
+    // 但 loading 单独盖不住**首帧**：`fetchContributionRank` 在详情到位后才启动，此前 loading
+    // 仍是 false。故再订阅 fetched（请求是否已结束），二者合用即覆盖「尚未开始请求 → 请求中」全段；
+    // 详情本身报错时不转圈（页面已有错误层），直接落空态。
     val contributionRankLoading by controller.contributionRankLoading.collectAsStateWithLifecycle()
+    val contributionRankFetched by controller.contributionRankFetched.collectAsStateWithLifecycle()
+    // 贡献榜开关（设置页「贡献榜」）：关闭时连 Tab 一并隐藏，对齐 Dart 上游
+    //（live_room_page.dart 开关关闭即不添加 contribution_rank 标签页）。
+    val contributionRankEnable by ServiceContainer.appSettings.contributionRankEnable.collectAsStateWithLifecycle()
     val qualites by controller.qualites.collectAsStateWithLifecycle()
     val qualityName by controller.currentQualityInfo.collectAsStateWithLifecycle()
     val lineName by controller.currentLineInfo.collectAsStateWithLifecycle()
@@ -532,15 +538,24 @@ fun LiveRoomScreen(
     /* ---------- 视频区覆盖层互斥（错误层 / 加载转圈 / 未开播）---------- */
 
     // 错误态 = 加载失败或断流文案非空；**刷新中不显示**（重试已按下，此刻应显示转圈）。
-    // 错误层与另两个覆盖层**同一居中位置**，故错误层必须与它们互斥：
+    // 三个覆盖层共用**同一居中位置**，故三个**条件**必须两两互斥——同帧至多一个条件成立
+    //（注意：条件互斥 ≠ 画面上同帧只有一个可见，见下方「退场窗口」）：
     //   ① 错误层 `showRoomError`（本文件 roomVideo 内新增）；
-    //   ② 加载转圈：`(detail == null || refreshing) && !showRoomError`（:1057）；
-    //   ③ 「未开播」覆盖层：`!liveStatus && !showRoomError`（:1046，加载失败时无法断言未开播）。
-    // 注意 ② 与 ③ 之间**并不互斥**（本任务未改）：`!liveStatus` 且 `detail == null || refreshing`
-    // 时两者同帧可见（例：刷新一个已下播的房间），旧写法同样如此。
-    // 即「同帧最多一个可见」只对**错误层 vs ②③** 成立。
-    // 与旧写法（转圈 `(detail == null || refreshing) && !loadError`）的关系：`!refreshing`
-    // 时等效（`loadError` 恒被 `showRoomError` 覆盖）；额外修掉两处旧行为的空档：
+    //   ② 加载转圈：`(detail == null || refreshing) && !showRoomError`（:1079）；
+    //   ③ 「未开播」覆盖层：`!liveStatus && detail != null && !refreshing && !showRoomError`
+    //      （:1068，加载失败时无法断言「未开播」，详情未就绪或刷新中让位给 ②）。
+    // ① 与 ②③：②③ 条件里都带 `!showRoomError`，与 ① 由构造保证互斥（旧写法即如此）。
+    // ② 与 ③ 由 `detail != null && !refreshing` 分工：详情未就绪或刷新中只有 ② 成立，
+    // 详情就绪且不在刷新中才轮到 ③，故两个条件不可能同帧成立。
+    //（task 10-18-ui-closure-leftovers-fixes-and-decisions 收紧 ③：旧写法只看 `!liveStatus`，
+    //  与 ② 不互斥——首次进房或刷新已下播房间时白字会压在转圈上。）
+    // **退场窗口**：① 与 ② 都是 `AnimatedVisibility(exit = fadeOut(200ms))`，条件转假后内容仍会被
+    // 组合并绘制 200ms，而 ③ 是无动画裸 `if`（立即出现）。故「刷新一个已下播房间」与「点错误卡重试」
+    // 这两种序列下，先出现的覆盖层在淡出期会与新出现者短暂叠印——这是淡出动画的固有代价，
+    // 不为它改动画（此处只保证条件层互斥）。
+    // 与旧写法（转圈 `(detail == null || refreshing) && !loadError`）的关系：在 `loadError` 这一个
+    // 维度上等效（`loadError` 恒被 `showRoomError` 覆盖）；`errorMsg` 维度不同，见下两行。
+    // 额外修掉两处旧行为的空档：
     // ① 仅 `errorMsg` 非空时旧写法会与错误层同时渲染；② `refreshing && loadError` 时
     // 旧写法两者都不显示（一片空白），现由转圈兜住。
     val roomHasError = loadError || errorMsg.isNotEmpty()
@@ -834,9 +849,17 @@ fun LiveRoomScreen(
 
     /* ---------- 标签集合（无条件声明：进出全屏不丢选中态与聊天滚动位置）---------- */
 
-    val tabs = remember(siteId) { buildTabEntries(siteId) }
+    val tabs = remember(siteId, contributionRankEnable) { buildTabEntries(siteId, contributionRankEnable) }
     var selectedTabIndex by rememberSaveable { mutableIntStateOf(0) }
-    val selectedKey = tabs.getOrNull(selectedTabIndex)?.key
+    // Tab 数量随贡献榜开关动态变化（关闭即少一项），下标必须夹取后再交给 TabRow/指示器/选中判定：
+    // 用户可能正停在最后一项（设置）时把开关关掉，selectedTabIndex 会越界。
+    // `lastIndex` 在空列表时为 -1，而 coerceIn(0, -1) 会抛异常，故 coerceAtLeast(0) 兜底
+    //（buildTabEntries 恒含聊天/关注/设置，空列表实际不会出现）。
+    val safeTabIndex = selectedTabIndex.coerceIn(0, tabs.lastIndex.coerceAtLeast(0))
+    // 内容分支同样用夹取后的下标：否则 selectedTabIndex 越界时 selectedKey 为 null，
+    // 下面的 `when (selectedKey)` **没有 else 分支** ⇒ 指示器/高亮落在最后一项、
+    // 内容区却整片空白。夹取后内容与高亮始终指向同一个 Tab。
+    val selectedKey = tabs.getOrNull(safeTabIndex)?.key
     // 聊天列表滚动状态提升到页面级：切走再切回聊天 Tab 位置不丢（对齐原 RecyclerView 复用）
     val chatListState = rememberLazyListState()
 
@@ -1046,9 +1069,12 @@ fun LiveRoomScreen(
                 factory = { danmakuOverlay },
                 modifier = Modifier.fillMaxSize(),
             )
-            // 未开播覆盖层：白字居中（对应原 unliveOverlay）；错误层显示时让位
-            //（两者同处居中位置会互相压字，且加载失败时无法断言「未开播」）
-            if (!liveStatus && !showRoomError) {
+            // 未开播覆盖层：白字居中（对应原 unliveOverlay）。与另两个居中覆盖层严格互斥——
+            // 详情未就绪（detail == null）或刷新中让位给转圈（同处居中位置会互相压字），
+            // 错误层显示时让位，且加载失败时本就无法断言「未开播」。
+            //（task 10-18-ui-closure-leftovers-fixes-and-decisions：收紧前只看 `!liveStatus`，
+            //  首次进房/刷新已下播房间时会与转圈同帧叠印。）
+            if (!liveStatus && detail != null && !refreshing && !showRoomError) {
                 Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     Text(text = "未开播", fontSize = 16.sp, color = Color.White)
                 }
@@ -1306,14 +1332,15 @@ fun LiveRoomScreen(
     /** 标签栏 + 内容区片段：weight 需要 Column 作用域，故声明为 ColumnScope 扩展，
      *  由调用处的 Column 提供（宽屏右列 / 窄屏根列均满足）。 */
     val roomTabsAndContent: @Composable ColumnScope.() -> Unit = {
+        // 一律用夹取过的 safeTabIndex（Tab 数量随贡献榜开关变化，见声明处注释）
         TabRow(
-            selectedTabIndex = selectedTabIndex,
+            selectedTabIndex = safeTabIndex,
             containerColor = MaterialTheme.colorScheme.surface,
             contentColor = MaterialTheme.colorScheme.secondary,
             indicator = { tabPositions ->
                 Box(
                     modifier = Modifier
-                        .tabIndicatorOffset(tabPositions[selectedTabIndex])
+                        .tabIndicatorOffset(tabPositions[safeTabIndex])
                         .height(2.dp)
                         .background(MaterialTheme.colorScheme.secondary),
                 )
@@ -1321,14 +1348,14 @@ fun LiveRoomScreen(
         ) {
             tabs.forEachIndexed { index, tab ->
                 Tab(
-                    selected = selectedTabIndex == index,
+                    selected = safeTabIndex == index,
                     onClick = { selectedTabIndex = index },
                     text = {
                         Text(
                             text = tab.label,
                             fontSize = 14.sp,
                             // 选中蓝 / 未选中灰（对齐原 setTabTextColors）
-                            color = if (selectedTabIndex == index) MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.onSurfaceVariant,
+                            color = if (safeTabIndex == index) MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     },
                 )
@@ -1372,7 +1399,10 @@ fun LiveRoomScreen(
                 )
                 TAB_KEY_CONTRIBUTION_RANK -> ContributionRankTabContent(
                     items = contributionUsers,
-                    loading = contributionRankLoading,
+                    // 三态：请求中，或「尚未开始请求且详情没报错」→ 转圈；其余（请求已结束、
+                    // 或详情失败）→ 「暂无贡献榜数据」。少了后一项首帧会闪空态，少了 !loadError
+                    // 则详情失败时会永远转圈。
+                    loading = contributionRankLoading || (!contributionRankFetched && !loadError),
                 )
                 TAB_KEY_SETTINGS -> SettingsTabContent(
                     controller = controller,
@@ -1684,9 +1714,13 @@ private data class RoomTab(val key: String, val label: String)
 
 /**
  * 标签集合：聊天 / SC（仅 bilibili 叫「SC」、huya 叫「头条」）/ 关注 /
- * 贡献榜（douyu 叫「亲密榜」）/ 设置——对照原 buildTabEntries 1:1。
+ * 贡献榜（douyu 叫「亲密榜」，受设置开关 gate）/ 设置——对照原 buildTabEntries 1:1。
+ *
+ * @param contributionRankEnable 设置页「贡献榜」开关：关闭时不加贡献榜标签页，
+ *        对齐 Dart 上游（live_room_page.dart 开关关闭即跳过该 Tab）。
+ *        注意 Tab 数量因此会动态变化，调用处的选中下标必须夹取（见 safeTabIndex）。
  */
-private fun buildTabEntries(siteId: String): List<RoomTab> {
+private fun buildTabEntries(siteId: String, contributionRankEnable: Boolean): List<RoomTab> {
     val tabs = mutableListOf<RoomTab>()
     tabs += RoomTab(TAB_KEY_CHAT, "聊天")
     when (siteId) {
@@ -1694,10 +1728,12 @@ private fun buildTabEntries(siteId: String): List<RoomTab> {
         Constant.kHuya -> tabs += RoomTab(TAB_KEY_SUPER_CHAT, "头条")
     }
     tabs += RoomTab(TAB_KEY_FOLLOW, "关注")
-    tabs += RoomTab(
-        TAB_KEY_CONTRIBUTION_RANK,
-        if (siteId == Constant.kDouyu) "亲密榜" else "贡献榜",
-    )
+    if (contributionRankEnable) {
+        tabs += RoomTab(
+            TAB_KEY_CONTRIBUTION_RANK,
+            if (siteId == Constant.kDouyu) "亲密榜" else "贡献榜",
+        )
+    }
     tabs += RoomTab(TAB_KEY_SETTINGS, "设置")
     return tabs
 }
@@ -1814,19 +1850,6 @@ private fun buildMessageText(item: LiveMessage) = buildAnnotatedString {
 
 /* ---------- SC / 头条 Tab：醒目留言列表 ---------- */
 
-/** 各 Tab 的空状态提示（居中、13sp 弱化色）——SC / 贡献榜共用的统一观感。 */
-@Composable
-private fun EmptyTabHint(text: String) {
-    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-        Text(
-            text = text,
-            fontSize = 13.sp,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            textAlign = TextAlign.Center,
-        )
-    }
-}
-
 /**
  * SC（醒目留言）列表 —— 对齐原 SuperChatAdapter，task 10-17-ui-material3-details-and-redesign
  * 升级为 M3 圆角卡片：头像 [LiveSuperChatMessage.face] + 用户名 + 醒目金额胶囊 + 正文，
@@ -1835,7 +1858,7 @@ private fun EmptyTabHint(text: String) {
 @Composable
 private fun SuperChatTabContent(items: List<LiveSuperChatMessage>) {
     if (items.isEmpty()) {
-        EmptyTabHint(text = "暂无醒目留言")
+        EmptyHint(text = "暂无醒目留言")
         return
     }
     LazyColumn(modifier = Modifier.fillMaxSize()) {
@@ -1908,8 +1931,10 @@ private val RankBronzeColor = Color(0xFFB87333)
  * 升级：接入 [LiveRoomController.contributionRankLoading] 加载态、空状态提示、
  * 圆形头像 [LiveContributionRankItem.avatar]、前三名金/银/铜圆形序号徽章。
  *
- * @param loading 榜单加载中（控制器 `contributionRankLoading`）——加载中优先于空态，
- *        否则首帧会把「尚未返回」误显示成「暂无数据」。
+ * @param loading 是否显示转圈——由调用处按控制器三态合成，即
+ *        `contributionRankLoading || (!contributionRankFetched && !loadError)`：
+ *        「请求中」与「尚未开始请求且详情没报错」都算加载中。加载中优先于空态，
+ *        否则首帧会把「尚未返回」误显示成「暂无数据」；请求一旦结束（含失败）即落空态。
  */
 @Composable
 private fun ContributionRankTabContent(items: List<LiveContributionRankItem>, loading: Boolean) {
@@ -1920,7 +1945,7 @@ private fun ContributionRankTabContent(items: List<LiveContributionRankItem>, lo
         return
     }
     if (items.isEmpty()) {
-        EmptyTabHint(text = "暂无贡献榜数据")
+        EmptyHint(text = "暂无贡献榜数据")
         return
     }
     LazyColumn(modifier = Modifier.fillMaxSize()) {
