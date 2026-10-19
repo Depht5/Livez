@@ -464,9 +464,11 @@ private fun MainNavigationRail(currentIndex: Int, onSelect: (Int) -> Unit) {
  * （Home / HeartOutline[关注与直播间关注按钮同源复用] / Category / Mine），**纯图标无文字**
  * （label 置空，用户决策）；选中 onSecondaryContainer / 未选中 onSurfaceVariant 显式着色
  * （不依赖 NavigationBarItem 的 LocalContentColor 内部实现）。
- * 高度：60 → 68dp（适配 24dp 图标 + label；tab 下移 4dp 保留）。
- * 总高度 = **68dp 内容 + 系统底部 inset（手势条 / 三键导航）**：inset 仍由 NavigationBar
- * 默认 windowInsets 消费；若把 68dp 当总高度，inset 会从内容区里扣掉、图标被压向手势条。
+ * 高度：60 → 68 → 64dp（内容区；tab 下移 4dp 保留）。内容区比 68dp 少 4dp，
+ * 因 NavigationBarItem 在内容区垂直居中 ⇒ 图标与**上沿**、与**底部 inset 上沿**的距离各减 2dp
+ * （需求方调整：既要离手势条远一点，又不想底栏显得过高）。
+ * 总高度 = **64dp 内容 + 系统底部 inset（手势条 / 三键导航）**：inset 仍由 NavigationBar
+ * 默认 windowInsets 消费；若把内容高度当总高度，inset 会从内容区里扣掉、图标被压向手势条。
  */
 @Composable
 private fun MainBottomBar(currentIndex: Int, onSelect: (Int) -> Unit) {
@@ -479,7 +481,7 @@ private fun MainBottomBar(currentIndex: Int, onSelect: (Int) -> Unit) {
     )
     val bottomInset = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
 
-    NavigationBar(modifier = Modifier.height(68.dp + bottomInset)) {
+    NavigationBar(modifier = Modifier.height(64.dp + bottomInset)) {
         titles.forEachIndexed { index, title ->
             val selected = currentIndex == index
             NavigationBarItem(
