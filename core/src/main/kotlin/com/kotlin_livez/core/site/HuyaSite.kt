@@ -46,6 +46,9 @@ import kotlin.math.max
 import kotlin.math.roundToInt
 import kotlin.random.Random
 
+/** 虎牙搜索单页条数（对应 Dart `huya_site.dart:589` 的 pageSize）。 */
+private const val HUYA_SEARCH_PAGE_SIZE = 20
+
 /**
  * 虎牙直播站点实现。
  * 对应 Dart `HuyaSite`（lib/src/huya_site.dart）。站点 id/name、冻结文案、请求参数保持不变；
@@ -458,13 +461,18 @@ class HuyaSite : LiveSite() {
                 "v" to 4,
                 "typ" to -5,
                 "livestate" to 0,
-                "rows" to 20,
-                "start" to (page - 1) * 20,
+                "rows" to page * HUYA_SEARCH_PAGE_SIZE,
+                "start" to 0,
             ),
         )
         val resp = result?.jsonObject?.get("response")?.jsonObject
         val docs = resp?.get("3")?.jsonObject?.get("docs")?.jsonArray ?: JsonArray(emptyList())
-        val items = docs.mapNotNull { item ->
+        // 虎牙搜索的 start 不是偏移量：start>0 时返回的是"前 start+rows 条"的累积结果
+        //（实测 rows=20&start=20 返回 40 条且页 1 的 20 条全部重复）。
+        // 故固定 start=0、用 rows 扩大累积窗口，再截取本页区间 —— 与 Dart 参考实现一致
+        //（simple_live_core/lib/src/huya_site.dart:581-607，含同一结论的注释）。
+        val pageDocs = docs.drop((page - 1) * HUYA_SEARCH_PAGE_SIZE)
+        val items = pageDocs.mapNotNull { item ->
             val obj = item.jsonObject
             var cover = obj["game_screenshot"].str()
             if (!cover.contains("?")) {
@@ -482,7 +490,9 @@ class HuyaSite : LiveSite() {
                 online = obj["game_total_count"].intv(),
             )
         }
-        val hasMore = resp?.get("3")?.jsonObject?.get("numFound").intv() > page * 20
+        // 判据未变（Dart `huya_site.dart:629-630`），只是把字面量 20 收敛到同一常量，
+        // 避免将来改页大小时漏改这里。
+        val hasMore = resp?.get("3")?.jsonObject?.get("numFound").intv() > page * HUYA_SEARCH_PAGE_SIZE
         return LiveSearchRoomResult(hasMore = hasMore, items = items)
     }
 
@@ -497,13 +507,15 @@ class HuyaSite : LiveSite() {
                 "v" to 1,
                 "typ" to -5,
                 "livestate" to 0,
-                "rows" to 20,
-                "start" to (page - 1) * 20,
+                "rows" to page * HUYA_SEARCH_PAGE_SIZE,
+                "start" to 0,
             ),
         )
         val resp = result?.jsonObject?.get("response")?.jsonObject
         val docs = resp?.get("1")?.jsonObject?.get("docs")?.jsonArray ?: JsonArray(emptyList())
-        val items = docs.map { item ->
+        // 主播搜索与直播间搜索同一分页语义（start 非偏移量），故同样截取本页区间。
+        val pageDocs = docs.drop((page - 1) * HUYA_SEARCH_PAGE_SIZE)
+        val items = pageDocs.map { item ->
             val obj = item.jsonObject
             LiveAnchorItem(
                 roomId = obj["room_id"].str(),
@@ -512,7 +524,7 @@ class HuyaSite : LiveSite() {
                 liveStatus = obj["gameLiveOn"].bool(),
             )
         }
-        val hasMore = resp?.get("1")?.jsonObject?.get("numFound").intv() > page * 20
+        val hasMore = resp?.get("1")?.jsonObject?.get("numFound").intv() > page * HUYA_SEARCH_PAGE_SIZE
         return LiveSearchAnchorResult(hasMore = hasMore, items = items)
     }
 

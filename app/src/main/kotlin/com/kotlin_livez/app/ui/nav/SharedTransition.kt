@@ -101,3 +101,34 @@ fun Modifier.liveRoomContainerSharedElement(siteId: String, roomId: String): Mod
         )
     }
 }
+
+/**
+ * 共享元素 key 唯一性守卫：返回**不允许挂共享元素**的列表下标。
+ *
+ * 判定为禁止的情形：
+ * 1. `roomId` 为空 —— 所有空 id 会共享同一个 `live_cover_{site}_` key；
+ * 2. 同一 `roomId` 在同屏列表中**不是首次出现**。
+ *
+ * 根因（Compose animation 1.8.2）：`SharedElement.kt:59-76`
+ * `foundMatch = states.size > 1 && hasVisibleContent` —— 框架把「同 key 出现 ≥2 个
+ * 调用点」直接当作「两条路由匹配成立」。折叠后：非 target 的那份 `shouldRenderInPlace=false`
+ * 原位不再绘制（卡片空白）；`sharedBounds` 的所有同 key 节点被画进 root overlay
+ *（`SharedTransitionScope.kt:141-144`，可盖住顶部栏）；转场期所有同 key state 被一起
+ * 反复 retarget（`SharedElement.kt:87-99`）⇒ 动画拖长。
+ *
+ * 结论：共享元素 key 必须在**同屏同时组合**的范围内唯一。重复项退化为普通转场。
+ * @param roomIds 与网格 items 一一对应；`null` = 该条目没有共享元素（主播行等），不参与判定
+ */
+internal fun sharedElementBlockedIndexes(roomIds: List<String?>): Set<Int> {
+    val firstIndex = HashMap<String, Int>(roomIds.size)
+    val blocked = HashSet<Int>()
+    roomIds.forEachIndexed { index, roomId ->
+        if (roomId == null) return@forEachIndexed
+        if (roomId.isEmpty()) {
+            blocked += index
+        } else if (firstIndex.putIfAbsent(roomId, index) != null) {
+            blocked += index
+        }
+    }
+    return blocked
+}

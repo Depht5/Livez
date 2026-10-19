@@ -37,6 +37,7 @@ import com.kotlin_livez.app.ui.components.CompactSearchBar
 import com.kotlin_livez.app.ui.components.LiveRoomCard
 import com.kotlin_livez.app.ui.components.PagedRoomGridCore
 import com.kotlin_livez.app.ui.components.SitePagerTabs
+import com.kotlin_livez.app.ui.nav.sharedElementBlockedIndexes
 import com.kotlin_livez.app.ui.theme.CustomIcons
 import com.kotlin_livez.app.ui.theme.LiveIndicatorRed
 import com.kotlin_livez.core.model.LiveAnchorItem
@@ -177,6 +178,11 @@ fun SearchScreen(modifier: Modifier = Modifier) {
                     // 本页结果列表：仅 AnchorResultRow 的分隔线判据需要「本页」列表长度。
                     // 订阅放在 pageContent 内（各页订各页的控制器），页面层不再订阅「当前站点」。
                     val pageList = listController.list.collectAsStateWithLifecycle().value
+                    // 共享元素守卫：下标与 PagedRoomGridCore 内的 items 同源（同一条 StateFlow，同帧一致）。
+                    // 主播行（非 LiveRoomItem）映射为 null，不参与判定。
+                    val blockedIndexes = remember(pageList) {
+                        sharedElementBlockedIndexes(pageList.map { (it as? LiveRoomItem)?.roomId })
+                    }
                     PagedRoomGridCore(
                         listController = listController,
                         // 网格滚动状态由组件按站点持有（不再是 remember(listController){…}）
@@ -198,8 +204,9 @@ fun SearchScreen(modifier: Modifier = Modifier) {
                                             item = item,
                                             onClick = { openRoom(site, item.roomId) },
                                             modifier = Modifier.fillMaxSize(),
-                                            // 站点取自本页参数（不再是页面层按「当前站点」下标取）
-                                            sharedElementSiteId = site.id,
+                                            // 站点取自本页参数（不再是页面层按「当前站点」下标取）；
+                                            // 同屏重复/空 roomId 不挂共享元素（否则 key 折叠 → 空白/overlay）
+                                            sharedElementSiteId = if (index in blockedIndexes) null else site.id,
                                         )
                                     }
                                 }

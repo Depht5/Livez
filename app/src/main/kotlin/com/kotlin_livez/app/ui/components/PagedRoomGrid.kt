@@ -38,6 +38,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.kotlin_livez.app.app.controller.BasePageController
+import com.kotlin_livez.app.ui.nav.sharedElementBlockedIndexes
 import com.kotlin_livez.core.model.LiveRoomItem
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withTimeoutOrNull
@@ -103,6 +104,11 @@ fun PagedRoomGrid(
     val keyOf: (item: LiveRoomItem) -> Any = remember(siteId) {
         { item: LiveRoomItem -> if (siteId.isNullOrEmpty()) item.roomId else "${siteId}_${item.roomId}" }
     }
+    // 同屏共享元素 key 唯一性守卫（见 SharedTransition.sharedElementBlockedIndexes）：
+    // 同一 roomId 的第 2 次及以后出现、以及空 roomId 不挂一镜到底
+    //（LazyGrid 的 `#n` 兜底只保护 item key，不保护共享元素 key）。
+    val rooms = listController.list.collectAsStateWithLifecycle().value
+    val blockedIndexes = remember(rooms) { sharedElementBlockedIndexes(rooms.map { it.roomId }) }
     PagedRoomGridCore(
         listController = listController,
         gridState = gridState,
@@ -111,14 +117,14 @@ fun PagedRoomGrid(
         errorTextBuilder = errorTextBuilder,
         emptyText = emptyText,
         itemKey = keyOf,
-        itemContent = { _, item, mainAxisExtentDp ->
+        itemContent = { index, item, mainAxisExtentDp ->
             // 固定行高 = mainAxisExtent（封面 16:9 高 + 文字区 64dp），对齐 Dart mainAxisExtent
             Box(modifier = Modifier.fillMaxWidth().height(mainAxisExtentDp.dp)) {
                 LiveRoomCard(
                     item = item,
                     onClick = { onOpenRoom(item.roomId) },
                     modifier = Modifier.fillMaxSize(),
-                    sharedElementSiteId = siteId,
+                    sharedElementSiteId = if (index in blockedIndexes) null else siteId,
                 )
             }
         },
