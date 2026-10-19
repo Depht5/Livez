@@ -42,9 +42,23 @@ object ServiceContainer {
     /** 应用设置控制器（对应 Dart AppSettingsController）。 */
     val appSettings: AppSettingsController by lazy { AppSettingsController(localStorage) }
 
-    /** 搜索会话控制器（对应 Dart 路由 Binding 注册的 AppSearchController）——
-     *  直播间是压栈路由，返回时搜索会话必须仍是同一份（关键词/结果/模式/站点都在）。 */
-    val appSearchController: AppSearchController by lazy { AppSearchController(appSettings) }
+    private var appSearchControllerInstance: AppSearchController? = null
+
+    /** 搜索会话控制器（对应 Dart 路由 Binding 注册的 AppSearchController）。
+     *  压栈进直播间时保留同一会话（返回后关键词/结果/模式/站点都在）；
+     *  `search` 路由出栈后由 [resetAppSearchController] 清空，下次进入为全新会话。 */
+    val appSearchController: AppSearchController
+        get() = appSearchControllerInstance
+            // 新会话的初始站点 = 上次搜索站点（对齐 Dart `siteId ??= lastSearchSiteId`）：
+            // 控制器 init 只写不读该设置，故必须经构造参数传入。
+            ?: AppSearchController(appSettings, appSettings.lastSearchSiteId.value)
+                .also { appSearchControllerInstance = it }
+
+    /** 退出搜索页（`search` 出栈）时清空会话：取消在飞请求并丢弃实例，下次访问新建。 */
+    fun resetAppSearchController() {
+        appSearchControllerInstance?.dispose()
+        appSearchControllerInstance = null
+    }
 
     /** 关注服务（对应 Dart FollowService）。 */
     val followService: FollowService by lazy {

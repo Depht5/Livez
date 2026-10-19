@@ -69,14 +69,17 @@ import com.kotlin_livez.core.model.LiveRoomItem
  * 切换站点（点 Tab 或左右滑动）都经 controller.setTabIndex（其内部在有关键词且结果为空时
  * 自动补拉）；点击任意类型结果都进直播间（Router.openLiveRoom，直播间 Batch 7 才迁路由）。
  *
- * 控制器生命周期选型：**进程级会话**（`ServiceContainer.appSearchController`），跨路由保活——
- * 进直播间是压栈路由、搜索页会话不销毁（对齐 Dart `app_pages.dart:105` 的
- * `BindingsBuilder.put`，而非被替换的 View 版 SearchActivity）；返回后关键词/结果/模式/站点都在。
+ * 控制器生命周期选型：**B 方案**——会话实例由 `ServiceContainer` 持有（对齐 Dart
+ * `app_pages.dart:105` 的 `BindingsBuilder.put`），但只在 `search` 路由**在返回栈中**时保留：
+ * 进直播间是压栈路由 ⇒ 会话不销毁，返回后关键词/结果/模式/站点都在；`search` 路由**出栈**后
+ * 由 `AppNavHost` 清空并释放实例（取消在飞请求），再次进入是全新会话——与 GetX 路由 Binding
+ * 在路由移除时销毁一致。
  */
 @Composable
 fun SearchScreen(modifier: Modifier = Modifier) {
-    // 进程级搜索会话（对齐 Dart：进直播间是压栈不销毁，返回必须是同一会话）
-    val controller = ServiceContainer.appSearchController
+    // 当前搜索会话：用 remember 持有，出栈重置可能先于离场动画结束——
+    // 避免离场中的组合因重新组合而懒创建出新会话
+    val controller = remember { ServiceContainer.appSearchController }
 
     val sites = controller.sites
 

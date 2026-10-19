@@ -14,9 +14,12 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -31,6 +34,7 @@ import androidx.compose.material3.NavigationRailItem
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
@@ -84,6 +88,21 @@ fun AppNavHost(navController: NavHostController, modifier: Modifier = Modifier) 
     val shell = remember { ShellState() }
     DisposableEffect(Unit) {
         onDispose { shell.dispose() }
+    }
+
+    // 搜索会话随 `search` 路由出栈清空（task 10-19-search-exit-reset-bottom-bar-inset，B 方案）：
+    // 压栈进直播间时 search 仍在返回栈中 ⇒ 不清空；只有 search 真正离栈才重置。
+    // 不能用组合销毁（onDispose）判定：NavHost 只组合栈顶目的地（ui-compose.md 条目 4），
+    // 压栈进直播间同样会销毁 SearchScreen 的组合——那会把「进直播间再返回」的会话一并清掉。
+    LaunchedEffect(navController) {
+        var searchInStack = false
+        navController.currentBackStack.collect { entries ->
+            val present = entries.any { it.destination.route == "search" }
+            if (searchInStack && !present) {
+                ServiceContainer.resetAppSearchController()
+            }
+            searchInStack = present
+        }
     }
 
     // 一镜到底共享元素（task 09-12-shared-element-transition）：SharedTransitionLayout
@@ -173,7 +192,8 @@ private fun SharedTransitionScope.NavHostContent(
         // 观看历史（Batch 4）：控制器在 Screen 内 remember 创建、出栈销毁
         composable("history") { HistoryScreen() }
 
-        // 搜索（Batch 5）：控制器在 `ServiceContainer` 内进程级保活（跨路由保留搜索会话）
+        // 搜索（Batch 5）：会话由 `ServiceContainer` 持有，仅在 `search` 位于返回栈时保留；
+        // 出栈后由上层 `LaunchedEffect` 清空（B 方案，task 10-19-search-exit-reset-bottom-bar-inset）
         composable("search") {
             CompositionLocalProvider(LocalNavAnimatedVisibilityScope provides this) {
                 SearchScreen()
@@ -445,7 +465,8 @@ private fun MainNavigationRail(currentIndex: Int, onSelect: (Int) -> Unit) {
  * （label 置空，用户决策）；选中 onSecondaryContainer / 未选中 onSurfaceVariant 显式着色
  * （不依赖 NavigationBarItem 的 LocalContentColor 内部实现）。
  * 高度：60 → 68dp（适配 24dp 图标 + label；tab 下移 4dp 保留）。
- * 底部导航条 insets 由 NavigationBar 默认 windowInsets 处理。
+ * 总高度 = **68dp 内容 + 系统底部 inset（手势条 / 三键导航）**：inset 仍由 NavigationBar
+ * 默认 windowInsets 消费；若把 68dp 当总高度，inset 会从内容区里扣掉、图标被压向手势条。
  */
 @Composable
 private fun MainBottomBar(currentIndex: Int, onSelect: (Int) -> Unit) {
@@ -456,8 +477,9 @@ private fun MainBottomBar(currentIndex: Int, onSelect: (Int) -> Unit) {
         CustomIcons.Category,
         CustomIcons.Mine,
     )
+    val bottomInset = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
 
-    NavigationBar(modifier = Modifier.height(68.dp)) {
+    NavigationBar(modifier = Modifier.height(68.dp + bottomInset)) {
         titles.forEachIndexed { index, title ->
             val selected = currentIndex == index
             NavigationBarItem(

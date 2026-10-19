@@ -67,7 +67,9 @@ class AppSearchController(
         siteControllers[sites[index].id]?.refreshData()
     }
 
-    /** 销毁全部站点列表控制器（进程级实例正常不销毁；保留供显式清空会话时调用）。
+    /** 销毁全部站点列表控制器（取消在飞请求）。
+     *  常规调用路径：`search` 路由出栈时由 `ServiceContainer.resetAppSearchController()` 调用
+     *  （task 10-19-search-exit-reset-bottom-bar-inset，B 方案）；压栈进直播间不调用。
      *  注意：调用后本实例不可再使用（无重建路径），如需继续使用必须重新获取/构造。 */
     fun dispose() {
         for ((_, controller) in siteControllers) {
