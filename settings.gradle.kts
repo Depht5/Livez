@@ -25,7 +25,7 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "kotlin_re"
+rootProject.name = "Livez"
 
 // 镜像 dart_simple_live/simple_live_core → :core
 include(":core")

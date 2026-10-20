@@ -1,9 +1,10 @@
-# kotlin_re —— Kotlin 原生 Android 重写
+# Livez —— Kotlin 原生 Android 重写
 
 本目录用 **Kotlin + Android 原生栈**重写 `simple_live_core`（纯 Dart 直播聚合核心）与
 `simple_live_app`（Android 端），并**镜像现有 Dart 的文件/模块组织方式**。
 
-> 规范见 `.trellis/spec/kotlin_re/index.md`。现有 `dart_simple_live/` 保持只读，作为行为参考。
+> 开发规范位于维护者的 `.trellis/spec/kotlin_re/`（不随本仓库分发）；
+> Dart 原项目 `dart_simple_live/` 仅作为行为参考，不在本仓库内。
 
 ## 目录镜像关系
 
@@ -38,7 +39,7 @@
 ```bash
 # Windows (PowerShell)
 $env:JAVA_HOME = "D:\Programming\jdk17"
-cd kotlin_re
+cd livez
 
 # 核心编译 + 单元测试（纯 JVM，不依赖 Android）
 .\gradlew.bat :core:compileKotlin :core:test
