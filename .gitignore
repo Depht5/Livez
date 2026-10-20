@@ -18,6 +18,10 @@ captures/
 # Local downloaded libs (reproducible from Maven Central, e.g. libmpv aar)
 .libs/
 
+# Maintainer-only tools that depend on the sibling Dart repository
+scripts/extract_douyin_js.py
+
 # Release signing keystore (never commit)
 *.jks
 *.keystore
+keystore/
