@@ -16,17 +16,18 @@
 
 ## 技术栈
 
-- Kotlin 2.0.21 · AGP 8.5.2 · Gradle 8.12
+- Kotlin 2.0.21 · AGP 8.13.2 · Gradle 8.14.5
 - kotlinx.serialization（JSON）· OkHttp 4.12.0（HTTP + WebSocket）· kotlinx-coroutines
 - Room + DataStore（持久化，对应 Dart 的 Hive）
 - 手写轻量 DI（`ServiceContainer`，对应 GetX 服务）
 - Rhino 1.7.15（纯 JVM JS 引擎，对应 Dart 的 dart_quickjs）：执行抖音 a_bogus/webcast 签名
-  与斗鱼服务器动态签名的 JS 脚本（脚本资源与提取脚本见下）
+  与斗鱼服务器动态签名的 JS 脚本（脚本资源见下）
 
 ### JS 脚本资源（抖音/斗鱼签名）
 
-- `core/src/main/resources/douyin/abogus.js`、`webms_sdk.js`：由 Dart
-  `douyin_sign.dart` 提取（`scripts/extract_douyin_js.py`），`DouyinSign` 以 Rhino 解释模式执行。
+- `core/src/main/resources/douyin/abogus.js`、`webms_sdk.js`：从上游 Dart
+  `douyin_sign.dart` 提取并已提交到仓库，`DouyinSign` 以 Rhino 解释模式执行。
+  提取脚本依赖同级的 Dart 仓库，仅作为维护者本地工具，不随本仓库分发。
 - 斗鱼 `crptext` 为服务器动态下发（内含 `ub98484234`），`DouyuSign` 内置 CryptoJS 并以
   Rhino 执行（`$` 以 `\u0024` 转义规避字符串模板）。
 
@@ -71,3 +72,16 @@ cd kotlin_re
 站点 key（`bilibili` 等）作为数据/存储键保持不变；错误文案（core）与 UI 文案为冻结中文契约。
 方法职责与 Dart 一一对应（Dart 拼写错误 `getCategores`/`getPlayQualites` 在 Kotlin 中修正，
 但职责一致）。新增公共类在 `LiveSiteRegistry` 聚合入口统一暴露。
+
+## 许可证
+
+本项目以 **GNU General Public License v3.0（GPL-3.0-only）** 发布，完整条款见
+[LICENSE](LICENSE)。Copyright (C) 2026 Depht5。
+
+本项目是 [Simple Live](https://github.com/xiaoyaocz/dart_simple_live)
+（Copyright (C) 2023-2025 xiaoyaocz，GPL-3.0）的 Kotlin / Android 重写：
+协议解析、签名逻辑与内置的抖音 JS 脚本源自上游，上游版权与 GPL 义务同样适用。
+第三方依赖的许可说明见 [NOTICE](NOTICE)。
+
+分发 APK 时须同时提供本仓库源码，且不得附加 GPL 之外的额外限制；修改后的版本
+同样以 GPL-3.0 发布。

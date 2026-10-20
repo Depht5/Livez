@@ -1,0 +1,43 @@
+Livez (kotlin_re)
+Copyright (C) 2026  Depht5
+
+This program is free software: you can redistribute it and/or modify it under
+the terms of the GNU General Public License, version 3 (GPL-3.0-only), as
+published by the Free Software Foundation. It is distributed in the hope that
+it will be useful, but WITHOUT ANY WARRANTY; without even the implied warranty
+of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the LICENSE file
+for the complete terms.
+
+Upstream attribution
+--------------------
+This repository is a Kotlin/Android rewrite derived from Simple Live
+(https://github.com/xiaoyaocz/dart_simple_live), Copyright (C) 2023-2025
+xiaoyaocz, licensed under GPL-3.0. The Dart sources are not part of this
+repository and are kept only as the behavioral reference. Protocol handling,
+signature logic and the bundled Douyin JavaScript resources
+(core/src/main/resources/douyin/*.js) originate from that project and remain
+subject to its copyright and GPL-3.0 terms.
+
+Third-party components
+----------------------
+Direct dependencies are declared in the Gradle build files. Their licenses, as
+declared by the respective projects, include:
+
+- AndroidX (core, appcompat, lifecycle), Jetpack Compose, Room, DataStore
+  — Apache License 2.0
+- OkHttp / Okio — Apache License 2.0
+- kotlinx.coroutines / kotlinx.serialization — Apache License 2.0
+- Coil — Apache License 2.0
+- NanoHTTPD — BSD 3-Clause
+- Mozilla Rhino — Mozilla Public License 2.0
+- org.brotli:dec — MIT
+- dev.jdtech.mpv:libmpv (bundles libmpv / mpv and FFmpeg native libraries)
+  — see the licensing of the corresponding mpv and FFmpeg builds; mpv is
+  commonly distributed under GPL-2.0-or-later, FFmpeg under LGPL-2.1-or-later
+  or GPL depending on build options
+
+Apache-2.0 and BSD notices must be retained when redistributing binaries.
+Full license texts are available from each upstream project and, where
+present, inside the dependency artifacts (META-INF). If you distribute an APK
+built from this repository, keep this NOTICE and the LICENSE file alongside
+the source distribution.
