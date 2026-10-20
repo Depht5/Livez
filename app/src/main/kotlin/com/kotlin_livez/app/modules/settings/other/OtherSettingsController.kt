@@ -42,22 +42,6 @@ class OtherSettingsController(
     val logFilesState: StateFlow<List<LogFileModel>> = logFiles
 
     companion object {
-    /** 视频输出驱动选项（冻结，对应 Dart videoOutputDrivers） */
-    val videoOutputDrivers: Map<String, String> = linkedMapOf(
-        "gpu" to "gpu",
-        "gpu-next" to "gpu-next",
-        "xv" to "xv (X11 only)",
-        "x11" to "x11 (X11 only)",
-        "vdpau" to "vdpau (X11 only)",
-        "direct3d" to "direct3d (Windows only)",
-        "sdl" to "sdl",
-        "dmabuf-wayland" to "dmabuf-wayland",
-        "vaapi" to "vaapi",
-        "null" to "null",
-        "libmpv" to "libmpv",
-        "mediacodec_embed" to "mediacodec_embed (Android only)",
-    )
-
     /** 音频输出驱动选项（冻结，对应 Dart audioOutputDrivers） */
     val audioOutputDrivers: Map<String, String> = linkedMapOf(
         "null" to "null (No audio output)",
@@ -79,37 +63,6 @@ class OtherSettingsController(
         "openal" to "openal (Cross-platform, OpenAL backend)",
         "libao" to "libao (Cross-platform, uses libao library)",
         "auto" to "auto (Not available)",
-    )
-
-    /** 硬解选项（冻结，对应 Dart hardwareDecoder） */
-    val hardwareDecoder: Map<String, String> = linkedMapOf(
-        "no" to "no",
-        "auto" to "auto",
-        "auto-safe" to "auto-safe",
-        "yes" to "yes",
-        "auto-copy" to "auto-copy",
-        "d3d11va" to "d3d11va",
-        "d3d11va-copy" to "d3d11va-copy",
-        "videotoolbox" to "videotoolbox",
-        "videotoolbox-copy" to "videotoolbox-copy",
-        "vaapi" to "vaapi",
-        "vaapi-copy" to "vaapi-copy",
-        "nvdec" to "nvdec",
-        "nvdec-copy" to "nvdec-copy",
-        "drm" to "drm",
-        "drm-copy" to "drm-copy",
-        "vulkan" to "vulkan",
-        "vulkan-copy" to "vulkan-copy",
-        "dxva2" to "dxva2",
-        "dxva2-copy" to "dxva2-copy",
-        "vdpau" to "vdpau",
-        "vdpau-copy" to "vdpau-copy",
-        "mediacodec" to "mediacodec",
-        "mediacodec-copy" to "mediacodec-copy",
-        "cuda" to "cuda",
-        "cuda-copy" to "cuda-copy",
-        "crystalhd" to "crystalhd",
-        "rkmpp" to "rkmpp",
     )
     }
 

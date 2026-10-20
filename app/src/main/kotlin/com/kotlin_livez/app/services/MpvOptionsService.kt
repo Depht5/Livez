@@ -11,16 +11,37 @@ import java.io.File
  */
 object MpvOptionsService {
 
-    /** 档位标签（对应 Dart profileLabels；文案冻结）。 */
+    /** 档位标签（对应 Dart profileLabels；三档：低功耗 / 均衡 / 画质）。 */
     val profileLabels: Map<String, String> = linkedMapOf(
-        "performance" to "流畅",
+        "performance" to "低功耗",
         "balanced" to "均衡",
         "quality" to "画质",
     )
 
-    /** 档位选项（对应 Dart desktopProfiles 的 Android 取值）。 */
+    /** 档位说明文案（设置页单选弹窗副标题，用户核定文案）。 */
+    val profileDescriptions: Map<String, String> = linkedMapOf(
+        "performance" to "mediacodec_embed + mediacodec 硬件零拷贝直通，绕过 GPU 着色，功耗与发热最低",
+        "balanced" to "vo=gpu + fast 轻量 GPU 渲染，支持软解自动兜底，兼顾流畅度与兼容性",
+        "quality" to "vo=gpu + gpu-hq 高阶着色器缩放与去色带，画面更锐利但功耗较高",
+    )
+
+    /** 档位行副标题：档位名 + 核心渲染通道。 */
+    fun profileSubtitle(profile: String): String = when (profile) {
+        "performance" -> "低功耗（mediacodec_embed + mediacodec）"
+        "balanced" -> "均衡（vo=gpu + fast）"
+        "quality" -> "画质（vo=gpu + gpu-hq）"
+        else -> profileLabels[profile] ?: profile
+    }
+
+    /** 档位选项（Android 三档；vo 与 hwdec 完全由档位决定）。 */
     private val profiles: Map<String, Map<String, String>> = linkedMapOf(
+        // 低功耗：MediaCodec 零拷贝直通渲染，绕过 GPU 着色（档位的缩放参数不参与）
         "performance" to linkedMapOf(
+            "vo" to "mediacodec_embed",
+            "hwdec" to "mediacodec",
+        ),
+        // 均衡（默认）：轻量 GPU 渲染，软解自动兜底，兼顾流畅与兼容
+        "balanced" to linkedMapOf(
             "profile" to "fast",
             "hwdec" to "auto-safe",
             "vo" to "gpu",
@@ -31,22 +52,13 @@ object MpvOptionsService {
             "sigmoid-upscaling" to "no",
             "deband" to "no",
         ),
-        // Android 非 Windows：balanced 走 balancedDesktop
-        "balancedDesktop" to linkedMapOf(
+        // 画质：gpu-hq 高阶着色器缩放与去色带，画面更锐利但功耗较高
+        "quality" to linkedMapOf(
             "profile" to "gpu-hq",
             "hwdec" to "auto-safe",
             "vo" to "gpu",
             "scale" to "spline36",
             "cscale" to "spline36",
-            "dscale" to "mitchell",
-            "deband" to "no",
-        ),
-        "quality" to linkedMapOf(
-            "profile" to "gpu-hq",
-            "hwdec" to "auto-safe",
-            "vo" to "gpu-next",
-            "scale" to "ewa_lanczossharp",
-            "cscale" to "ewa_lanczossoft",
             "dscale" to "mitchell",
             "correct-downscaling" to "yes",
             "sigmoid-upscaling" to "yes",
@@ -61,24 +73,14 @@ object MpvOptionsService {
     /** 生效选项 + 来源（对应 Dart effectiveOptionsWithSource）。 */
     fun effectiveOptionsWithSource(appSettings: AppSettingsController): MpvEffectiveOptions {
         val profile = appSettings.mpvProfile.value
-        val profileOptions = profileOptionsForPlatform(profile)
+        val profileOptions = profileOptions(profile)
         val options = LinkedHashMap<String, String>().apply { putAll(profileOptions) }
         val source = HashMap<String, String>()
         for (key in profileOptions.keys) source[key] = "profile:$profile"
 
-        // 输出驱动字段非空即覆盖档位默认（task m3-mine-settings：自定义输出开关已移除，
-        // 驱动字段无条件生效；空值 = 跟随档位/平台默认）
-        val vo = appSettings.videoOutputDriver.value.trim()
-        val hwdec = appSettings.videoHardwareDecoder.value.trim()
+        // vo / hwdec 完全由档位表决定（「视频输出驱动」「视频硬件解码器」「兼容模式」已移除）；
+        // 仅保留音频输出驱动对 ao 的覆盖。
         val ao = appSettings.audioOutputDriver.value.trim()
-        if (vo.isNotEmpty()) {
-            options["vo"] = vo
-            source["vo"] = "custom"
-        }
-        if (hwdec.isNotEmpty()) {
-            options["hwdec"] = hwdec
-            source["hwdec"] = "custom"
-        }
         if (ao.isNotEmpty()) {
             options["ao"] = ao
             source["ao"] = "custom"
@@ -97,25 +99,14 @@ object MpvOptionsService {
 
     /** 视频控制器配置（对应 Dart videoControllerConfiguration 的 Android 部分）。 */
     fun videoControllerConfiguration(appSettings: AppSettingsController): MpvVideoConfig {
-        // 兼容模式开：强制 MediaCodec 安全通路（对齐 Dart：compat && Android → mediacodec 对）
-        if (appSettings.playerCompatMode.value) {
-            return MpvVideoConfig(
-                vo = "mediacodec_embed",
-                hwdec = "mediacodec",
-                enableHardwareAcceleration = appSettings.hardwareDecode.value,
-                androidAttachSurfaceAfterVideoParameters = true,
-            )
-        }
-        // 兼容模式关（默认，对齐 Dart）：vo = 驱动字段非空 ? 驱动 : 档位 vo（gpu/gpu-next，
-        // gpu-next 由 PlayerEngine 钳为 gpu）；hwdec = 驱动字段非空 ? 驱动 : auto-safe。
-        // gpu 通路下 mpv 渲染管线生效，档位的缩放/去带参数才有实际作用。
-        val vo = appSettings.videoOutputDriver.value.trim()
-            .ifEmpty { profileOptionsForPlatform(appSettings.mpvProfile.value)["vo"] ?: "gpu" }
-        val hwdec = appSettings.videoHardwareDecoder.value.trim().ifEmpty { "auto-safe" }
+        // vo / hwdec 直接由当前档位表决定（「兼容模式」「视频输出驱动」
+        // 「视频硬件解码器」已移除，不再有覆盖分支）。
+        val profileOptions = profileOptions(appSettings.mpvProfile.value)
+        val vo = profileOptions["vo"] ?: "gpu"
+        val hwdec = profileOptions["hwdec"] ?: "auto-safe"
         return MpvVideoConfig(
             vo = vo,
             hwdec = hwdec,
-            enableHardwareAcceleration = appSettings.hardwareDecode.value,
             // Fix Issue #57：安卓全屏后画面卡死 - 延迟 attach 避免 surface race condition
             androidAttachSurfaceAfterVideoParameters = true,
         )
@@ -144,17 +135,18 @@ object MpvOptionsService {
         }
 
         return "profile=${appSettings.mpvProfile.value}, " +
-            "hardwareDecode=${appSettings.hardwareDecode.value}, " +
             "vo=${value("vo")}, hwdec=${value("hwdec")}, " +
             "mpvOptions=${options.size}"
     }
 
-    private fun profileOptionsForPlatform(profile: String): Map<String, String> {
-        if (profile == "balanced") {
-            return profiles["balancedDesktop"] ?: profiles["balanced"] ?: emptyMap()
-        }
-        return profiles[profile] ?: profiles["balancedDesktop"] ?: emptyMap()
-    }
+    /**
+     * 档位参数表（Android 三档）；未知档位回退默认「均衡」。
+     *
+     * `internal` 仅为单元测试直接校验三档 `vo`/`hwdec` 契约留出只读入口，
+     * 生产代码请走 [effectiveOptionsWithSource] / [videoControllerConfiguration]。
+     */
+    internal fun profileOptions(profile: String): Map<String, String> =
+        profiles[profile] ?: profiles["balanced"] ?: emptyMap()
 
     /** 解析多行选项文本（对应 Dart parseOptions）。 */
     fun parseOptions(raw: String): Map<String, String> {
@@ -215,6 +207,5 @@ class MpvEffectiveOptions(
 class MpvVideoConfig(
     val vo: String?,
     val hwdec: String?,
-    val enableHardwareAcceleration: Boolean,
     val androidAttachSurfaceAfterVideoParameters: Boolean,
 )

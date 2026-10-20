@@ -220,12 +220,12 @@ fun LiveRoomScreen(
         DanmakuOverlayView(context).apply { this.siteId = siteId }
     }
 
-    // 屏幕常亮（对齐原 onCreate 的 FLAG_KEEP_SCREEN_ON；Dart 参考 player_controller
-    // playing→WakelockPlus.enable 的页面级超集：暂停期间也保持常亮）。view 级
-    // keepScreenOn 不依赖 LocalContext 的具体类型——旧写法 `context as? Activity`
-    // 强转失败会静默不加 window flag，屏幕按系统超时熄灭（task player-icons-follow-ux）。
+    // 屏幕常亮条件化（task 10-20-live-playback-power-optimization R2.4）：原写法无条件
+    // 常亮，暂停 / 未开播 / 播放报错期间同样阻止系统息屏，纯属浪费。条件赋值放在
+    // `showRoomError` 定义之后的 LaunchedEffect 里（下方「屏幕常亮跟随播放态」段）；
+    // 此处只保留离场复位。view 级 keepScreenOn 不依赖 LocalContext 的具体类型——旧写法
+    // `context as? Activity` 强转失败会静默不加 window flag（task player-icons-follow-ux）。
     DisposableEffect(view) {
-        view.keepScreenOn = true
         onDispose { view.keepScreenOn = false }
     }
 
@@ -447,6 +447,8 @@ fun LiveRoomScreen(
                     vo = videoConfig.vo,
                     hwdec = videoConfig.hwdec,
                     options = MpvOptionsService.applyToPlayerOptions(ServiceContainer.appSettings),
+                    // 直播缓存上限接入设置项（task 10-20 R2.3）：默认 32MB，设置页限幅 8..128MB。
+                    bufferSizeMb = ServiceContainer.appSettings.playerBufferSize.value,
                 ),
             )
         }.onFailure { e ->
@@ -477,14 +479,16 @@ fun LiveRoomScreen(
     LaunchedEffect(detail) {
         if (refreshing) refreshing = false
     }
-    val online by controller.online.collectAsStateWithLifecycle()
+    // 人气值（1 分钟级刷新）不在此订阅：下沉到 roomInfoBar 内部（task 10-20 R3.2），
+    // 全屏 / 宽屏右栏不组合时不产生订阅与根级重组。
     val liveStatus by controller.liveStatus.collectAsStateWithLifecycle()
     val loadError by controller.loadError.collectAsStateWithLifecycle()
     // 断流/播放失败文案（task 10-17-ui-material3-details-and-redesign）：控制器在播放失败
     // 路径写入 `_errorMsg = "播放失败"`；两处清空——`loadData` 入口（换房/刷新即新会话，
     // 不清会粘住上一房间的文案并顶掉「未开播」）与真正开到线路时（`initPlaylist`）。
     val errorMsg by controller.errorMsg.collectAsStateWithLifecycle()
-    val messages by controller.messages.collectAsStateWithLifecycle()
+    // 聊天消息列表（高频：100ms 批次）不在此订阅：下沉到聊天 Tab 内的 ChatTabSection
+    // （task 10-20 R3.2）——全屏模式或非聊天 Tab 时 0 订阅、0 重组、0 滚动唤醒。
     val superChats by controller.superChats.collectAsStateWithLifecycle()
     val contributionUsers by controller.contributionRankUsers.collectAsStateWithLifecycle()
     // 贡献榜三态（task 10-18-ui-closure-leftovers-fixes-and-decisions）：「加载中」先于「空列表」
@@ -561,6 +565,12 @@ fun LiveRoomScreen(
     val roomHasError = loadError || errorMsg.isNotEmpty()
     val showRoomError = roomHasError && !refreshing
 
+    // 屏幕常亮跟随播放态（task 10-20 R2.4）：仅「直播中 + 播放中 + 无错误层」时阻止息屏；
+    // 暂停 / 未开播 / 报错一律让系统按超时息屏。离场复位由上方 DisposableEffect(view) 负责。
+    LaunchedEffect(view, liveStatus, playerState.playing, showRoomError) {
+        view.keepScreenOn = liveStatus && playerState.playing && !showRoomError
+    }
+
     // 播放器初始化失败（缺 native so 等）→ 提示，页面保持可用
     LaunchedEffect(controller) {
         PlayerEngine.instance.initError.collect { message ->
@@ -591,44 +601,20 @@ fun LiveRoomScreen(
         danmakuOverlay.danmakuEnabled = overlayDanmakuOn
     }
 
-    // 浮层弹幕增量收集：以「最后一条已入队消息」为实例引用游标做尾部增量。
-    // 历史说明：控制器在消息数超过 200 后每来一条新消息会先 drop(1) 裁剪头部再追加；
-    // 旧的「按列表长度差量」在此场景失效，故改用尾部实例引用比对（列表为不可变拷贝，
-    // drop(1) 不改变既有元素引用，从尾部回溯到游标即可精确算出新增段）。
-    //
-    // 游标失联的语义（本版修正）：indexOfLast 找不到游标（返回 -1）说明两次收集之间
-    // 涌入的消息数超过了整个列表容量（>200 条/帧间隙，高热房间突发流量才可能），
-    // 游标被头部裁剪吞掉。此时**绝不能**从 0 全量重放——重放会把上百条延迟弹幕
-    // （最长 6s）瞬间灌进 DanmakuOverlayView，轨道全满后每条新弹幕都会按「最小 x」
-    // 覆盖一条在飞弹幕，宏观表现正是「弹幕走到屏幕中间偏右就成批消失」。
-    // 保守做法：把游标重置为当前列表尾、跳过本帧（丢几条弹幕可接受），绝不清轨。
-    var danmakuLastEnqueued by remember(controller) { mutableStateOf<LiveMessage?>(null) }
-    LaunchedEffect(controller, messages) {
-        val list = messages
-        if (list.isEmpty()) {
-            // 切房间/刷新清空：重置游标并清轨（对齐原 danmakuLastCount 重置语义）
-            danmakuLastEnqueued = null
-            danmakuOverlay.clear()
-            return@LaunchedEffect
+    // 浮层弹幕直通（task 10-20-live-playback-power-optimization R3.1/R3.2）：
+    // 控制器在屏蔽/去重通过后立即 `tryEmit` 到 danmakuEvents，此处收集即入轨（0 延迟）。
+    // 旧实现以 `messages` 列表为源、用实例引用游标回溯整表找新增段：每条消息都要
+    // `indexOfLast` 一次，且 200 条上限裁剪会让游标周期性失联导致整段弹幕断流。
+    // 现在飘屏与聊天列表彻底解耦——聊天列表 100ms 批处理不会延迟飘屏，也不会触发本 effect。
+    LaunchedEffect(controller, danmakuOverlay) {
+        controller.danmakuEvents.collect { msg ->
+            danmakuOverlay.enqueue(msg)
         }
-        val cursor = danmakuLastEnqueued
-        val fromIndex: Int = if (cursor == null) {
-            0 // 进房首帧（列表从空开始增长）：全量入队
-        } else {
-            val idx = list.indexOfLast { it === cursor }
-            if (idx == -1) {
-                // 游标失联：保守跳过本帧（见上方注释），不清轨、不全量重放
-                danmakuLastEnqueued = list.last()
-                return@LaunchedEffect
-            }
-            idx + 1
-        }
-        if (fromIndex < list.size) {
-            for (msg in list.subList(fromIndex, list.size)) {
-                danmakuOverlay.enqueue(msg)
-            }
-            danmakuLastEnqueued = list.last()
-        }
+    }
+    // 换房时清掉旧房间的在飞弹幕：旧实现由「messages 被清空」顺带触发，直通通道没有
+    // 列表清空信号，改为跟踪控制器房间号（首帧 "" → roomId 只是清空一个空图层）。
+    LaunchedEffect(controller, rxRoomId) {
+        danmakuOverlay.clear()
     }
 
     // 进房自动全屏：设置开启时读一次即进入（等价原 videoFrame.post { enterFullScreen() }，
@@ -868,17 +854,10 @@ fun LiveRoomScreen(
     // 原项目机制：跟随 = 每条消息 postFrame jumpTo(maxScrollExtent)，唯一守卫是
     // disableAutoScroll（**用户意图标志**——scrollListener 仅在「用户上滑离底」置 true、
     // 「贴底」置 false；程序化滚动不影响它；列表当前位置不参与门控）。
-    // 原项目全屏时同样卸载竖屏页（build 分支），恢复全靠下一条消息自然贴底——因此这里
-    // 不需要任何锚定代码；此前三轮「位置派生守卫（atBottom）+ 锚定」方案全部失败
-    // （恢复组合时位置不在底 → 守卫自锁），根因分析见前任务 research 文档。
-    var disableAutoScroll by remember { mutableStateOf(false) }
+    // task 10-20 R3.2 起：意图标志的**唯一事实源**是 controller.disableAutoScroll——
+    // 页面级只写（拖动/贴底检测）不读，读取方（「↓ 回到底部」胶囊 + 自动滚底 effect）
+    // 全在 ChatTabSection 内。这样全屏 / 非聊天 Tab 下既无订阅也无重组。
     var chatUserDragging by remember { mutableStateOf(false) }
-    // 同步 UI 滚动锁到控制器（task 10-17-ui-power-and-recomposition-governance）：控制器侧
-    // `_disableAutoScroll` 原先没有 setter、恒为 false，仅被 200 条上限裁剪读取；同步后
-    // 「用户上滑回看历史」期间不再裁掉头部消息（对齐 Dart 语义，代价是该期间无上限增长）。
-    LaunchedEffect(controller, disableAutoScroll) {
-        controller.setDisableAutoScroll(disableAutoScroll)
-    }
     // 贴底判定（供拖动检测与调试共用；留 1 条容差）
     val chatAtBottom by remember(chatListState) {
         derivedStateOf {
@@ -900,30 +879,15 @@ fun LiveRoomScreen(
             }
         }
     }
-    // 对齐原 scrollListener：拖动中离底 → 暂停跟随；贴底 → 恢复跟随
+    // 对齐原 scrollListener：拖动中离底 → 暂停跟随；贴底 → 恢复跟随。
+    // 写控制器而非本地 state：StateFlow 同值不发射，重复置位无副作用。
     LaunchedEffect(chatUserDragging, chatAtBottom) {
         if (chatAtBottom) {
-            if (disableAutoScroll) Log.d("聊天跟随恢复（贴底）")
-            disableAutoScroll = false
+            if (controller.disableAutoScroll.value) Log.d("聊天跟随恢复（贴底）")
+            controller.setDisableAutoScroll(false)
         } else if (chatUserDragging) {
-            if (!disableAutoScroll) Log.d("聊天跟随暂停（用户上滑离底）")
-            disableAutoScroll = true
-        }
-    }
-    // 每条消息到达 → 贴底。门控仅 disableAutoScroll（位置不参与）：全屏/切 Tab 恢复组合
-    // 时本 effect 随之启动执行，下一条消息即贴底——与原项目完全一致。
-    // requestScrollToItem 非挂起、无互斥（弹幕连发不丢滚动），index 取数据条数
-    // （列表与 messages 严格 1:1、无头部项），等价原项目 jumpTo(maxScrollExtent)。
-    // 根因说明（真机闪退：跟随系统主题切深色重建 Activity，重组时本 effect 先于
-    // 首次布局执行）：原取 layoutInfo.totalItemsCount-1，未布局时总数为 0 → 传 -1
-    // 崩溃；数据索引不依赖布局时序，isNotEmpty 守卫保证非负。
-    LaunchedEffect(messages) {
-        if (messages.isNotEmpty() && !disableAutoScroll) {
-            chatListState.requestScrollToItem(messages.size - 1)
-            val size = messages.size
-            if (size == 1 || size % 20 == 0) {
-                Log.d("UI 跟随: size=$size disable=$disableAutoScroll atBottom=$chatAtBottom")
-            }
+            if (!controller.disableAutoScroll.value) Log.d("聊天跟随暂停（用户上滑离底）")
+            controller.setDisableAutoScroll(true)
         }
     }
 
@@ -1224,6 +1188,9 @@ fun LiveRoomScreen(
     /** 信息栏片段（对应 Dart buildUserProfile）：头像/名称/平台 + 关注 + 人气。
      *  守卫由调用方决定：窄屏非全屏显示；宽屏恒显示（右侧面板的组成部分）。 */
     val roomInfoBar: @Composable () -> Unit = {
+        // 人气值订阅下沉到本片段（task 10-20 R3.2）：全屏（片段不组合）与宽屏右栏隐藏时
+        // 不再产生订阅；online 变化只重组这一行，不带上整页。
+        val online by controller.online.collectAsStateWithLifecycle()
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -1364,28 +1331,12 @@ fun LiveRoomScreen(
 
         Box(modifier = Modifier.weight(1f)) {
             when (selectedKey) {
-                TAB_KEY_CHAT -> {
-                    // 自动跟随在页面级（chatListState 声明处）：意图守卫 + 每消息贴底；
-                    // 面板恢复组合（全屏退出/切回 Tab）后本分支重组，消息 effect 即刻生效。
-                    ChatTabContent(
-                        messages = messages,
-                        listState = chatListState,
-                        showJumpToBottom = disableAutoScroll,
-                        onJumpToBottom = {
-                            // 只改页面级意图标志（任务1 落的 `setDisableAutoScroll` 同步 effect
-                            // 随之生效，不另起一套反向同步），再平滑滚回最新消息。
-                            // 滚到底后由既有「贴底 → 恢复跟随」链路接管
-                            //（LaunchedEffect(chatUserDragging, chatAtBottom)），
-                            // 后续新消息继续按 LaunchedEffect(messages) 贴底。
-                            disableAutoScroll = false
-                            if (messages.isNotEmpty()) {
-                                coroutineScope.launch {
-                                    chatListState.animateScrollToItem(messages.lastIndex)
-                                }
-                            }
-                        },
-                    )
-                }
+                // 聊天内容整块下沉为独立 composable（task 10-20 R3.2）：messages 订阅、
+                // 自动滚底与「↓ 回到底部」全部在 ChatTabSection 内部，只有本分支组合时才生效。
+                TAB_KEY_CHAT -> ChatTabSection(
+                    controller = controller,
+                    listState = chatListState,
+                )
                 TAB_KEY_SUPER_CHAT -> SuperChatTabContent(superChats)
                 TAB_KEY_FOLLOW -> FollowTabContent(
                     items = followLive + followNotLive,
@@ -1741,6 +1692,62 @@ private fun buildTabEntries(siteId: String, contributionRankEnable: Boolean): Li
 /* ---------- 聊天 Tab：弹幕列表 ---------- */
 
 /**
+ * 聊天 Tab 容器（task 10-20-live-playback-power-optimization R3.2）：
+ * `messages` 订阅与自动滚底 effect 全部下沉在这里，只有聊天 Tab 真正组合时才存在。
+ *
+ * 效果：
+ * - 全屏模式（`roomTabsAndContent` 整块不组合）⇒ 对 100ms 批次消息 **0 订阅 / 0 重组**；
+ * - 停在 SC / 关注 / 贡献榜 / 设置 Tab ⇒ 分支不组合，同样 0 订阅；
+ * - 从全屏或其它 Tab 切回聊天时，本组件重新组合 → 订阅拿到当前列表 + effect 立即贴底。
+ *
+ * 跟随意图标志 `controller.disableAutoScroll` 由页面级拖动/贴底检测写入（见根函数注释）。
+ */
+@Composable
+private fun ChatTabSection(
+    controller: LiveRoomController,
+    listState: LazyListState,
+) {
+    val messages by controller.messages.collectAsStateWithLifecycle()
+    val disableAutoScroll by controller.disableAutoScroll.collectAsStateWithLifecycle()
+    val scope = rememberCoroutineScope()
+    // 胶囊点击的平滑滚回会顺带翻转 disableAutoScroll，从而重启本 effect；若不抑制，
+    // requestScrollToItem 会在同帧取消在途 animateScrollToItem（退化为瞬跳）。
+    var suppressAutoScrollOnce by remember { mutableStateOf(false) }
+    // 新消息到达 → 贴底。门控仅「禁自动滚动」意图（位置不参与，避免贴底判定自锁）。
+    // key 同时包含最后一条消息 id：仅用 size 会在 200 条上限饱和后失效——头部裁剪 +
+    // 尾部追加让 size 恒定，effect 不再重启，表现为「列表停止跟随」。
+    // requestScrollToItem 非挂起、无互斥（弹幕连发不丢滚动），index 取数据条数
+    //（列表与 messages 严格 1:1、无头部项），等价原项目 jumpTo(maxScrollExtent)。
+    // 根因说明（真机闪退：跟随系统主题切深色重建 Activity，重组时本 effect 先于
+    // 首次布局执行）：不能用 layoutInfo.totalItemsCount-1（未布局时为 0 → 传 -1）；
+    // 数据索引不依赖布局时序，isNotEmpty 守卫保证非负。
+    LaunchedEffect(messages.size, messages.lastOrNull()?.id, disableAutoScroll) {
+        if (suppressAutoScrollOnce) {
+            suppressAutoScrollOnce = false
+            return@LaunchedEffect
+        }
+        if (messages.isNotEmpty() && !disableAutoScroll) {
+            listState.requestScrollToItem(messages.size - 1)
+        }
+    }
+    ChatTabContent(
+        messages = messages,
+        listState = listState,
+        showJumpToBottom = disableAutoScroll,
+        onJumpToBottom = {
+            // 先起平滑滚动、再放开跟随意图（顺序无关，但抑制标志必须先置位）。
+            // 放开后由页面级「贴底 → 恢复跟随」链路接管后续新消息。
+            // 仅当确实会翻转意图（胶囊只在回看态可见）时才抑制，避免残留在下一拍误吞贴底。
+            suppressAutoScrollOnce = messages.isNotEmpty() && disableAutoScroll
+            if (messages.isNotEmpty()) {
+                scope.launch { listState.animateScrollToItem(messages.lastIndex) }
+            }
+            controller.setDisableAutoScroll(false)
+        },
+    )
+}
+
+/**
  * 聊天列表 —— 对应原 MessagesAdapter：
  * 用户名（灰）+ 正文（深色）两段式；系统消息整行灰色；行距 8dp。
  * 上滑暂停自动滚底、贴底恢复（等价原 RecyclerView.canScrollVertically(1) 判断）。
@@ -1748,8 +1755,8 @@ private fun buildTabEntries(siteId: String, contributionRankEnable: Boolean): Li
  * 根容器为 `Box`（task 10-17-ui-material3-details-and-redesign）：底层仍是原来的
  * `LazyColumn`（key 与列表动画一字未动），其上叠加「↓ 回到底部」悬浮胶囊。
  *
- * @param showJumpToBottom 是否显示回到底部胶囊（= 页面级 `disableAutoScroll`，
- *        由用户在列表内上滑离底置位；胶囊点击经 [onJumpToBottom] 回到页面级状态）。
+ * @param showJumpToBottom 是否显示回到底部胶囊（= `controller.disableAutoScroll`，
+ *        由用户在列表内上滑离底置位；胶囊点击经 [onJumpToBottom] 清回跟随意图）。
  * @param onJumpToBottom 胶囊点击：恢复自动跟随并平滑滚回最新消息。
  */
 @Composable
@@ -1761,7 +1768,11 @@ private fun ChatTabContent(
 ) {
     // 弹幕气泡开关（设置 → 其他；task 08-29-chat-pin-bubble-follow-grid）
     val danmuBubble by ServiceContainer.appSettings.danmuBubble.collectAsStateWithLifecycle()
-    // 自动跟随逻辑在页面级（chatListState 声明处）：意图守卫 + 每消息贴底
+    // 两段式行内配色：仅随主题变化；作为逐行 remember 的 key 按值比较（ui-compose 条目 28）
+    val messageColors = ChatMessageColors(
+        userName = MaterialTheme.colorScheme.onSurfaceVariant,
+        message = MaterialTheme.colorScheme.onSurface,
+    )
     Box(modifier = Modifier.fillMaxSize()) {
         LazyColumn(
             state = listState,
@@ -1771,8 +1782,14 @@ private fun ChatTabContent(
             // 稳定 key（task 10-17-ui-power-and-recomposition-governance）：用 LiveMessage.id
             // 而非列表下标——头部消息被裁掉或新消息入列时，下标 key 会让整段错位并触发全量重组。
             items(messages, key = { it.id }) { msg ->
+                // 逐行缓存 AnnotatedString（task 10-20 R3.2）：新批次入列时，已可见的旧行
+                // 不再重复构建富文本（原有实现每次列表更新都会把 ~200 行全部重建一遍）。
+                // remember 的 key 比较走 equals（ui-compose 条目 28），data class 稳定即命中。
+                val messageText = remember(msg.id, messageColors) {
+                    buildMessageText(msg, messageColors)
+                }
                 Text(
-                    text = buildMessageText(msg),
+                    text = messageText,
                     fontSize = 14.sp,
                     // 弹幕气泡：开启时加主题容器色圆角背景（与单选对话框选中药丸同源
                     // primaryContainer alpha 0.7；无阴影，用户定标）；关闭为现状纯文本。
@@ -1828,23 +1845,31 @@ private fun ChatTabContent(
 }
 
 /**
+ * 聊天行两段式配色（用户名 / 正文）。作为 `remember` 的 key 使用：data class 按值比较，
+ * 主题不变即命中缓存，主题/深色态切换时自动失效。
+ */
+private data class ChatMessageColors(val userName: Color, val message: Color)
+
+/**
  * 弹幕消息富文本 —— 对应原 SpannableStringBuilder 两段式语义改用 AnnotatedString：
  * 用户名灰（onSurfaceVariant）+ 正文（onSurface）；系统消息整行灰；
  * SC 类消息前缀加「【醒目】」（对齐原 MessagesAdapter.buildMessageText）。
- * @Composable：读取 MaterialTheme.colorScheme（调用方 ChatTabContent 为 @Composable）。
+ *
+ * 非 @Composable（task 10-20 R3.2）：配色由调用方以 [ChatMessageColors] 传入，
+ * 这样每行可以用 `remember(msg.id, messageColors)` 缓存结果，避免新消息入列时
+ * 已可见的旧行重复构建 AnnotatedString。
  */
-@Composable
-private fun buildMessageText(item: LiveMessage) = buildAnnotatedString {
+private fun buildMessageText(item: LiveMessage, colors: ChatMessageColors) = buildAnnotatedString {
     if (item.userName == "LiveSysMessage") {
-        withStyle(SpanStyle(color = MaterialTheme.colorScheme.onSurfaceVariant)) { append(item.message) }
+        withStyle(SpanStyle(color = colors.userName)) { append(item.message) }
     } else {
         val prefix = if (item.type == LiveMessageType.superChat) {
             "【醒目】${item.userName}"
         } else {
             item.userName
         }
-        withStyle(SpanStyle(color = MaterialTheme.colorScheme.onSurfaceVariant)) { append("$prefix：") }
-        withStyle(SpanStyle(color = MaterialTheme.colorScheme.onSurface)) { append(item.message) }
+        withStyle(SpanStyle(color = colors.userName)) { append("$prefix：") }
+        withStyle(SpanStyle(color = colors.message)) { append(item.message) }
     }
 }
 

@@ -17,6 +17,9 @@ import java.io.File
 class LiveApp : Application() {
     override fun onCreate() {
         super.onCreate()
+        // Release 包静默 core 日志：避免每次网络请求/弹幕解析都执行时间戳格式化和
+        // HTTP 头脱敏扫描（task 10-20-live-playback-power-optimization）。
+        CoreLog.enableLog = BuildConfig.DEBUG
         CoreLog.onPrintLog = { level, message ->
             android.util.Log.d("CoreLog", message)
         }

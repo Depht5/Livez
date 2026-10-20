@@ -1,6 +1,7 @@
 package com.kotlin_livez.app.player
 
 import android.content.Context
+import android.os.Build
 import android.util.AttributeSet
 import android.view.Surface
 import android.view.SurfaceHolder
@@ -39,6 +40,7 @@ class MpvVideoView @JvmOverloads constructor(
      */
     fun destroy() {
         holder.removeCallback(this)
+        resetSurfaceFrameRate(attachedSurface)
         attachedSurface = null
         val id = sessionId
         sessionId = null
@@ -55,6 +57,29 @@ class MpvVideoView @JvmOverloads constructor(
         if (attachedSurface === surface && surface.isValid) return
         if (PlayerEngine.instance.attachSurface(sessionId, surface)) {
             attachedSurface = surface
+            applySurfaceFrameRate(surface)
+        }
+    }
+
+    /**
+     * 向系统 SurfaceFlinger / LTPO 硬件合成器显式投票「60fps 固定源」
+     * （Android 11+）：直播流恒定 60fps 时避免系统按内容变化自适应降帧/拉高刷新率，
+     * 属于无损的功耗治理（不改变实际帧率与画质）。
+     */
+    private fun applySurfaceFrameRate(surface: Surface?) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return
+        if (surface == null || !surface.isValid) return
+        runCatching {
+            surface.setFrameRate(60f, Surface.FRAME_RATE_COMPATIBILITY_FIXED_SOURCE)
+        }
+    }
+
+    /** 退出/销毁时复位帧率投票（0f = 不指定，交还系统默认策略）。 */
+    private fun resetSurfaceFrameRate(surface: Surface?) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return
+        if (surface == null || !surface.isValid) return
+        runCatching {
+            surface.setFrameRate(0f, Surface.FRAME_RATE_COMPATIBILITY_DEFAULT)
         }
     }
 
@@ -64,6 +89,7 @@ class MpvVideoView @JvmOverloads constructor(
     }
 
     override fun surfaceDestroyed(holder: SurfaceHolder) {
+        resetSurfaceFrameRate(holder.surface)
         attachedSurface = null
         sessionId?.let { PlayerEngine.instance.surfaceDestroyed(it, holder.surface) }
     }

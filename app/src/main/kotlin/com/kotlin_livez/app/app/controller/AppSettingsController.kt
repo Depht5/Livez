@@ -9,6 +9,7 @@ import com.kotlin_livez.app.app.Log
 import com.kotlin_livez.app.app.Sites
 import com.kotlin_livez.app.models.DanmuShieldPreset
 import com.kotlin_livez.app.services.LocalStorageService
+import com.kotlin_livez.app.services.MpvOptionsService
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.serialization.encodeToString
@@ -134,9 +135,6 @@ class AppSettingsController(
     private val _contributionRankEnable = MutableStateFlow(true)
     val contributionRankEnable: StateFlow<Boolean> = _contributionRankEnable
 
-    private val _hardwareDecode = MutableStateFlow(true)
-    val hardwareDecode: StateFlow<Boolean> = _hardwareDecode
-
     private val _chatTextSize = MutableStateFlow(14.0F)
     val chatTextSize: StateFlow<Float> = _chatTextSize
 
@@ -160,9 +158,6 @@ class AppSettingsController(
 
     private val _roomAutoExitDuration = MutableStateFlow(60)
     val roomAutoExitDuration: StateFlow<Int> = _roomAutoExitDuration
-
-    private val _playerCompatMode = MutableStateFlow(false)
-    val playerCompatMode: StateFlow<Boolean> = _playerCompatMode
 
     private val _playerBufferSize = MutableStateFlow(32)
     val playerBufferSize: StateFlow<Int> = _playerBufferSize
@@ -314,14 +309,8 @@ class AppSettingsController(
     private val _liveSubtitlePositionLocked = MutableStateFlow(false)
     val liveSubtitlePositionLocked: StateFlow<Boolean> = _liveSubtitlePositionLocked
 
-    private val _videoOutputDriver = MutableStateFlow("gpu")
-    val videoOutputDriver: StateFlow<String> = _videoOutputDriver
-
     private val _audioOutputDriver = MutableStateFlow("audiotrack")
     val audioOutputDriver: StateFlow<String> = _audioOutputDriver
-
-    private val _videoHardwareDecoder = MutableStateFlow("auto-safe")
-    val videoHardwareDecoder: StateFlow<String> = _videoHardwareDecoder
 
     private val _mpvProfile = MutableStateFlow("balanced")
     val mpvProfile: StateFlow<String> = _mpvProfile
@@ -453,7 +442,6 @@ class AppSettingsController(
         _contributionRankEnable.value =
             localStorage.getValue(LocalStorageService.kContributionRankEnable, true)
 
-        _hardwareDecode.value = localStorage.getValue(LocalStorageService.kHardwareDecode, true)
         _chatTextSize.value = localStorage.getValue(LocalStorageService.kChatTextSize, 14.0F)
         _chatTextGap.value = localStorage.getValue(LocalStorageService.kChatTextGap, 4.0F)
         _chatBubbleStyle.value =
@@ -468,8 +456,6 @@ class AppSettingsController(
         _roomAutoExitDuration.value =
             localStorage.getValue(LocalStorageService.kRoomAutoExitDuration, 60)
 
-        _playerCompatMode.value =
-            localStorage.getValue(LocalStorageService.kPlayerCompatMode, false)
         _playerAutoPause.value = localStorage.getValue(LocalStorageService.kPlayerAutoPause, false)
         _allowBackgroundPlayback.value = _loadAllowBackgroundPlayback(_playerAutoPause.value)
 
@@ -544,7 +530,18 @@ class AppSettingsController(
         _playerBufferSize.value =
             localStorage.getValue(LocalStorageService.kPlayerBufferSize, 32)
 
-        _mpvProfile.value = localStorage.getValue(LocalStorageService.kMpvProfile, "balanced")
+        // 旧版「兼容模式」一次性迁移（task 10-20-live-playback-power-optimization）：
+        // 开启过兼容模式 = 走 mediacodec 直通 → 迁移到「低功耗」档并清除旧键。
+        val legacyCompat = localStorage.getValue(LocalStorageService.kPlayerCompatMode, false)
+        val savedProfile = localStorage.getValue(LocalStorageService.kMpvProfile, "balanced")
+        if (legacyCompat) {
+            _mpvProfile.value = "performance"
+            localStorage.setValue(LocalStorageService.kMpvProfile, "performance")
+            localStorage.setValue(LocalStorageService.kPlayerCompatMode, false)
+        } else {
+            _mpvProfile.value =
+                if (savedProfile in MpvOptionsService.profileLabels) savedProfile else "balanced"
+        }
         _mpvAdvancedOptions.value =
             localStorage.getValue(LocalStorageService.kMpvAdvancedOptions, "")
         _importedMpvConfPath.value =
@@ -575,12 +572,8 @@ class AppSettingsController(
         _liveSubtitlePositionLocked.value =
             localStorage.getValue(LocalStorageService.kLiveSubtitlePositionLocked, false)
 
-        _videoOutputDriver.value =
-            localStorage.getValue(LocalStorageService.kVideoOutputDriver, "gpu")
         _audioOutputDriver.value =
             localStorage.getValue(LocalStorageService.kAudioOutputDriver, "audiotrack")
-        _videoHardwareDecoder.value =
-            localStorage.getValue(LocalStorageService.kVideoHardwareDecoder, "auto-safe")
 
         _autoUpdateFollowEnable.value =
             localStorage.getValue(LocalStorageService.kAutoUpdateFollowEnable, true)
@@ -732,11 +725,6 @@ class AppSettingsController(
         localStorage.setValue(LocalStorageService.kPlayerScaleMode, value)
     }
 
-    fun setHardwareDecode(e: Boolean) {
-        _hardwareDecode.value = e
-        localStorage.setValue(LocalStorageService.kHardwareDecode, e)
-    }
-
     fun setChatTextSize(e: Float) {
         _chatTextSize.value = e
         localStorage.setValue(LocalStorageService.kChatTextSize, e)
@@ -841,11 +829,6 @@ class AppSettingsController(
     fun setRoomAutoExitDuration(e: Int) {
         _roomAutoExitDuration.value = e
         localStorage.setValue(LocalStorageService.kRoomAutoExitDuration, e)
-    }
-
-    fun setPlayerCompatMode(e: Boolean) {
-        _playerCompatMode.value = e
-        localStorage.setValue(LocalStorageService.kPlayerCompatMode, e)
     }
 
     fun setPlayerBufferSize(e: Int) {
@@ -1075,19 +1058,9 @@ class AppSettingsController(
         localStorage.setValue(LocalStorageService.kLiveSubtitlePositionLocked, e)
     }
 
-    fun setVideoOutputDriver(e: String) {
-        _videoOutputDriver.value = e
-        localStorage.setValue(LocalStorageService.kVideoOutputDriver, e)
-    }
-
     fun setAudioOutputDriver(e: String) {
         _audioOutputDriver.value = e
         localStorage.setValue(LocalStorageService.kAudioOutputDriver, e)
-    }
-
-    fun setVideoHardwareDecoder(e: String) {
-        _videoHardwareDecoder.value = e
-        localStorage.setValue(LocalStorageService.kVideoHardwareDecoder, e)
     }
 
     fun setMpvProfile(e: String) {
@@ -1335,6 +1308,15 @@ class AppSettingsController(
      * 弹幕行数估算（Android Paint 近似 Dart TextPainter）
      * ================================================================ */
 
+    /**
+     * 共享测量 Paint / FontMetrics —— 原实现每次调用都 `Paint()` + `paint.fontMetrics`
+     * 新建两个对象，而 [estimateDanmuTextHeight] 在每条弹幕入轨时都会被调用（高弹幕量房间里
+     * 每秒数十次），是主线程可观的临时分配来源。复用成员实例 + `synchronized` 保护
+     * （调用方可能在主线程/其他线程），零对象分配。
+     */
+    private val danmuMeasurePaint = Paint()
+    private val danmuFontMetrics = Paint.FontMetrics()
+
     /** 估算弹幕文本行高（对应 Dart estimateDanmuTextHeight）。 */
     fun estimateDanmuTextHeight(
         fontSize: Float? = null,
@@ -1343,16 +1325,16 @@ class AppSettingsController(
     ): Float {
         val size = fontSize ?: _danmuSize.value
         val stroke = strokeWidth ?: _danmuStrokeWidth.value
-        val paint = Paint().apply {
-            textSize = size
-            isAntiAlias = true
-            style = Paint.Style.STROKE
-            this.strokeWidth = stroke
-            strokeCap = Paint.Cap.ROUND
-            strokeJoin = Paint.Join.ROUND
+        return synchronized(danmuMeasurePaint) {
+            danmuMeasurePaint.textSize = size
+            danmuMeasurePaint.isAntiAlias = true
+            danmuMeasurePaint.style = Paint.Style.STROKE
+            danmuMeasurePaint.strokeWidth = stroke
+            danmuMeasurePaint.strokeCap = Paint.Cap.ROUND
+            danmuMeasurePaint.strokeJoin = Paint.Join.ROUND
+            danmuMeasurePaint.getFontMetrics(danmuFontMetrics)
+            danmuFontMetrics.descent - danmuFontMetrics.ascent + stroke
         }
-        val metrics = paint.fontMetrics
-        return metrics.descent - metrics.ascent + stroke
     }
 
     /** 可视行数上限（对应 Dart estimateDanmuMaxVisibleLineCount）。 */

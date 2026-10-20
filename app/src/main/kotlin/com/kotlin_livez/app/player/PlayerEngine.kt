@@ -94,9 +94,10 @@ class PlayerEngine private constructor() {
      * `PlayerState.buffer` 同为时间戳，Dart 看门狗用 `buffer - position` 求前探量），
      * 因此不能把它直接与阈值比较——播放 10 分钟后该值约为 600000ms，比较必然为假。
      *
+     * 该属性不再注册为高频 mpv 属性观察（每秒 30–60 次跨 JNI 回调），改由
+     * [pollPlaybackMetrics] 在看门狗 tick / 前后台切换点按需刷新。
      * 0 既表示缓存已耗尽（前探量为 0/负），也表示 mpv 尚未上报该属性
-     * （属性不可用时回调无值，按 0 处理）；两种情形在看门狗判据里都按 `<= 1000L` 处理，
-     * 等价于保守回退到只认 `pausedForCache`，不会因为拿不到缓存量而让看门狗失效。
+     * （属性不可用时按 0 处理），看门狗判据统一按 `<= 1000L` 处理。
      */
     @Volatile
     var bufferMs: Long = 0L
@@ -120,27 +121,10 @@ class PlayerEngine private constructor() {
     private val _videoParamsEvents = MutableSharedFlow<Map<String, Any?>>(extraBufferCapacity = 16)
     val videoParamsEvents: SharedFlow<Map<String, Any?>> = _videoParamsEvents
 
-    private val _logEvents = MutableSharedFlow<String>(extraBufferCapacity = 64)
-    val logEvents: SharedFlow<String> = _logEvents
-
-    /**
-     * mpv `demuxer-cache-time` 原值（缓存末端的时间戳，毫秒，与 position 同一时间轴）；
-     * 属性不可用时为 0。对外暴露的前探量 = 该值 - position（见 [bufferMs]）。
-     */
-    private var demuxerCachePositionMs = 0L
-
-    /** 缓存前探量（毫秒，负值按 0 处理）= 缓存末端时间戳 - 播放位置。 */
-    private fun bufferLeadMs(positionMs: Long): Long =
-        (demuxerCachePositionMs - positionMs).coerceAtLeast(0L)
-
     private val observer = object : MPVLib.EventObserver {
         override fun eventProperty(property: String) {
-            // 无值回调（如 track-list 变化）忽略；属性变为「不可用」时 mpv 也会走这里，
-            // demuxer-cache-time 不可用按 0（缓存已耗尽/未知）处理，避免沿用上一次的陈旧值。
-            if (property == "demuxer-cache-time") {
-                demuxerCachePositionMs = 0L
-                bufferMs = 0L
-            }
+            // 无值回调（如 track-list 变化）忽略。time-pos / demuxer-cache-time 已不再观察，
+            // 进度与缓存时间改由 pollPlaybackMetrics() 按需拉取。
         }
 
         override fun eventProperty(property: String, value: Long) {
@@ -154,13 +138,6 @@ class PlayerEngine private constructor() {
                     _state.value = _state.value.copy(height = value.toInt())
                     _heightEvents.tryEmit(value.toInt())
                     emitVideoParams()
-                }
-                "time-pos" -> {
-                    // 位置推进时同步刷新前探量（缓存末端不变而位置前进 → 前探量随之缩小）。
-                    // 只写 @Volatile 属性，不发射 state（见 positionMs 说明）。
-                    val position = value * 1000
-                    positionMs = position
-                    bufferMs = bufferLeadMs(position)
                 }
                 "duration" -> _state.value = _state.value.copy(durationMs = value * 1000)
             }
@@ -200,13 +177,6 @@ class PlayerEngine private constructor() {
 
         override fun eventProperty(property: String, value: Double) {
             when (property) {
-                "time-pos" -> {
-                    // 位置推进时同步刷新前探量（缓存末端不变而位置前进 → 前探量随之缩小）。
-                    // 只写 @Volatile 属性，不发射 state（见 positionMs 说明）。
-                    val position = (value * 1000).toLong()
-                    positionMs = position
-                    bufferMs = bufferLeadMs(position)
-                }
                 "duration" -> {
                     val ms = (value * 1000).toLong()
                     _state.value = _state.value.copy(durationMs = ms)
@@ -214,12 +184,6 @@ class PlayerEngine private constructor() {
                 "video-params/aspect" -> {
                     _state.value = _state.value.copy(aspect = value)
                     emitVideoParams()
-                }
-                // 缓存末端时间戳（秒 → 毫秒）：仅记录原值，前探量 = 该值 - 播放位置
-                // （mpv 该属性是时间戳而非剩余量，见 bufferMs 说明）。
-                "demuxer-cache-time" -> {
-                    demuxerCachePositionMs = (value * 1000).toLong()
-                    bufferMs = bufferLeadMs(positionMs)
                 }
             }
         }
@@ -256,19 +220,23 @@ class PlayerEngine private constructor() {
 
     private val logObserver = object : MPVLib.LogObserver {
         override fun logMessage(prefix: String, level: Int, text: String) {
-            _logEvents.tryEmit("$prefix: $text")
+            // 无订阅者的 _logEvents 已移除（原实现每条 native 日志都拼接 "$prefix: $text"
+            // 并 tryEmit，纯属浪费）；warn/error/fatal 直接进应用日志。
             val message = text.trim()
-            // mpv 级别 30 及以下为 warn/error/fatal；Surface/MediaCodec 关键词额外保留。
-            if (message.isNotEmpty() && level <= 30) {
+            if (message.isEmpty()) return
+            // mpv 级别 WARN 及以下（warn/error/fatal）进应用日志
+            if (level <= MPVLib.MPV_LOG_LEVEL_WARN) {
                 com.kotlin_livez.app.app.Log.w("[mpv][$prefix][$level] $message")
-            } else if (message.isNotEmpty() && (
+            }
+            // 打开失败特征词只在 ERROR 及更严重级别扫描，避免逐条 native 日志做 4 次
+            // ignoreCase 子串匹配（视频输出高频日志里这是可观的额外开销）。
+            if (level <= MPVLib.MPV_LOG_LEVEL_ERROR && (
                     message.contains("surface", ignoreCase = true) ||
                         message.contains("mediacodec", ignoreCase = true) ||
                         message.contains("Opening failed", ignoreCase = true) ||
                         message.contains("Video: no video", ignoreCase = true)
                     )
             ) {
-                // 高频 native 诊断仅进 Logcat，避免持续扩张应用内 debugLogs 列表。
                 android.util.Log.d(TAG, "[mpv][$prefix][$level] $message")
             }
         }
@@ -340,9 +308,11 @@ class PlayerEngine private constructor() {
         // 对部分 CDN（如 B 站 bilivideo.com）证书链验证失败导致流打不开（logs: flags 8 / not trusted）。
         MPVLib.setOptionString("tls-verify", "no")
         MPVLib.setOptionString("input-default-bindings", "no")
-        // 移动端限制 demuxer 缓存
-        MPVLib.setOptionString("demuxer-max-bytes", "${64 * 1024 * 1024}")
-        MPVLib.setOptionString("demuxer-max-back-bytes", "${64 * 1024 * 1024}")
+        // 移动端限制 demuxer 缓存：前向缓存接入「播放缓冲大小」设置（8..128MB，默认 32MB）；
+        // 直播流不可回退，回退缓存无需 64MB，收敛到 4MB。
+        val bufferSizeMb = config.bufferSizeMb.coerceIn(8, 128)
+        MPVLib.setOptionString("demuxer-max-bytes", "${bufferSizeMb * 1024 * 1024}")
+        MPVLib.setOptionString("demuxer-max-back-bytes", "${4 * 1024 * 1024}")
         // 不设 force-seekable（task 08-29-playback-stutter）：直播流本质不可 seek，强制可 seek
         // 会让 mpv 在缓冲恢复时对底层流发起内部 seek（日志 `Stream is not seekable`），缓存状态
         // 整体复位 100%->0% → 停播回填 1-2s + 音频 underrun（偶发卡顿根因）。原为照搬
@@ -366,14 +336,18 @@ class PlayerEngine private constructor() {
         MPVLib.setOptionString("idle", "yes")
     }
 
+    /**
+     * 注册属性观察。
+     *
+     * `time-pos` / `demuxer-cache-time` **刻意不注册**（task 10-20-live-playback-power-optimization）：
+     * 二者每秒回调 30–60 次，跨 JNI 的逐帧回调只用于看门狗（每 2 秒读一次），
+     * 改由 [pollPlaybackMetrics] 按需拉取。
+     */
     private fun observeProperties() {
         val props = arrayOf(
-            "time-pos" to MPVLib.MPV_FORMAT_DOUBLE,
             "duration" to MPVLib.MPV_FORMAT_DOUBLE,
             "pause" to MPVLib.MPV_FORMAT_FLAG,
             "paused-for-cache" to MPVLib.MPV_FORMAT_FLAG,
-            // 缓存前探量：部分流/节点可能不上报（unavailable），此时走无值回调按 0 处理。
-            "demuxer-cache-time" to MPVLib.MPV_FORMAT_DOUBLE,
             "eof-reached" to MPVLib.MPV_FORMAT_FLAG,
             "speed" to MPVLib.MPV_FORMAT_STRING,
             "media-title" to MPVLib.MPV_FORMAT_STRING,
@@ -384,6 +358,31 @@ class PlayerEngine private constructor() {
         )
         for ((name, format) in props) {
             runCatching { MPVLib.observeProperty(name, format) }
+        }
+    }
+
+    /**
+     * 按需轮询播放进度与缓存时间（task 10-20-live-playback-power-optimization）。
+     *
+     * 原实现把 `time-pos` / `demuxer-cache-time` 注册为 mpv 属性观察，每秒触发 30–60 次
+     * 跨 JNI 回调，而唯一消费方（播放停滞看门狗）每 2 秒才读一次。改为由消费方在
+     * `tickPlaybackWatchdog()` 及前后台切换点主动调用一次，播放期零高频回调。
+     */
+    fun pollPlaybackMetrics() {
+        if (!ensureReady("pollPlaybackMetrics")) return
+        runCatching {
+            val pos = MPVLib.getPropertyDouble("time-pos")
+            if (pos != null && !pos.isNaN() && pos >= 0.0) {
+                positionMs = (pos * 1000.0).toLong()
+            }
+            // demuxer-cache-time 是缓存末端时间戳，必须减去播放位置才是前探量
+            //（见 [bufferMs] 说明）；属性不可用时归 0，看门狗按「缓存已耗尽」处理。
+            val cache = MPVLib.getPropertyDouble("demuxer-cache-time")
+            bufferMs = if (cache != null && !cache.isNaN() && cache >= 0.0) {
+                ((cache * 1000.0).toLong() - positionMs).coerceAtLeast(0L)
+            } else {
+                0L
+            }
         }
     }
 
@@ -593,8 +592,7 @@ class PlayerEngine private constructor() {
         MPVLib.removeLogObserver(logObserver)
         runCatching { MPVLib.destroy() }
             .onFailure { com.kotlin_livez.app.app.Log.e("播放器销毁失败：session=$sessionId", it) }
-        // 缓存末端时间戳与进度/前探量随会话复位（与下方 state 整体复位保持同一语义）。
-        demuxerCachePositionMs = 0L
+        // 进度/缓存时间随会话复位（与下方 state 整体复位保持同一语义）。
         positionMs = 0L
         bufferMs = 0L
         _state.value = PlayerState()
@@ -610,4 +608,6 @@ class MpvInitConfig(
     val hwdec: String?,
     /** 静态 mpv 选项（对应 Dart MpvOptionsService.applyToPlayer 结果） */
     val options: Map<String, String>,
+    /** demuxer 前向缓存上限（MB），接入 AppSettingsController.playerBufferSize（默认 32，范围 8..128） */
+    val bufferSizeMb: Int = 32,
 )

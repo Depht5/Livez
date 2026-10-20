@@ -335,10 +335,8 @@ data class RoomUserSeqMessage(
 
         fun from(reader: ProtoReader): RoomUserSeqMessage {
             var common: Common? = null
-            val ranksList = mutableListOf<RoomUserSeqMessageContributor>()
             var total = 0L
             var popStr = ""
-            val seatsList = mutableListOf<RoomUserSeqMessageContributor>()
             var popularity = 0L
             var totalUser = 0L
             var totalUserStr = ""
@@ -347,10 +345,11 @@ data class RoomUserSeqMessage(
                 val tag = reader.readTag()
                 when (tag.fieldNumber) {
                     1 -> if (tag.wireType == 2) common = reader.readMessage { Common.from(it) } else reader.skipField(tag.wireType)
-                    2 -> if (tag.wireType == 2) ranksList.add(reader.readMessage { RoomUserSeqMessageContributor.from(it) }) else reader.skipField(tag.wireType)
+                    // 2 ranksList / 5 seatsList：上层从不读取，跳过整段贡献者列表，
+                    // 避免为每个榜单用户分配 User/Contributor 深拷贝对象。
+                    2, 5 -> reader.skipField(tag.wireType)
                     3 -> if (tag.wireType == 0) total = reader.readVarint() else reader.skipField(tag.wireType)
                     4 -> if (tag.wireType == 2) popStr = reader.readString() else reader.skipField(tag.wireType)
-                    5 -> if (tag.wireType == 2) seatsList.add(reader.readMessage { RoomUserSeqMessageContributor.from(it) }) else reader.skipField(tag.wireType)
                     6 -> if (tag.wireType == 0) popularity = reader.readVarint() else reader.skipField(tag.wireType)
                     7 -> if (tag.wireType == 0) totalUser = reader.readVarint() else reader.skipField(tag.wireType)
                     8 -> if (tag.wireType == 2) totalUserStr = reader.readString() else reader.skipField(tag.wireType)
@@ -360,10 +359,8 @@ data class RoomUserSeqMessage(
             }
             return RoomUserSeqMessage(
                 common = common,
-                ranksList = ranksList,
                 total = total,
                 popStr = popStr,
-                seatsList = seatsList,
                 popularity = popularity,
                 totalUser = totalUser,
                 totalUserStr = totalUserStr,

@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -61,10 +62,6 @@ fun SettingsScreen(modifier: Modifier = Modifier) {
     val settings = ServiceContainer.appSettings
     // ===== 设置项状态订阅（字段名与 setter 均取自 AppSettingsController 源码）=====
     val mpvProfile by settings.mpvProfile.collectAsStateWithLifecycle()
-    val hardwareDecode by settings.hardwareDecode.collectAsStateWithLifecycle()
-    val playerCompatMode by settings.playerCompatMode.collectAsStateWithLifecycle()
-    val videoOutputDriver by settings.videoOutputDriver.collectAsStateWithLifecycle()
-    val videoHardwareDecoder by settings.videoHardwareDecoder.collectAsStateWithLifecycle()
     val audioOutputDriver by settings.audioOutputDriver.collectAsStateWithLifecycle()
     val allowBackgroundPlayback by settings.allowBackgroundPlayback.collectAsStateWithLifecycle()
     val autoFullScreen by settings.autoFullScreen.collectAsStateWithLifecycle()
@@ -90,8 +87,8 @@ fun SettingsScreen(modifier: Modifier = Modifier) {
     var showMpvProfileDialog by remember { mutableStateOf(false) }
     var showQualityLevelDialog by remember { mutableStateOf(false) }
 
-    // 驱动编辑对话框：null = 关闭；"vo"/"hwdec"/"ao"
-    var editingDriver by remember { mutableStateOf<String?>(null) }
+    // 音频输出驱动对话框（唯一保留的驱动编辑项；vo/hwdec 已由 mpv 档位决定）
+    var showAudioOutputDriverDialog by remember { mutableStateOf(false) }
 
     Column(
         modifier = modifier
@@ -168,58 +165,16 @@ fun SettingsScreen(modifier: Modifier = Modifier) {
         // ===== 播放 =====
         SettingSectionTitle("播放")
         SettingGroupCard {
-            SettingSwitchRow(
-                title = "硬件解码",
-                subtitle = "使用硬件解码加速播放",
-                checked = hardwareDecode,
-                onChange = { settings.setHardwareDecode(it) },
-            )
-
             SettingClickRow(
                 title = "mpv 档位",
-                // 兼容模式 = mediacodec 直通，渲染管线不经过 mpv，档位无实际作用 → 灰显
-                subtitle = if (playerCompatMode) {
-                    "兼容模式下不可用"
-                } else {
-                    MpvOptionsService.profileLabels[mpvProfile] ?: mpvProfile
-                },
-                enabled = !playerCompatMode,
+                subtitle = MpvOptionsService.profileSubtitle(mpvProfile),
                 onClick = { showMpvProfileDialog = true },
-            )
-
-            SettingClickRow(
-                title = "视频输出驱动",
-                subtitle = if (playerCompatMode) {
-                    "兼容模式下不可用"
-                } else {
-                    videoOutputDriver.ifEmpty { "默认（跟随 mpv 档位：gpu）" }
-                },
-                enabled = !playerCompatMode,
-                onClick = { editingDriver = "vo" },
-            )
-
-            SettingClickRow(
-                title = "视频硬件解码器",
-                subtitle = if (playerCompatMode) {
-                    "兼容模式下不可用"
-                } else {
-                    videoHardwareDecoder.ifEmpty { "默认（auto-safe）" }
-                },
-                enabled = !playerCompatMode,
-                onClick = { editingDriver = "hwdec" },
             )
 
             SettingClickRow(
                 title = "音频输出驱动",
                 subtitle = audioOutputDriver.ifEmpty { "默认（audiotrack,opensles）" },
-                onClick = { editingDriver = "ao" },
-            )
-
-            SettingSwitchRow(
-                title = "兼容模式",
-                subtitle = "强制 mediacodec_embed 直通渲染，播放闪退时可尝试开启",
-                checked = playerCompatMode,
-                onChange = { settings.setPlayerCompatMode(it) },
+                onClick = { showAudioOutputDriverDialog = true },
             )
 
             SettingSwitchRow(
@@ -319,48 +274,18 @@ fun SettingsScreen(modifier: Modifier = Modifier) {
         }
     }
 
-    editingDriver?.let { key ->
-        when (key) {
-            "vo" -> SingleChoiceDialog(
-                title = "视频输出驱动",
-                labels = OtherSettingsController.videoOutputDrivers
-                    .filterKeys { it != "mediacodec_embed" }.values.toList(),
-                values = OtherSettingsController.videoOutputDrivers
-                    .filterKeys { it != "mediacodec_embed" }.keys.toList(),
-                selectedValue = videoOutputDriver,
-                onSelect = { value ->
-                    settings.setVideoOutputDriver(value)
-                    editingDriver = null
-                },
-                onDismiss = { editingDriver = null },
-            )
-
-            "hwdec" -> SingleChoiceDialog(
-                title = "视频硬件解码器",
-                labels = OtherSettingsController.hardwareDecoder
-                    .filterKeys { it != "mediacodec" && it != "mediacodec-copy" }.values.toList(),
-                values = OtherSettingsController.hardwareDecoder
-                    .filterKeys { it != "mediacodec" && it != "mediacodec-copy" }.keys.toList(),
-                selectedValue = videoHardwareDecoder,
-                onSelect = { value ->
-                    settings.setVideoHardwareDecoder(value)
-                    editingDriver = null
-                },
-                onDismiss = { editingDriver = null },
-            )
-
-            else -> SingleChoiceDialog(
-                title = "音频输出驱动",
-                labels = OtherSettingsController.audioOutputDrivers.values.toList(),
-                values = OtherSettingsController.audioOutputDrivers.keys.toList(),
-                selectedValue = audioOutputDriver,
-                onSelect = { value ->
-                    settings.setAudioOutputDriver(value)
-                    editingDriver = null
-                },
-                onDismiss = { editingDriver = null },
-            )
-        }
+    if (showAudioOutputDriverDialog) {
+        SingleChoiceDialog(
+            title = "音频输出驱动",
+            labels = OtherSettingsController.audioOutputDrivers.values.toList(),
+            values = OtherSettingsController.audioOutputDrivers.keys.toList(),
+            selectedValue = audioOutputDriver,
+            onSelect = { value ->
+                settings.setAudioOutputDriver(value)
+                showAudioOutputDriverDialog = false
+            },
+            onDismiss = { showAudioOutputDriverDialog = false },
+        )
     }
 
     if (showThemeModeDialog) {
@@ -380,8 +305,9 @@ fun SettingsScreen(modifier: Modifier = Modifier) {
     if (showMpvProfileDialog) {
         SingleChoiceDialog(
             title = "mpv 档位",
-            labels = listOf("流畅", "均衡", "画质"),
-            values = listOf("performance", "balanced", "quality"),
+            labels = MpvOptionsService.profileLabels.values.toList(),
+            values = MpvOptionsService.profileLabels.keys.toList(),
+            descriptions = MpvOptionsService.profileDescriptions.values.toList(),
             selectedValue = mpvProfile,
             onSelect = { value ->
                 settings.setMpvProfile(value)
@@ -432,6 +358,8 @@ private fun SingleChoiceDialog(
     selectedValue: String,
     onSelect: (String) -> Unit,
     onDismiss: () -> Unit,
+    /** 可选的选项描述（与 [labels] 同下标；非空时渲染为标题下方的说明文案）。 */
+    descriptions: List<String>? = null,
 ) {
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -465,11 +393,29 @@ private fun SingleChoiceDialog(
                     ) {
                         // onClick = null：点击统一由行处理（圆圈不再单独拦截手势）
                         RadioButton(selected = selected, onClick = null)
-                        Text(
-                            text = label,
-                            fontSize = 15.sp,
-                            color = MaterialTheme.colorScheme.onSurface,
-                        )
+                        val description = descriptions?.getOrNull(index)
+                        if (!description.isNullOrBlank()) {
+                            // 带描述：主标题 + 说明两段式（mpv 档位三档各带一行说明）
+                            Column {
+                                Text(
+                                    text = label,
+                                    fontSize = 15.sp,
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                )
+                                Spacer(Modifier.height(2.dp))
+                                Text(
+                                    text = description,
+                                    fontSize = 12.sp,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                        } else {
+                            Text(
+                                text = label,
+                                fontSize = 15.sp,
+                                color = MaterialTheme.colorScheme.onSurface,
+                            )
+                        }
                     }
                 }
             }

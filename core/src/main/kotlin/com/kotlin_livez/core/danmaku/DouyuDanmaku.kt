@@ -88,6 +88,9 @@ class DouyuDanmaku : LiveDanmaku() {
     private fun decodeMessage(data: ByteArray) {
         try {
             val result = deserializeDouyu(data) ?: return
+            // 进房/礼物/广播等非聊天包占斗鱼弹幕流量 80% 以上。先用轻量字符串检查过滤，
+            // 避免对每个废包执行 sttToJObject 的递归 Map/List 分配与 JsonObject 构建。
+            if (!result.contains("type@=chatmsg/")) return
             val jsonData = sttToJObject(result)
             if (jsonData !is JsonObject) return
 

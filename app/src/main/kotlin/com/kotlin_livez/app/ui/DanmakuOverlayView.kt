@@ -160,7 +160,13 @@ class DanmakuOverlayView @JvmOverloads constructor(
     private val emojiDstRect = RectF()
 
     private val mainHandler = Handler(Looper.getMainLooper())
-    private val pendingRunnables = ArrayList<Runnable>()
+
+    /**
+     * 待触发的延迟弹幕任务 —— `LinkedHashSet` 而非 `ArrayList`：
+     * 总延迟 0–6s 内可能有上百条待发，触发时 `remove(this)` 由 O(N) 降为 O(1)
+     * （且 Set 天然去重，同一任务不会被重复登记）。
+     */
+    private val pendingRunnables = LinkedHashSet<Runnable>()
 
     private var animator: ValueAnimator? = null
     private var lastFrameTime = 0L
@@ -206,6 +212,13 @@ class DanmakuOverlayView @JvmOverloads constructor(
 
     /** 轨间距（轨道节距，px）= 单行高 × resolveDanmuLineHeight；位图行高与定位基准。 */
     private var geomTrackPitchPx = 0f
+
+    /**
+     * 当前目标轨道行数（= resolveDanmuLineCount 的结果，随几何快照一并缓存）。
+     * 原实现每来一条弹幕都重新 resolve（内部要新建 Paint 估算行高）；
+     * 现只在 [refreshGeometryIfNeeded] 中计算一次，入轨时直接读该值。
+     */
+    private var geomTargetLineCount: Int = 1
 
     /** 字重档位缓存键（-1 表示尚未构建；仅档位变化才重建 Typeface）。 */
     private var cachedTypefaceBucket = -1
@@ -266,7 +279,9 @@ class DanmakuOverlayView @JvmOverloads constructor(
 
     /** 销毁（onDetachedFromWindow 已自动清理；宿主可再显式调用）。 */
     fun release() {
+        released = true
         clear()
+        clearBitmapPool()
     }
 
     /* ---------- 弹幕入轨 ---------- */
@@ -337,6 +352,8 @@ class DanmakuOverlayView @JvmOverloads constructor(
             )
         }
         geomTrackPitchPx = geomItemHeightPx * lineHeightFactor
+        // 行数同快照缓存：入轨（addToTrack）直接读 geomTargetLineCount，不再逐条重算
+        geomTargetLineCount = resolveDanmuLineCount()
         geometryGeneration++
     }
 
@@ -367,12 +384,12 @@ class DanmakuOverlayView @JvmOverloads constructor(
         // 延迟任务（postDelayed 最长 6s）可能在退后台后触发：与 enqueue 同一套不可见短路，
         // 避免后台入轨并起动画空转。可见性恢复后在飞的弹幕继续推进，无需补发。
         if (!isShown || windowVisibility != View.VISIBLE) return
-        // 对齐 Dart：显示几行 = 0 → 不显示弹幕；行数按视口高度钳制（全屏时自动变少）
-        val lineCount = resolveDanmuLineCount()
-        if (lineCount <= 0) return
-
-        // 几何快照先于建位图刷新（字号/轨距/透明度都是位图烘焙的输入）
+        // 几何快照先于建位图刷新（字号/轨距/透明度都是位图烘焙的输入），
+        // 行数直接读缓存值（不再每条弹幕 resolve 一次）
         refreshGeometryIfNeeded()
+        // 对齐 Dart：显示几行 = 0 → 不显示弹幕；行数按视口高度钳制（全屏时自动变少）
+        val targetLineCount = geomTargetLineCount
+        if (targetLineCount <= 0) return
 
         val size = appSettings.danmuSize.value
         val textSizePx = size * resources.displayMetrics.density
@@ -411,7 +428,7 @@ class DanmakuOverlayView @JvmOverloads constructor(
         // 左边界才释放轨道"——后者导致高弹幕量下轨道恒满，新弹幕被"全满选 x 最小"
         // 策略顶掉刚出发的在飞弹幕。
         var target = -1
-        for (track in 0 until lineCount) {
+        for (track in 0 until targetLineCount) {
             if (canEnterTrack(track, itemWidth)) {
                 target = track
                 break
@@ -671,6 +688,67 @@ class DanmakuOverlayView @JvmOverloads constructor(
     /** 位图缓存宽度上限：超出不做缓存，回退 onDraw 原位绘制（implement.md 回退路径）。 */
     private val maxCachedItemWidthPx = 2048f
 
+    /* ---------- 宽度分桶 BitmapPool（单条位图复用，杜绝高频房间的 Native 位图创建/GC） ---------- */
+
+    /** 宽度桶（px）：借出时选第一个 >= 所需宽度的桶。 */
+    private val widthBuckets = intArrayOf(256, 512, 1024, 2048)
+
+    /** 每桶上限（总计 ≤ 32 张）：超出即回收，避免池无限扩张。 */
+    private val maxPooledPerBucket = 8
+
+    /** 宽度分桶复用池（主线程独占：入池/借出/清空全部在主线程）。 */
+    private val bitmapPool: Array<java.util.ArrayDeque<Bitmap>> =
+        Array(widthBuckets.size) { java.util.ArrayDeque<Bitmap>() }
+
+    /** 复用 Canvas（位图光栅专用；每次绘制后 `setBitmap(null)` 释放引用）。 */
+    private val bitmapCanvas = Canvas()
+
+    /** release() 后不再向池中归还位图（池本身也已被 [clearBitmapPool] 清空）。 */
+    private var released = false
+
+    /** 位图宽度所属桶下标；-1 = 超过最大桶（不入池）。 */
+    private fun bucketIndexOfWidth(widthPx: Int): Int {
+        for (i in widthBuckets.indices) {
+            if (widthBuckets[i] >= widthPx) return i
+        }
+        return -1
+    }
+
+    /**
+     * 从池中借出一张「宽 ≥ [minWidth]、高 ≥ [minHeight]」的位图并擦成透明；
+     * 无匹配返回 null（调用方新建）。
+     */
+    private fun acquirePooledBitmap(minWidth: Int, minHeight: Int): Bitmap? {
+        val bucketIndex = bucketIndexOfWidth(minWidth)
+        if (bucketIndex < 0) return null
+        val bucket = bitmapPool[bucketIndex]
+        val iterator = bucket.descendingIterator()
+        while (iterator.hasNext()) {
+            val bitmap = iterator.next()
+            if (bitmap.isRecycled) {
+                iterator.remove()
+                continue
+            }
+            if (bitmap.height >= minHeight) {
+                iterator.remove()
+                // 复用前清空上一轮内容（池中位图可能带旧弹幕像素）
+                bitmap.eraseColor(Color.TRANSPARENT)
+                return bitmap
+            }
+        }
+        return null
+    }
+
+    /** 清空并回收池中全部位图（release / 脱离窗口时调用）。 */
+    private fun clearBitmapPool() {
+        for (bucket in bitmapPool) {
+            while (bucket.isNotEmpty()) {
+                val bitmap = bucket.pollLast() ?: break
+                if (!bitmap.isRecycled) bitmap.recycle()
+            }
+        }
+    }
+
     /**
      * 确保单条的位图缓存与当前几何代次一致（仅在主线程调用：addToTrack / step /
      * 表情回调；onDraw 自身**不**构建，避免绘制期分配）。
@@ -767,8 +845,22 @@ class DanmakuOverlayView @JvmOverloads constructor(
 
         val widthPx = ceil(item.measuredWidth).toInt().coerceIn(1, 4096)
         val heightPx = ceil(contentBottom - contentTop).toInt().coerceIn(1, 4096)
-        val bitmap = Bitmap.createBitmap(widthPx, heightPx, Bitmap.Config.ARGB_8888)
-        val canvas = Canvas(bitmap)
+        // 优先从宽度分桶池借出（同桶位图宽度可能更大，右侧为透明留白，不影响绘制）；
+        // 池中无足够高的位图时新建 —— 宽度按桶取整、高度按轨距留 25% 余量，便于后续复用。
+        val pooled = if (widthPx <= widthBuckets.last()) {
+            acquirePooledBitmap(widthPx, heightPx)
+        } else {
+            null
+        }
+        val bitmap = pooled ?: run {
+            val bucketIndex = bucketIndexOfWidth(widthPx)
+            val newWidth = if (bucketIndex >= 0) widthBuckets[bucketIndex] else widthPx
+            val newHeight = maxOf(
+                heightPx,
+                ceil(geomTrackPitchPx * 1.25f).toInt().coerceAtLeast(32),
+            )
+            Bitmap.createBitmap(newWidth, newHeight, Bitmap.Config.ARGB_8888)
+        }
         val alpha = (appSettings.danmuOpacity.value.coerceIn(0f, 1f) * 255f).toInt()
 
         fillPaint.color = item.color
@@ -783,8 +875,14 @@ class DanmakuOverlayView @JvmOverloads constructor(
             strokePaint.style = Paint.Style.STROKE
             strokePaint.strokeWidth = item.strokeWidthPx
         }
-        // 位图坐标系：原点 = 该项内容左上角（x 相对条左缘 = 0，y 相对 contentTop = 0）
-        drawSegments(canvas, item, 0f, baseline - contentTop, alpha)
+        // 位图坐标系：原点 = 该项内容左上角（x 相对条左缘 = 0，y 相对 contentTop = 0）。
+        // 复用单例 Canvas：绘制后立即 setBitmap(null)，避免其持有位图引用。
+        try {
+            bitmapCanvas.setBitmap(bitmap)
+            drawSegments(bitmapCanvas, item, 0f, baseline - contentTop, alpha)
+        } finally {
+            bitmapCanvas.setBitmap(null)
+        }
         item.cachedTop = contentTop
         return bitmap
     }
@@ -856,18 +954,35 @@ class DanmakuOverlayView @JvmOverloads constructor(
     }
 
     /**
-     * 回收单条位图 —— **延后一帧**（post 到主线程消息队列）而非就地 `recycle()`。
+     * 回收单条位图 —— **延后一帧**（post 到主线程消息队列）后归还分桶池，池满/不可复用才 `recycle()`。
      *
      * 为什么延后：本 View 在硬件加速下，刚刚录制的这一帧里 `canvas.drawBitmap` 会把位图
      * 记录进该帧的 RenderNode/DisplayList；**立即 recycle 一个仍被已录制帧引用的位图**
      * 可能抛 `Canvas: trying to use a recycled bitmap`。post 出去的 runnable 在本次
      * 帧遍历（含 onDraw 录制）结束之后、下一帧重新录制之前执行，而三个回收点
      * （出屏 / clear / onDetachedFromWindow）都伴随 invalidate 或整帧重建，
-     * 下一帧一定不再引用旧位图 → 回收策略不变、竞争窗口收窄到最小。
+     * 下一帧一定不再引用旧位图 → 入池/回收都是安全的。
      */
     private fun recycleLater(bitmap: Bitmap) {
         if (bitmap.isRecycled) return
-        mainHandler.post { if (!bitmap.isRecycled) bitmap.recycle() }
+        mainHandler.post {
+            if (bitmap.isRecycled) return@post
+            // 归还分桶池而非直接 recycle：下一批弹幕入轨时无需再分配 Native 位图
+            // （高弹幕量房间每秒数十次 createBitmap + 纹理上传 + GC 抖动的主要来源）。
+            // 视图已脱离窗口 / 已 release / 桶已满 / 位图太矮（低于当前轨距的 1.1 倍，
+            // 复用价值低）→ 直接回收。
+            val bucketIndex = bucketIndexOfWidth(bitmap.width)
+            val minHeight = ceil(geomTrackPitchPx * 1.1f).toInt()
+            if (isAttachedToWindow && !released &&
+                bucketIndex >= 0 &&
+                bitmap.height >= minHeight &&
+                bitmapPool[bucketIndex].size < maxPooledPerBucket
+            ) {
+                bitmapPool[bucketIndex].addLast(bitmap)
+            } else {
+                bitmap.recycle()
+            }
+        }
     }
 
     /* ---------- 动画驱动（单循环推进所有在轨弹幕） ---------- */
@@ -972,7 +1087,9 @@ class DanmakuOverlayView @JvmOverloads constructor(
         // 新建 Paint 估算行高 → 每帧隐式分配）。行距对齐 Dart（与 addToTrack 同源）：
         // 行距 = 弹幕行高 × resolveDanmuLineHeight（clamp 1..3）——行数设置得少时行距拉大、
         // 弹幕疏朗；行数与视口上限一致时行距 ≈ 行高。
-        refreshGeometryIfNeeded()
+        // 正常动画帧已在 step() 中刷新过几何，这里只在从未刷新（key == 0）时兜底，
+        // 避免同一帧算两次。
+        if (geometryKey == 0L) refreshGeometryIfNeeded()
         val opacity = (appSettings.danmuOpacity.value.coerceIn(0f, 1f) * 255f).toInt()
 
         // 每帧每条：**1 次 drawBitmap**（描边 + 填充 + 已就绪表情在入轨/表情就绪时已烘进位图）。
@@ -988,8 +1105,9 @@ class DanmakuOverlayView @JvmOverloads constructor(
     }
 
     override fun onDetachedFromWindow() {
-        // 回收点 ③：脱离窗口（离房/视图销毁）—— 清空轨道并回收全部单条位图
+        // 回收点 ③：脱离窗口（离房/视图销毁）—— 清空轨道并回收全部单条位图与复用池
         clear()
+        clearBitmapPool()
         super.onDetachedFromWindow()
     }
 }

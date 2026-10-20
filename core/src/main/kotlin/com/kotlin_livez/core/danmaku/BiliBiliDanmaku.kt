@@ -48,6 +48,11 @@ class BiliBiliDanmaku : LiveDanmaku() {
     private var webSocketUtil: WebSocketUtil? = null
     private lateinit var args: BiliBiliDanmakuArgs
 
+    private companion object {
+        /** 解压后多条 JSON 之间的控制字符分隔符；每包复用，避免高频重新编译正则。 */
+        val SPLIT_REGEX = Regex("[\\u0000-\\u001f]+")
+    }
+
     override suspend fun start(arg: Any?) {
         args = arg as? BiliBiliDanmakuArgs ?: return
         if (args.token.isEmpty()) {
@@ -144,7 +149,7 @@ class BiliBiliDanmaku : LiveDanmaku() {
                     else -> body
                 }
                 val text = String(body, Charsets.UTF_8)
-                val group = text.split(Regex("[\\u0000-\\u001f]+"))
+                val group = text.split(SPLIT_REGEX)
                 for (item in group) {
                     if (item.length > 2 && item.startsWith("{")) {
                         parseMessage(item)
@@ -173,6 +178,9 @@ class BiliBiliDanmaku : LiveDanmaku() {
         BrotliInputStream(ByteArrayInputStream(body)).use { it.readBytes() }
 
     private fun parseMessage(jsonMessage: String) {
+        // 一次弹幕包解压后常有几十条 JSON（在线人数/榜单/进场等），只有这两种需要展示。
+        // 先做轻量 contains 过滤，跳过绝大多数 Json.parseToJsonElement 树构建。
+        if (!jsonMessage.contains("DANMU_MSG") && !jsonMessage.contains("SUPER_CHAT_MESSAGE")) return
         try {
             val obj = Json.parseToJsonElement(jsonMessage).jsonObject
             val cmd = obj["cmd"].str().toString()
@@ -292,7 +300,9 @@ class BiliBiliDanmaku : LiveDanmaku() {
             val i0 = info.getOrNull(0)?.jsonArray
             if (i0 != null && i0.size > 15) {
                 val extra = i0.getOrNull(15)?.jsonObject?.get("extra").str().orEmpty()
-                if (extra.isNotEmpty()) {
+                // extra 是二次编码的 JSON 字符串，解析成本高。普通弹幕既不含 '[' 也无 emots，
+                // 两者都不满足时直接跳过，避免为每条纯文本弹幕构建一棵 JSON 树。
+                if (extra.isNotEmpty() && message.contains('[') && extra.contains("\"emots\"")) {
                     val extraObj = Json.parseToJsonElement(extra).jsonObject
                     val emots = extraObj["emots"]?.jsonObject
                     if (emots != null) {

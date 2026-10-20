@@ -13,11 +13,11 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
-import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
 import okhttp3.WebSocket
 import okhttp3.WebSocketListener
+import okio.ByteString.Companion.toByteString
 import java.io.IOException
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
@@ -84,7 +84,17 @@ class WebSocketUtil(
 
     private val stateLock = Any()
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
-    private val client = OkHttpClient.Builder()
+
+    /**
+     * 从全局 [HttpClient.client] 派生，复用其 Dispatcher 线程池与 ConnectionPool。
+     * 每次进房直接 `OkHttpClient.Builder()` 会各自新建线程池与连接池，频繁切房时
+     * 线程与空闲连接堆积；`newBuilder()` 只复制配置，底层共享同一套线程池。
+     *
+     * 注意：派生 client 的 `dispatcher` / `connectionPool` 与全局实例是同一个对象，
+     * 因此 [close] 绝不能调用 `cancelAll()` / `evictAll()` / `executorService.shutdown()`，
+     * 否则会误杀同进程内的全部 HTTP 请求。
+     */
+    private val client = HttpClient.client.newBuilder()
         .connectTimeout(connectTimeoutMs, TimeUnit.MILLISECONDS)
         .apply {
             if (pingIntervalMs > 0) pingInterval(pingIntervalMs, TimeUnit.MILLISECONDS)
@@ -422,7 +432,7 @@ class WebSocketUtil(
     fun sendBytes(bytes: ByteArray): Boolean {
         val attempt = callbackAttempt.get() ?: activeAttempt ?: return false
         return isCurrent(attempt, attempt.socket) &&
-            attempt.socket?.send(okio.ByteString.of(*bytes)) == true
+            attempt.socket?.send(bytes.toByteString(0, bytes.size)) == true
     }
 
     /** 主动淘汰当前回调所属的「传输已打开、业务不可用」连接。 */
@@ -539,9 +549,8 @@ class WebSocketUtil(
         }
         jobs.forEach { it.cancel() }
         socket?.cancel()
-        client.dispatcher.cancelAll()
-        client.connectionPool.evictAll()
-        client.dispatcher.executorService.shutdown()
+        // Dispatcher / ConnectionPool 属于全局 HttpClient，close 只终止本实例的 socket 与协程；
+        // 若在这里 cancelAll/evictAll/shutdown，会把 App 其余 HTTP 请求一起打断且无法恢复。
         scope.cancel()
     }
 

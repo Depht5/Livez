@@ -24,9 +24,12 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
@@ -114,6 +117,29 @@ class LiveRoomController(
     private val _messages = MutableStateFlow<List<LiveMessage>>(emptyList())
     val messages: StateFlow<List<LiveMessage>> = _messages
 
+    /**
+     * 飘屏弹幕直通通道（task 10-20-live-playback-power-optimization R3.1）。
+     *
+     * 通过屏蔽/去重校验的聊天消息**立即** `tryEmit` 到这里，供 `DanmakuOverlayView` 0 延迟
+     * 入轨；不再让飘屏去扫描 `messages` 列表找游标（旧实现每来一条消息都要 indexOfLast
+     * 回溯整表，且列表被头部裁剪时会整体断流）。
+     *
+     * 缓冲 128 + DROP_OLDEST：UI 侧收集协程短暂阻塞时宁可丢最旧的飘屏，也不阻塞弹幕回调。
+     * replay = 0（默认）⇒ 页面重组/重进聊天 Tab 不会重放历史弹幕。
+     */
+    private val _danmakuEvents = MutableSharedFlow<LiveMessage>(
+        extraBufferCapacity = 128,
+        onBufferOverflow = BufferOverflow.DROP_OLDEST,
+    )
+    val danmakuEvents: SharedFlow<LiveMessage> = _danmakuEvents
+
+    /**
+     * 聊天列表 100ms 批量合并缓冲（R3.1）。原实现每条消息 `drop(1)` + `+ msg` 做两次
+     * 整表拷贝并发射两次 `_messages`，高热房间下等价于每来一条弹幕就整页重组两次。
+     */
+    private val pendingChatBuffer = ArrayList<LiveMessage>(32)
+    private var chatFlushJob: Job? = null
+
     /** 醒目留言（对应 Dart superChats） */
     private val _superChats = MutableStateFlow<List<LiveSuperChatMessage>>(emptyList())
     val superChats: StateFlow<List<LiveSuperChatMessage>> = _superChats
@@ -130,11 +156,12 @@ class LiveRoomController(
 
     /**
      * 同步「用户上滑回看历史」意图（UI 侧滚动锁 → 控制器，由 LiveRoomScreen 的
-     * LaunchedEffect 驱动；task 10-17-ui-power-and-recomposition-governance）。
+     * 贴底/拖动检测驱动；task 10-17-ui-power-and-recomposition-governance）。
      *
-     * 唯一读取方是聊天入列路径的 200 条上限裁剪（`size > 200 && !_disableAutoScroll`）：
-     * 置 true 期间不再裁掉头部消息（对齐 Dart，保证上滑回看时不丢内容），代价是该期间
-     * 消息列表无上限增长——用户贴底（置 false）即恢复裁剪。
+     * 同时被两处读取：① 聊天批量合入时的上限选择（[flushPendingChatMessages]：
+     * 跟随态 [CHAT_FOLLOW_CAP]，回看态 [CHAT_BACKLOG_CAP]）；② 聊天 Tab 的「↓ 回到底部」
+     * 胶囊与自动滚底门控（`ChatTabSection`）。置 true 期间不按条裁剪（对齐 Dart，
+     * 保证上滑回看时不丢内容），代价是该期间列表以软上限缓慢增长——用户贴底即恢复。
      */
     fun setDisableAutoScroll(value: Boolean) {
         _disableAutoScroll.value = value
@@ -209,6 +236,16 @@ class LiveRoomController(
     private var wsChatLogged = false
     private var keywordDropLogged = false
     private var dupDropLogged = false
+
+    /**
+     * 关键词屏蔽列表的预分组缓存（R3.3）：仅在 [AppSettingsController.shieldList] 的**引用**
+     * 变化时重算一次，不再每条弹幕各跑两次 `filter`。
+     * - [cachedFullShields]：不含空格的词，按空白分词后**全等**匹配；
+     * - [cachedPhraseShields]：含空格的短语，按整段文本**子串**匹配。
+     */
+    private var cachedShieldListRef: Set<String>? = null
+    private var cachedFullShields: List<String> = emptyList()
+    private var cachedPhraseShields: List<String> = emptyList()
 
     /** 临时静音用户（对应 Dart tempMutedUsers） */
     private val _tempMutedUsers = MutableStateFlow<Set<String>>(emptySet())
@@ -865,7 +902,9 @@ class LiveRoomController(
         val now = System.currentTimeMillis()
         // 进度与缓冲前探量已从 PlayerState 剥离为引擎上的 @Volatile 属性
         //（task 10-17-ui-power-and-recomposition-governance：避免 30–60Hz 的 time-pos
-        // 回调持续发射 state 触发整页重组），此处直接读属性。
+        // 回调持续发射 state 触发整页重组）。task 10-20 起 mpv 也不再观察这两个属性，
+        // 改为看门狗按需拉取：本周期只做 2 次 JNI getProperty，替代原先每秒 30–60 次回调。
+        player.pollPlaybackMetrics()
         val position = player.positionMs
         val lastPosition = _lastWatchdogPosition
         if (lastPosition == null || position != lastPosition) {
@@ -1018,16 +1057,17 @@ class LiveRoomController(
 
     /** 接收 WebSocket 消息（对应 Dart onWSMessage）。 */
     fun onWSMessage(raw: LiveMessage) {
+        // 后台 / 未开播 → 主线程 0 弹幕处理（R3.3）：屏蔽/去重、列表合入、飘屏投递全部跳过。
+        // 旧实现在后台仍会逐条跑正则与列表拷贝，只把最后的叠加渲染挡掉，等于白烧 CPU。
+        if (!_liveStatus.value || _isBackground) return
         val msg = sanitizeLiveMessage(raw)
         if (msg.type == LiveMessageType.chat) {
             if (!wsChatLogged) {
                 wsChatLogged = true
                 Log.d("onWSMessage: 首条聊天消息到达")
             }
-            // 顺序修正（弹幕持续性排查候选 1 的结论）：原先「先 drop(1) 裁剪、后过滤」
-            // 会让被屏蔽/重复的消息造成列表净缩短——聊天列表无故丢行 + StateFlow 多一次
-            // 无意义发射。引用游标本身不受影响（不可变列表，元素引用不变），但语义上
-            // 应只在真正追加新消息时才裁剪头部。对齐 Dart：过滤判定在前、裁剪+追加在后。
+            // 顺序（弹幕持续性排查的结论）：过滤判定在前、入列在后——被屏蔽/重复的消息
+            // 不得造成列表净缩短或无意义发射。对齐 Dart。
             if (isUserShielded(msg.userName) || isTempMutedUser(msg.userName)) {
                 Log.d("已过滤被屏蔽用户: ${msg.userName}")
                 return
@@ -1046,19 +1086,14 @@ class LiveRoomController(
                 }
                 return
             }
-            if (_messages.value.size > 200 && !_disableAutoScroll.value) {
-                _messages.value = _messages.value.drop(1)
-            }
-            _messages.value = _messages.value + msg
+            // 飘屏弹幕 0 延迟直通（R3.1）：不参与 100ms 聊天批次，直接交给 DanmakuOverlayView。
+            _danmakuEvents.tryEmit(msg)
+            enqueueChatMessage(msg)
             wsChatReceivedCount++
             // 热门房间逐条写 Log 会触发日志列表复制与 Logcat I/O；仅按百条采样。
             if (wsChatReceivedCount % 100 == 0) {
-                Log.d("聊天入列 #$wsChatReceivedCount size=${_messages.value.size}")
+                Log.d("聊天入列 #$wsChatReceivedCount size=${_messages.value.size + pendingChatBuffer.size}")
             }
-            if (!_liveStatus.value || (_isBackground && !allowBackgroundPlayback())) {
-                return
-            }
-            // 叠加弹幕渲染（对应 Dart _scheduleOverlayDanmaku）由 View 层监听 messages 实现
         } else if (msg.type == LiveMessageType.online) {
             _online.value = (msg.data as? Number)?.toInt() ?: msg.data?.toString()?.toIntOrNull() ?: 0
         } else if (msg.type == LiveMessageType.superChat) {
@@ -1073,6 +1108,62 @@ class LiveRoomController(
         }
     }
 
+    /**
+     * 聊天消息入列（R3.1）：先挂到 [pendingChatBuffer]，由 100ms 窗口一次性合入
+     * [_messages]。窗口内的 N 条消息只产生 **1 次**列表构建与 1 次 StateFlow 发射。
+     *
+     * 调用方全部在控制器 Main scope（`Dispatchers.Main.immediate`）上，故缓冲队列无需加锁。
+     */
+    private fun enqueueChatMessage(msg: LiveMessage) {
+        pendingChatBuffer.add(msg)
+        if (chatFlushJob?.isActive != true) {
+            chatFlushJob = scope.launch {
+                delay(CHAT_FLUSH_INTERVAL_MS)
+                flushPendingChatMessages()
+                // 只清自己这一次的句柄；期间不会有第二个 job 被创建（见上方 isActive 判据）。
+                chatFlushJob = null
+            }
+        }
+    }
+
+    /**
+     * 把 [pendingChatBuffer] 合入 [_messages]（R3.1）——单次构建、单次发射。
+     *
+     * 上限：跟随态 [CHAT_FOLLOW_CAP]，用户上滑回看态 [CHAT_BACKLOG_CAP]（软上限，防无限膨胀）。
+     * 超出时丢弃 current 的头部，而不是像旧实现那样先 `drop(1)` 再 `+ msg` 做两次整表拷贝。
+     */
+    private fun flushPendingChatMessages() {
+        if (pendingChatBuffer.isEmpty()) return
+        val cap = if (_disableAutoScroll.value) CHAT_BACKLOG_CAP else CHAT_FOLLOW_CAP
+        val current = _messages.value
+        val pendingSize = pendingChatBuffer.size
+        val total = current.size + pendingSize
+        val next: List<LiveMessage> = when {
+            // 缓冲自身就超过上限（极端突发）：只保留最新 cap 条
+            pendingSize >= cap -> ArrayList(pendingChatBuffer.subList(pendingSize - cap, pendingSize))
+            total <= cap -> ArrayList<LiveMessage>(total).apply {
+                addAll(current)
+                addAll(pendingChatBuffer)
+            }
+            else -> {
+                // total > cap 且 pendingSize < cap ⇒ total - cap ∈ (0, current.size)
+                val result = ArrayList<LiveMessage>(cap)
+                result.addAll(current.subList(total - cap, current.size))
+                result.addAll(pendingChatBuffer)
+                result
+            }
+        }
+        pendingChatBuffer.clear()
+        _messages.value = next
+    }
+
+    /** 丢弃聊天批次缓冲（换房 / 销毁）：避免旧房间的待刷新消息漏进新列表。 */
+    private fun resetPendingChatState() {
+        chatFlushJob?.cancel()
+        chatFlushJob = null
+        pendingChatBuffer.clear()
+    }
+
     private fun allowBackgroundPlayback(): Boolean {
         // 对应 Dart _allowBackgroundPlayback：读真实设置项。
         // （修复：原硬编码 return false 使"后台播放"设置与切后台逻辑整体失效）
@@ -1082,6 +1173,8 @@ class LiveRoomController(
     /** 添加系统消息（对应 Dart addSysMsg）。 */
     fun addSysMsg(text: String) {
         if (!_rxRoomId.value.isNullOrEmpty() && _roomDisposed) return
+        // 系统消息必须按到达顺序出现：先合入 100ms 窗口内已缓冲的聊天，再追加本条。
+        flushPendingChatMessages()
         _messages.value = _messages.value + LiveMessage(
             type = LiveMessageType.chat,
             userName = "LiveSysMessage",
@@ -1103,32 +1196,49 @@ class LiveRoomController(
 
     /** 屏蔽关键词检查（对应 Dart _isKeywordShielded）。 */
     private fun isKeywordShielded(msg: LiveMessage): Boolean {
-        val shieldList = appSettings.shieldList.value
+        // 屏蔽总开关 / 关键词屏蔽开关关闭 → 0 归一化、0 正则、0 列表扫描（R3.3）。
+        if (!appSettings.danmuShieldEnable.value) return false
+        if (!appSettings.danmuKeywordShieldEnable.value) return false
+        val shieldList = refreshShieldCacheIfNeeded()
         if (shieldList.isEmpty()) return false
         val text = normalizeMessageText(msg.message)
-        val parts = text.split(WS_REGEX).filter { it.isNotEmpty() }
-        val fullNames = shieldList.filter { !it.contains(" ") }
-        val phraseNames = shieldList.filter { it.contains(" ") }
-        if (fullNames.isNotEmpty() && parts.any { p -> fullNames.any { it.equals(p, ignoreCase = true) } }) {
-            return true
+        if (cachedFullShields.isNotEmpty()) {
+            val parts = text.split(WS_REGEX).filter { it.isNotEmpty() }
+            if (parts.any { p -> cachedFullShields.any { it.equals(p, ignoreCase = true) } }) {
+                return true
+            }
         }
-        if (phraseNames.isNotEmpty() && phraseNames.any { text.contains(it) }) {
+        if (cachedPhraseShields.isNotEmpty() && cachedPhraseShields.any { text.contains(it) }) {
             return true
         }
         return false
+    }
+
+    /**
+     * 仅在 `shieldList` 的**引用**变化时重算预分组（R3.3）。
+     * 设置侧的列表是不可变集合、每次增删都换新实例 ⇒ 引用比较即等价于内容变化判定。
+     */
+    private fun refreshShieldCacheIfNeeded(): Set<String> {
+        val rawSet = appSettings.shieldList.value
+        if (rawSet !== cachedShieldListRef) {
+            cachedShieldListRef = rawSet
+            cachedFullShields = rawSet.filter { !it.contains(" ") }
+            cachedPhraseShields = rawSet.filter { it.contains(" ") }
+        }
+        return rawSet
     }
 
     private fun normalizeMessageText(text: String): String {
         return text.replace(WS_REGEX, " ").trim()
     }
 
-    /** 用户屏蔽检查（对应 Dart _isUserShielded；用户屏蔽词列表在 AppSettingsController）。 */
-    private fun isUserShielded(userName: String): Boolean {
-        val shieldList = appSettings.shieldList.value
-        if (shieldList.isEmpty()) return false
-        val normalized = normalizeUserName(userName)
-        return shieldList.any { it.equals(normalized, ignoreCase = true) }
-    }
+    /**
+     * 用户屏蔽检查（对应 Dart _isUserShielded）。
+     * 委托 [AppSettingsController.shouldShieldUser]：屏蔽总开关 / 用户屏蔽开关与
+     * 全局+分站点分组列表的裁决都收敛在设置侧，控制器不再各自维护一份读取逻辑。
+     */
+    private fun isUserShielded(userName: String): Boolean =
+        appSettings.shouldShieldUser(userName, site?.id)
 
     private fun normalizeUserName(userName: String): String {
         return userName.trim()
@@ -1159,6 +1269,8 @@ class LiveRoomController(
 
     /** 弹幕去重（对应 Dart _isDuplicateDanmu）。 */
     private fun isDuplicateDanmu(msg: LiveMessage): Boolean {
+        // 去重关闭 → 不再做两次正则替换 + 指纹哈希（R3.3）
+        if (!appSettings.danmuDedupeEnable.value) return false
         val fingerprint = buildDanmuFingerprint(msg)
         if (fingerprint.isEmpty()) return false
         var count = recentDanmuCounts[fingerprint] ?: 0
@@ -1297,6 +1409,10 @@ class LiveRoomController(
 
     private fun restartSuperChatRefreshTimer(loadGeneration: Int) {
         superChatRefreshJob?.cancel()
+        superChatRefreshJob = null
+        // 仅 B站 / 虎牙提供 SC（R3.3）：其余站点的 SC 列表恒为空，30s/60s 轮询纯属空转。
+        val siteId = site?.id
+        if (siteId != Constant.kBiliBili && siteId != Constant.kHuya) return
         superChatRefreshJob = scope.launch {
             while (isCurrentLoad(loadGeneration)) {
                 delay(60 * 1000L)
@@ -1314,6 +1430,9 @@ class LiveRoomController(
             while (isCurrentLoad(loadGeneration)) {
                 delay(60 * 1000L)
                 if (!isCurrentLoad(loadGeneration)) break
+                // 后台不轮询（R3.3）：后台期间无人在看页面，网络请求只烧电与流量；
+                // 回前台后的首轮（≤60s）自然补齐状态。
+                if (_isBackground) continue
                 refreshOnlineStatus()
             }
         }
@@ -1346,11 +1465,9 @@ class LiveRoomController(
                     _liveStatus.value = false
                     addSysMsg("主播已下播")
                 }
-                val refreshed = withContext(Dispatchers.IO) {
-                    currentSite.liveSite.roomDetail(currentRoomId)
-                }
-                if (!isCurrentLoad(loadGeneration) || !_onlineRefreshInFlight) return@launch
-                _online.value = refreshed.online
+                // 不再每 60s 重拉一次 `roomDetail()`（R3.3：它是最重的接口调用，仅为了同步
+                // 一个人气数字）。人气值由弹幕流的 online 消息与首次进场详情维护；
+                // 本定时器只负责轻量的开播/下播状态判定。
             } catch (e: Exception) {
                 if (isCurrentLoad(loadGeneration)) Log.logPrint(e)
             } finally {
@@ -1523,6 +1640,8 @@ class LiveRoomController(
                         runCatching { it.stop() }
                             .onFailure { error -> Log.e("切房时停止弹幕失败: $error") }
                     }
+                    // 聊天批次缓冲与列表一并清空：否则旧房间 100ms 窗口内的消息会漏进新房间。
+                    resetPendingChatState()
                     _messages.value = emptyList()
                     superChatFingerprints.clear()
                     _superChats.value = emptyList()
@@ -1614,6 +1733,9 @@ class LiveRoomController(
             while (isCurrentLoad(loadGeneration)) {
                 delay(1000)
                 if (!isCurrentLoad(loadGeneration)) break
+                // 后台跳过字符串格式化与状态发射（R3.3）：后台无人在看，1Hz 的格式化 +
+                // StateFlow 发射纯属浪费；回前台后下一拍自动补齐正确时长。
+                if (_isBackground) continue
                 val currentSeconds = System.currentTimeMillis() / 1000
                 var seconds = (currentSeconds - startTimeStamp).coerceAtLeast(0L)
                 val h = seconds / 3600
@@ -1631,7 +1753,9 @@ class LiveRoomController(
         _isBackground = true
         backgroundedAtElapsedMs = SystemClock.elapsedRealtime()
         // 进度读引擎上的 @Volatile 属性（已从 PlayerState 剥离，见 tickPlaybackWatchdog 说明）；
-        // 切后台/回前台跨线程，@Volatile 保证可见性。
+        // 切后台/回前台跨线程，@Volatile 保证可见性。读前主动拉取一次——mpv 不再观察
+        // time-pos（task 10-20 R2.1），否则这里读到的是上一次看门狗采样（最多滞后 2s）。
+        player.pollPlaybackMetrics()
         positionBeforeBackgroundMs = player.positionMs
         // 后台播放关闭 = 切后台立即暂停（设置对 _playerAutoPause 的互补语义，亦为用户预期；
         // Dart 原行为是"不启动保活、任由系统冻结进程"，Kotlin 改为确定性暂停）
@@ -1668,7 +1792,9 @@ class LiveRoomController(
         scope.launch {
             delay(1_200)
             if (!isCurrentLoad(loadGeneration) || _isBackground) return@launch
-            // 快照只用于仍留在 PlayerState 的字段；进度改读引擎属性（同上）
+            // 快照只用于仍留在 PlayerState 的字段；进度改读引擎属性（同上）。
+            // 回前台后先主动采样一次：mpv 已不再观察 time-pos（task 10-20 R2.1）。
+            player.pollPlaybackMetrics()
             val s = player.state.value
             val stalled = player.positionMs <= beforeMs || s.pausedForCache || s.completed || !s.playing
             if (!stalled) return@launch
@@ -1699,6 +1825,8 @@ class LiveRoomController(
         playbackWatchdogJob = null
         _playbackRefreshInFlight = false
         onlineStatusRefreshPolicy.reset()
+        // 聊天批次窗口的挂起 job 必须随控制器销毁，避免它在下一次进入直播间时合入旧房间消息。
+        resetPendingChatState()
         mediaEventSubJobs.forEach { it.cancel() }
         mediaEventSubJobs.clear()
         reopenPendingFuture()
@@ -1730,6 +1858,15 @@ class LiveRoomController(
          * 模式里的双引号沿用改动前源码的 \u201C\u201D 转义写法。
          */
         private val PUNCT_REGEX = Regex("[\\p{Punct}！？。，、；：\u201C\u201D''（）【】《》]")
+
+        /** 聊天列表批量合并窗口（R3.1）：窗口内的新消息合并成一次列表构建 + 一次发射。 */
+        private const val CHAT_FLUSH_INTERVAL_MS = 100L
+
+        /** 正常跟随态聊天列表上限（超出丢弃最旧消息）。 */
+        private const val CHAT_FOLLOW_CAP = 200
+
+        /** 用户上滑回看态的软上限（不按条裁剪，仅防无限膨胀）。 */
+        private const val CHAT_BACKLOG_CAP = 1000
 
         /** 恢复风暴窗口内允许的最大恢复次数（5 分钟 6 次）。 */
         private const val MAX_RECOVERIES_PER_WINDOW = 6

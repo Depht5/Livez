@@ -78,6 +78,12 @@ class DouyinDanmaku : LiveDanmaku() {
 
         /** flush 间隔毫秒（对应 Dart _chatFlushInterval） */
         const val CHAT_FLUSH_INTERVAL = 80L
+
+        /** `[表情]` 文本标记；每条聊天复用同一实例，避免高频重新编译正则。 */
+        val EMOJI_REGEX = Regex("\\[[^\\[\\]]{1,16}\\]")
+
+        /** 固定心跳帧字节：心跳与进房都只发 `PushFrame(payloadType='hb')`，只序列化一次。 */
+        val HEARTBEAT_BYTES: ByteArray = PushFrame(payloadType = "hb").writeToBuffer()
     }
 
     override suspend fun start(arg: Any?) {
@@ -339,14 +345,12 @@ class DouyinDanmaku : LiveDanmaku() {
 
     /** 心跳：PushFrame(payloadType='hb')。 */
     override fun heartbeat() {
-        val obj = PushFrame(payloadType = "hb")
-        webSocketUtil?.sendBytes(obj.writeToBuffer())
+        webSocketUtil?.sendBytes(HEARTBEAT_BYTES)
     }
 
     /** 进房：与 Dart 一样发送一个 hb 帧。 */
     private fun joinRoom() {
-        val obj = PushFrame(payloadType = "hb")
-        webSocketUtil?.sendBytes(obj.writeToBuffer())
+        webSocketUtil?.sendBytes(HEARTBEAT_BYTES)
     }
 
     /** 解码 WebSocket 二进制帧：PushFrame → gzip 解压 → Response → 分发。 */
@@ -389,7 +393,7 @@ class DouyinDanmaku : LiveDanmaku() {
                     }
                 }
                 "WebcastRoomUserSeqMessage" -> unpackWebcastRoomUserSeqMessage(msg.payload)
-                "WebcastGiftMessage" -> unpackWebcastGiftMessage(msg.payload)
+                // 礼物消息当前不展示，不再为其执行完整的 GiftMessage protobuf 反序列化。
             }
         }
         return Pair(messageCount, chatCount)
@@ -533,8 +537,7 @@ class DouyinDanmaku : LiveDanmaku() {
             return
         }
         var start = 0
-        val emojiRegex = Regex("\\[[^\\[\\]]{1,16}\\]")
-        for (match in emojiRegex.findAll(input)) {
+        for (match in EMOJI_REGEX.findAll(input)) {
             val token = match.value
             val asset = DouyinEmojiAssets.assetFor(token) ?: continue
             if (match.range.first > start) {
