@@ -72,6 +72,24 @@ android {
         }
     }
 
+    // 自定义 APK 输出文件名（仅影响构建产物文件名，不影响包名/版本/签名）：
+    //   release → Livez-<version>-arm64-v8a.apk
+    //   debug   → Livez_D-<version>-arm64-v8a.apk
+    // 未配置签名时 release 追加 -unsigned，避免未签名包与正式包同名。
+    val apkVersion = defaultConfig.versionName ?: "dev"
+    val hasReleaseSigning = signingConfigs.findByName("release") != null
+    applicationVariants.all {
+        val isDebug = buildType.name == "debug"
+        val unsigned = name == "release" && !hasReleaseSigning
+        outputs.all {
+            val prefix = if (isDebug) "Livez_D" else "Livez"
+            val suffix = if (unsigned) "-unsigned" else ""
+            @Suppress("DEPRECATION")
+            (this as com.android.build.gradle.internal.api.BaseVariantOutputImpl).outputFileName =
+                "$prefix-$apkVersion-arm64-v8a$suffix.apk"
+        }
+    }
+
     // 仅打包 arm64-v8a（测试设备为 arm64 真机；减少包体）
     packaging {
         jniLibs {
