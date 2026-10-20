@@ -1,0 +1,28 @@
+# Normalize line endings: LF in the repository and in the working tree.
+* text=auto eol=lf
+
+# Windows entry points keep CRLF.
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# Unix entry points keep LF.
+gradlew text eol=lf
+*.sh text eol=lf
+
+# Binary assets: never attempt text conversion.
+*.jar binary
+*.aar binary
+*.so binary
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.webp binary
+*.gif binary
+*.ico binary
+*.ttf binary
+*.otf binary
+*.mp3 binary
+*.wav binary
+*.zip binary
+*.jks binary
+*.keystore binary
