@@ -91,17 +91,23 @@ class FollowUserController(
     init {
         pageSize = appSettings.followPageSize.value
         restoreGroupSelection()
-        scope.launch { refreshData(forceStatus = false) }
         indexedEventSub = EventBus.listen<Int>(EventBus.kBottomNavigationBarClicked) { index ->
             if (index == 1) refreshData()
         }
         updatedListJob = scope.launch {
             followService.updatedListEvents.collect { filterData() }
         }
-        if (appSettings.followRefreshOnEnter.value && followService.followList.value.isNotEmpty()) {
-            scope.launch {
+        // 首次加载与启动刷新共用 FollowService.ensureLoaded()（加载单飞）：
+        // 不再各自 loadFollows 互相替换列表，避免启动刷新的状态写回孤儿对象。
+        scope.launch {
+            followService.ensureLoaded().join()
+            // 原 init 的 refreshData(forceStatus = false) 会在加载后同步标签列表；保留该行为。
+            updateTagList()
+            filterData()
+            // 进页自动刷新不再以「当前列表非空」为前提（应用启动时 DB 尚未读完，旧判据恒为假）。
+            // 与 refreshOnStartup 的 force=true 刷新由 30s 冷却自然去重。
+            if (appSettings.followRefreshOnEnter.value) {
                 followService.startUpdateStatus(force = false)
-                filterData()
             }
         }
     }

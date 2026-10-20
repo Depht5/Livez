@@ -13,7 +13,9 @@ import com.kotlin_livez.core.model.FollowRefreshProgress
 import com.kotlin_livez.core.model.FollowRefreshScope
 import com.kotlin_livez.core.model.LiveRoomDetail
 import com.kotlin_livez.core.site.DouyinSite
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
@@ -103,6 +105,14 @@ class FollowService(
     private var _eventSub: Job? = null
     private var _eventDebounceJob: Job? = null
 
+    /**
+     * 首次 DB 加载单飞（task 10-20-follow-startup-status-refresh）：
+     * 启动刷新与关注页控制器首屏共用同一次 loadFollows，避免两路各自读库、相互整体替换列表，
+     * 导致启动刷新持有的旧对象成为孤儿（状态写回丢失）。只在主线程调用，无需额外锁。
+     */
+    private var initialLoadJob: Deferred<Unit>? = null
+    private var initialLoadCompleted = false
+
     /** 刷新统计与队列共享锁（Dart 单线程事件循环无需；Kotlin 多协程 worker 需要） */
     private val syncLock = Any()
 
@@ -177,13 +187,28 @@ class FollowService(
     }
 
     /**
+     * 保证至少完成过一次 DB 加载；并发调用复用同一个 Job（加载单飞）。
+     * 已成功加载过则直接返回已完成的 Deferred。失败时下次调用会重新发起加载。
+     */
+    fun ensureLoaded(): Deferred<Unit> {
+        initialLoadJob?.takeIf { it.isActive }?.let { return it }
+        if (initialLoadCompleted) return CompletableDeferred(Unit)
+        val job = scope.async {
+            loadFollows(updateStatus = false, forceUpdateStatus = false)
+            initialLoadCompleted = true
+        }
+        initialLoadJob = job
+        return job
+    }
+
+    /**
      * 应用启动刷新一次（task player-icons-follow-ux）：先完成列表加载，再强制全量刷状态。
-     * force = true 刻意跳过 30s 冷却；同一协程顺序执行避免"列表未加载完就刷空列表"竞态；
-     * 无条件执行，不受 followRefreshOnEnter（进页自动刷）约束。
+     * force = true 刻意跳过 30s 冷却；ensureLoaded().join() 与关注页控制器首屏共用同一次加载，
+     * 避免"列表未加载完就刷空列表"竞态；无条件执行，不受 followRefreshOnEnter（进页自动刷）约束。
      */
     fun refreshOnStartup() {
         scope.launch {
-            loadFollows(updateStatus = false, forceUpdateStatus = false)
+            ensureLoaded().join()
             startUpdateStatus(force = true)
         }
     }
@@ -203,13 +228,15 @@ class FollowService(
         filterData()
     }
 
-    /** 切换特别关注（对应 Dart updateSpecialFollow）。 */
+    /** 切换特别关注（对应 Dart updateSpecialFollow）。不可变发布，见 FollowUserSnapshots。 */
     suspend fun updateSpecialFollow(follow: FollowUser, value: Boolean) {
-        follow.isSpecialFollow = value
-        dbService.addFollow(follow)
+        val current = _followList.value.firstOrNull { it.id == follow.id } ?: follow
+        val updated = current.copy(isSpecialFollow = value)
+        dbService.addFollow(updated)
+        _followList.value = FollowUserSnapshots.replaceById(_followList.value, updated)
         filterData()
-        if (!value && follow.liveStatus != 2) {
-            _liveNotifySentIds.remove(follow.id)
+        if (!value && updated.liveStatus != 2) {
+            _liveNotifySentIds.remove(updated.id)
         }
     }
 
@@ -391,7 +418,11 @@ class FollowService(
         }
         _refreshStatusTargets(targets, force = force, refreshScope = resolvedScope)
         if (!allowDetailRefresh || resolvedScope.automatic || targets.isEmpty()) return
-        val detailTargets = _buildManualDetailTargets(targets)
+        // targets 是刷新前的列表快照；状态刷新改为不可变替换后，按 id 回查当前项，
+        // 否则用旧 liveStatus 过滤会漏掉「本次刚开播」的房间（保持 R4 的详情补齐语义不变）。
+        val detailTargets = _buildManualDetailTargets(
+            targets.map { target -> _followList.value.firstOrNull { it.id == target.id } ?: target },
+        )
         _refreshMetadataTargets(
             detailTargets,
             scope = resolvedScope,
@@ -458,8 +489,12 @@ class FollowService(
         val lastStartedAt = _lastUpdateStatusStartedAt
         if (!force && lastStartedAt != null && now - lastStartedAt < updateStatusCooldownMs) {
             Log.logPrint("关注状态刷新仍在冷却中，跳过本次自动刷新")
-            _updating.value = false
-            _resetRefreshProgress()
+            // 只有当没有在飞任务时才收尾 UI 态：启动刷新（force=true）可能正在进行，
+            // 控制器 init 随后的 force=false 必然命中本分支；若无条件清空 updating /
+            // 进度，会把在飞刷新的下拉指示器与进度卡错误收起。
+            if (!_updating.value) {
+                _resetRefreshProgress()
+            }
             filterData()
             return
         }
@@ -749,7 +784,6 @@ class FollowService(
         workerIndex: Int = 0,
         pauseRemainingOnLimited: Boolean = false,
     ): _FollowRefreshItemResult {
-        val previousStatus = item.liveStatus
         val notifyReady = _liveNotifyReadyIds.contains(item.id)
         try {
             if (item.siteId == Constant.kDouyin && douyinLimiter != null) {
@@ -766,34 +800,51 @@ class FollowService(
             if (item.siteId == Constant.kDouyin && douyinLimiter != null) {
                 douyinLimiter.onSuccess()
             }
-            item.liveStatus = if (isLiving) 2 else 1
-            if (item.siteId == Constant.kDouyin) {
+            // 不可变发布：以「当前列表中按 id 取到的最新项」为基准 copy，不再原地改 item。
+            // 刷新期间列表可能已被 loadFollows 重载，旧引用会成为孤儿；按 id 落回当前列表即可兜底。
+            val current = _followList.value.firstOrNull { it.id == item.id } ?: item
+            val previousStatus = current.liveStatus
+            val updated = if (item.siteId == Constant.kDouyin) {
                 _reconcileDouyinFollowIdentity(
-                    item,
+                    current,
                     isLiving = isLiving,
                     generation = generation,
                     detail = null,
                 )
-            } else if (item.liveStatus == 2) {
-                val detail = withContext(Dispatchers.IO) { site.liveSite.roomDetail(item.roomId) }
-                if (generation != null && generation != _updateGeneration) {
-                    return _FollowRefreshItemResult(_FollowRefreshItemOutcome.deferred)
-                }
-                item.liveStartTime = parseShowTimeMillis(detail.showTime)
             } else {
-                item.liveStartTime = null
-                _liveNotifySentIds.remove(item.id)
+                var nextStartTime: Long? = null
+                if (isLiving) {
+                    val detail = withContext(Dispatchers.IO) { site.liveSite.roomDetail(current.roomId) }
+                    if (generation != null && generation != _updateGeneration) {
+                        return _FollowRefreshItemResult(_FollowRefreshItemOutcome.deferred)
+                    }
+                    nextStartTime = parseShowTimeMillis(detail.showTime)
+                } else {
+                    _liveNotifySentIds.remove(current.id)
+                }
+                // 详情请求期间列表可能再次被重载：发布前按 id 重取最新项作为基准，
+                // 避免用旧快照的标题/封面覆盖重载后的新值（与抖音校正路径同口径）。
+                val base = _followList.value.firstOrNull { it.id == current.id } ?: current
+                val next = base.copy(
+                    liveStatus = if (isLiving) 2 else 1,
+                    liveStartTime = nextStartTime,
+                )
+                _followList.value = FollowUserSnapshots.replaceById(_followList.value, next)
+                next
             }
-            if (item.isSpecialFollow &&
+            if (generation != null && generation != _updateGeneration) {
+                return _FollowRefreshItemResult(_FollowRefreshItemOutcome.deferred)
+            }
+            if (updated.isSpecialFollow &&
                 notifyReady &&
                 previousStatus != 2 &&
-                item.liveStatus == 2 &&
-                !_liveNotifySentIds.contains(item.id)
+                updated.liveStatus == 2 &&
+                !_liveNotifySentIds.contains(updated.id)
             ) {
-                _liveNotifySentIds.add(item.id)
-                scope.launch { LiveNotificationService.showLiveStart(item) }
+                _liveNotifySentIds.add(updated.id)
+                scope.launch { LiveNotificationService.showLiveStart(updated) }
             }
-            _liveNotifyReadyIds.add(item.id)
+            _liveNotifyReadyIds.add(updated.id)
             return _FollowRefreshItemResult(_FollowRefreshItemOutcome.success)
         } catch (e: Exception) {
             if (generation != null && generation != _updateGeneration) {
@@ -819,53 +870,68 @@ class FollowService(
                     limited = true,
                 )
             }
-            item.liveStatus = 0
-            item.liveStartTime = null
+            // 异常分支同样 copy 发布（写回当前列表项，而不是入队时的旧对象）
+            val current = _followList.value.firstOrNull { it.id == item.id } ?: item
+            val updated = current.copy(liveStatus = 0, liveStartTime = null)
+            _followList.value = FollowUserSnapshots.replaceById(_followList.value, updated)
             return _FollowRefreshItemResult(_FollowRefreshItemOutcome.failed, limited = false)
         }
     }
 
-    /** 校正抖音关注身份（合并同名/迁移 roomId；对应 Dart _reconcileDouyinFollowIdentity）。 */
+    /**
+     * 校正抖音关注身份（合并同名/迁移 roomId；对应 Dart _reconcileDouyinFollowIdentity）。
+     * 不可变发布：以当前列表中的对应项为基准 copy，id 迁移时以旧 id 替换发布；DB 与标签引用迁移
+     * 语义不变。返回本次发布的最新快照（id 可能已迁移），调用方不得再通过入参读状态。
+     */
     private suspend fun _reconcileDouyinFollowIdentity(
         item: FollowUser,
         isLiving: Boolean,
         generation: Int? = null,
         detail: LiveRoomDetail? = null,
-    ) {
+    ): FollowUser {
+        val base = _followList.value.firstOrNull { it.id == item.id } ?: item
+        var latest = base
         siteOperation(item.siteId) { site ->
-            val resolvedDetail = detail ?: withContext(Dispatchers.IO) { site.roomDetail(item.roomId) }
+            val resolvedDetail = detail ?: withContext(Dispatchers.IO) { site.roomDetail(base.roomId) }
             if (generation != null && generation != _updateGeneration) return@siteOperation
+            // 网络期间列表可能已被重载：再次按 id 取当前项（而非写回入队时的旧对象）。
+            val current = _followList.value.firstOrNull { it.id == base.id } ?: base
+            var updated = current
             val resolvedRoomId = resolvedDetail.roomId.trim()
-            if (resolvedRoomId.isNotEmpty() && resolvedRoomId != item.roomId) {
-                val oldId = item.id
-                val newId = "${item.siteId}_$resolvedRoomId"
+            if (resolvedRoomId.isNotEmpty() && resolvedRoomId != current.roomId) {
+                val oldId = current.id
+                val newId = "${current.siteId}_$resolvedRoomId"
                 dbService.deleteFollow(oldId)
-                item.id = newId
-                item.roomId = resolvedRoomId
-                dbService.addFollow(item)
+                updated = updated.copy(id = newId, roomId = resolvedRoomId)
+                dbService.addFollow(updated)
                 _migrateFollowTagReferences(oldId, newId)
             }
             val title = resolvedDetail.title.trim()
             val cover = resolvedDetail.cover.trim()
-            var updated = false
+            var previewChanged = false
             if (title.isNotEmpty()) {
-                item.roomTitle = title
-                updated = true
+                updated = updated.copy(roomTitle = title)
+                previewChanged = true
             }
             if (cover.isNotEmpty()) {
-                item.roomCover = cover
-                updated = true
+                updated = updated.copy(roomCover = cover)
+                previewChanged = true
             }
-            if (updated) item.previewUpdatedAt = System.currentTimeMillis()
-            item.liveStatus = if (resolvedDetail.status) 2 else 1
-            item.liveStartTime = if (resolvedDetail.status && isLiving) {
-                parseShowTimeMillis(resolvedDetail.showTime)
-            } else {
-                null
-            }
-            if (item.liveStatus != 2) _liveNotifySentIds.remove(item.id)
-            dbService.addFollow(item)
+            if (previewChanged) updated = updated.copy(previewUpdatedAt = System.currentTimeMillis())
+            updated = updated.copy(
+                liveStatus = if (resolvedDetail.status) 2 else 1,
+                liveStartTime = if (resolvedDetail.status && isLiving) {
+                    parseShowTimeMillis(resolvedDetail.showTime)
+                } else {
+                    null
+                },
+            )
+            if (updated.liveStatus != 2) _liveNotifySentIds.remove(updated.id)
+            _followList.value = FollowUserSnapshots.replaceById(_followList.value, updated, oldId = current.id)
+            dbService.addFollow(updated)
+            latest = updated
         }
+        return latest
     }
 
     /** 迁移关注标签中的旧 id 引用（对应 Dart _migrateFollowTagReferences）。 */
@@ -978,10 +1044,13 @@ class FollowService(
         }
     }
 
-    /** 进入直播间前校正抖音身份（对应 Dart resolveFollowBeforeEnter）。 */
+    /**
+     * 进入直播间前校正抖音身份（对应 Dart resolveFollowBeforeEnter）。
+     * 返回本次校正后发布的最新快照（id/roomId 可能已迁移），而不是入参对象。
+     */
     suspend fun resolveFollowBeforeEnter(item: FollowUser): FollowUser {
         if (item.siteId != Constant.kDouyin) return item
-        _refreshMetadataTargets(
+        val resolved = _refreshMetadataTargets(
             listOf(item),
             scope = FollowRefreshScope(
                 scopeKey = "room-enter",
@@ -995,24 +1064,33 @@ class FollowService(
             refreshProgressUi = false,
             reconcileDouyinIdentity = true,
         )
-        return item
+        return resolved.firstOrNull()
+            ?: _followList.value.firstOrNull { it.id == item.id }
+            ?: item
     }
 
-    /** 逐个补齐封面与标题（对应 Dart _refreshMetadataTargets）。 */
+    /**
+     * 逐个补齐封面与标题（对应 Dart _refreshMetadataTargets）。
+     * 不可变发布：循环内只生成快照暂存 [pending]，循环结束后按 id 一次性合并到**当前**列表、
+     * 写库并 filterData()；不会写回循环开始时的旧对象。
+     * @return 本次实际发布的最新快照（resolveFollowBeforeEnter 依赖它拿到迁移后的 id/roomId）。
+     */
     private suspend fun _refreshMetadataTargets(
         targets: List<FollowUser>,
         scope: FollowRefreshScope,
         stage: String,
         refreshProgressUi: Boolean,
         reconcileDouyinIdentity: Boolean,
-    ) {
-        if (targets.isEmpty()) return
+    ): List<FollowUser> {
+        if (targets.isEmpty()) return emptyList()
         val orderedTargets = _orderRefreshBucketBySite(_distinctFollowUsers(targets))
         val generation = _updateGeneration
         var completed = 0
         var successCount = 0
         var failedCount = 0
         var changed = false
+        // key = 最新快照 id；Douyin 身份迁移后为 newId，普通分支为当前项 id。
+        val pending = LinkedHashMap<String, FollowUser>()
 
         fun updateProgress(done: Boolean) {
             if (!refreshProgressUi) return
@@ -1037,32 +1115,38 @@ class FollowService(
         updateProgress(done = false)
 
         for (item in orderedTargets) {
-            if (generation != _updateGeneration) return
+            if (generation != _updateGeneration) return pending.values.toList()
             try {
                 siteOperation(item.siteId) { site ->
                     val detail = withContext(Dispatchers.IO) { site.roomDetail(item.roomId) }
                     if (generation != _updateGeneration) return@siteOperation
                     if (reconcileDouyinIdentity && item.siteId == Constant.kDouyin) {
-                        _reconcileDouyinFollowIdentity(
+                        val updated = _reconcileDouyinFollowIdentity(
                             item,
                             isLiving = item.liveStatus == 2 || detail.status,
                             generation = generation,
                             detail = detail,
                         )
+                        pending[updated.id] = updated
                     } else {
+                        val current = _followList.value.firstOrNull { it.id == item.id } ?: item
+                        var updated = current
+                        var metadataChanged = false
                         val title = detail.title.trim()
                         val cover = detail.cover.trim()
-                        if (title.isNotEmpty() && title != item.roomTitle) {
-                            item.roomTitle = title
-                            changed = true
+                        if (title.isNotEmpty() && title != current.roomTitle) {
+                            updated = updated.copy(roomTitle = title)
+                            metadataChanged = true
                         }
-                        if (cover.isNotEmpty() && cover != item.roomCover) {
-                            item.roomCover = cover
-                            changed = true
+                        if (cover.isNotEmpty() && cover != current.roomCover) {
+                            updated = updated.copy(roomCover = cover)
+                            metadataChanged = true
                         }
                         if (title.isNotEmpty() || cover.isNotEmpty()) {
-                            item.previewUpdatedAt = System.currentTimeMillis()
+                            updated = updated.copy(previewUpdatedAt = System.currentTimeMillis())
                         }
+                        if (updated != current) pending[updated.id] = updated
+                        if (metadataChanged) changed = true
                     }
                 }
                 successCount++
@@ -1076,11 +1160,20 @@ class FollowService(
             }
         }
         updateProgress(done = true)
-        if (changed) {
-            dbService.addFollows(_followList.value)
+
+        // 一次性合并：即使循环期间列表被重载，也按 id 落到当前列表（不写回旧对象）。
+        if (pending.isNotEmpty()) {
+            var snapshot = _followList.value
+            for (updated in pending.values) {
+                snapshot = FollowUserSnapshots.replaceById(snapshot, updated)
+            }
+            _followList.value = snapshot
+            if (changed) dbService.addFollows(snapshot)
+            filterData()
+        } else if (refreshProgressUi) {
             filterData()
         }
-        if (refreshProgressUi) filterData()
+        return pending.values.toList()
     }
 
     /* ================================================================
