@@ -20,6 +20,15 @@ import androidx.compose.ui.Modifier
 val LocalPagerViewportWidthDp = compositionLocalOf { Float.NaN }
 
 /**
+ * 分页器是否正处于「切页过渡」中（手势滑动 / 相邻动画 / 跨页 PagerJump）。
+ *
+ * 用 `derivedStateOf` 收敛：过渡期间每帧都要读 `currentPageOffsetFraction`，但状态只在
+ * 「开始」与「落位」两帧翻转，读数方（页内网格）因此最多重组两次，不会随每帧重组。
+ * 页外使用（无分页器）恒为 false。
+ */
+val LocalPagerTransitionActive = compositionLocalOf { false }
+
+/**
  * 视口宽度容器：能拿到 [LocalPagerViewportWidthDp] 时用普通 `Box`（0 层子组合），
  * 否则回退 `BoxWithConstraints`。调用方拿到的始终是「本区域可用的宽度 dp」。
  */

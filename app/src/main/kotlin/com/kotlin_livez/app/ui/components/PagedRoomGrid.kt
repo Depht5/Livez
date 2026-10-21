@@ -176,7 +176,16 @@ fun <T> PagedRoomGridCore(
     // **下一帧重组之前**重算 item provider，于是 `items` 读到新列表（20 条）而同一闭包捕获的 key
     // 数组仍是旧帧的空列表（0 条）⇒ 首页切换平台必崩 `IndexOutOfBoundsException: Index 0 out of
     // bounds for length 0`（Phase 2.3 真机日志）。取 `.value` 后 `items` 与下方 keys 永远同帧同长。
-    val list = listController.list.collectAsStateWithLifecycle().value
+    val rawList = listController.list.collectAsStateWithLifecycle().value
+    // R3（task 10-21-tablet-home-pager-fluency）：首屏列表错峰渲染 —— 站点首次拿到非空数据时，
+    // 若正处在 280ms 切页滑动中，先不把列表交给 LazyVerticalGrid（继续显示转圈），落位当帧再渲染，
+    // 避免「滑动中途一次性组合 20~30 张卡片」抢动画帧。已渲染过非空数据的站点不受影响（直接滑入）。
+    // 注意：`list`（门控后的快照）与下方 keys 仍取自同一 remember 作用域，快照一致性红线不破。
+    val pagerTransitioning = LocalPagerTransitionActive.current
+    var hasRenderedNonEmpty by remember(listController) { mutableStateOf(rawList.isNotEmpty()) }
+    if (rawList.isNotEmpty() && !pagerTransitioning) hasRenderedNonEmpty = true
+    val deferInitialRender = rawList.isNotEmpty() && !hasRenderedNonEmpty && pagerTransitioning
+    val list = if (deferInitialRender) emptyList<T>() else rawList
     val pageLoading by listController.pageLoading.collectAsStateWithLifecycle()
     val pageEmpty by listController.pageEmpty.collectAsStateWithLifecycle()
     val pageError by listController.pageError.collectAsStateWithLifecycle()
@@ -346,8 +355,10 @@ fun <T> PagedRoomGridCore(
                         )
                     }
 
-                    // 首屏加载中（尚无数据时居中转圈；已有数据时的翻页刷新由顶部下拉指示器表达）
-                    pageLoading && list.isEmpty() -> Box(
+                    // 首屏加载中（尚无数据时居中转圈；已有数据时的翻页刷新由顶部下拉指示器表达）。
+                    // `deferInitialRender` = 首屏数据在滑动中途返回、被刻意推迟到落位的那一帧，
+                    // 这期间同样要显示转圈（否则会露出空网格）。
+                    (pageLoading || deferInitialRender) && list.isEmpty() -> Box(
                         modifier = Modifier.fillMaxSize(),
                         contentAlignment = Alignment.Center,
                     ) {

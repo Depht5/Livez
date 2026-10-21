@@ -44,6 +44,7 @@ import com.kotlin_livez.app.modules.category.AppLiveCategory
 import com.kotlin_livez.app.modules.category.CategoryController
 import com.kotlin_livez.app.modules.category.CategoryListController
 import com.kotlin_livez.app.ui.components.NetImage
+import com.kotlin_livez.app.ui.components.LocalPagerTransitionActive
 import com.kotlin_livez.app.ui.components.SitePagerTabs
 import com.kotlin_livez.app.ui.components.ViewportWidthBox
 import com.kotlin_livez.app.ui.theme.LocalAppDarkTheme
@@ -190,7 +191,19 @@ private fun CategorySiteGrid(
     onOpenSub: (LiveSubCategory) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val categories by listController.list.collectAsStateWithLifecycle()
+    val rawCategories by listController.list.collectAsStateWithLifecycle()
+    // R3（task 10-21-tablet-home-pager-fluency）：分类页首次切平台时同样错峰渲染 ——
+    // 滑动中途返回的分类数据先压住（继续转圈），落位当帧再一次性渲染，
+    // 避免几十个子分类卡片插入正在播放的 280ms 滑动动画。机制同 PagedRoomGridCore。
+    val pagerTransitioning = LocalPagerTransitionActive.current
+    var hasRenderedNonEmpty by remember(listController) {
+        mutableStateOf(rawCategories.isNotEmpty())
+    }
+    if (rawCategories.isNotEmpty() && !pagerTransitioning) hasRenderedNonEmpty = true
+    val deferInitialRender =
+        rawCategories.isNotEmpty() && !hasRenderedNonEmpty && pagerTransitioning
+    val categories: List<AppLiveCategory> =
+        if (deferInitialRender) emptyList() else rawCategories
     val pageLoading by listController.pageLoading.collectAsStateWithLifecycle()
     val pageEmpty by listController.pageEmpty.collectAsStateWithLifecycle()
     val pageError by listController.pageError.collectAsStateWithLifecycle()
@@ -378,7 +391,7 @@ private fun CategorySiteGrid(
                             )
                         }
                     }
-                    pageLoading && categories.isEmpty() -> {
+                    (pageLoading || deferInitialRender) && categories.isEmpty() -> {
                         LoadingOverlay()
                     }
                 }

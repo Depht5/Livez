@@ -27,6 +27,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ScrollableTabRow
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -426,6 +427,16 @@ fun SitePagerTabs(
     // 当前两页过渡（null = 空闲）。用 remember 而非 rememberSaveable：过渡是瞬时 UI 态，
     // 进程重建/旋转后不需要恢复（旋转会中断动画，落位由下方失步自愈守卫兜底语义承担）。
     var jump by remember { mutableStateOf<PagerJump?>(null) }
+    // 切页过渡态（task 10-21-tablet-home-pager-fluency R3）：供页内网格做「首屏渲染错峰」。
+    // 用 derivedStateOf 收敛到布尔：过渡期间每帧都会读 currentPageOffsetFraction，
+    // 但状态只在开始/落位两帧翻转，页内网格因此最多重组两次（中途不随帧重组）。
+    val isPagerTransitioning by remember(pagerState) {
+        derivedStateOf {
+            jump != null ||
+                pagerState.isScrollInProgress ||
+                abs(pagerState.currentPageOffsetFraction) > 0.001f
+        }
+    }
     // 相邻站点点击启动的 animateScrollToPage 协程：起跳/跨页点击前要先取消它（否则两次滚动
     // 互相抢 MutatorMutex，旧协程留下的半页偏移会让新动画从中间位置起步），回写也要避开它。
     var animateScrollJob by remember { mutableStateOf<Job?>(null) }
@@ -665,6 +676,7 @@ fun SitePagerTabs(
                         if (content != null) {
                             CompositionLocalProvider(
                                 LocalPagerViewportWidthDp provides viewportWidthDp,
+                                LocalPagerTransitionActive provides isPagerTransitioning,
                             ) { content() }
                         } else {
                             // 站点列表变化瞬间可能取不到槽位（正常流程不会出现）
@@ -693,6 +705,7 @@ fun SitePagerTabs(
                             if (content != null) {
                                 CompositionLocalProvider(
                                     LocalPagerViewportWidthDp provides viewportWidthDp,
+                                    LocalPagerTransitionActive provides isPagerTransitioning,
                                 ) { content() }
                             } else {
                                 Box(modifier = Modifier.fillMaxSize())
