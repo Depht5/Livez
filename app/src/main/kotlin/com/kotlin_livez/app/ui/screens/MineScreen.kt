@@ -99,6 +99,9 @@ private fun buildMineEntries(): List<MineEntry> = listOf(
     MineEntry("webdav", "WebDAV 同步"),
     MineEntry("parse", "解析链接"),
     MineEntry("log", "抓取日志"),
+    // 关于（task 10-21-settings-about-update-check）：按需求放在「抓取日志」下方，
+    // 无副标题；版本信息与更新入口都在二级页内
+    MineEntry("about", "关于"),
 )
 
 /** 条目点击分发（对齐旧版 clickItem 的 when 分支；未迁移页面保持 Router 兜底路径）。 */
@@ -116,6 +119,7 @@ private fun handleEntryClick(
         "webdav" -> Router.openFeature("webdav", "WebDAV 同步")
         "parse" -> Router.openFeature("parse", "解析链接")
         "log" -> toggleLogCapture(activity, onToggleLog)
+        "about" -> Router.navigate("about")
         else -> Router.toast("功能开发中：${entry.title}")
     }
 }
