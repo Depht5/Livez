@@ -31,12 +31,12 @@ import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.movableContentOf
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -87,13 +87,14 @@ import kotlinx.coroutines.launch
  *
  * 默认取参下与改动前一致的部分：Tab 内容（logo 24dp + 8dp 间距 + 16sp 站名、点击无涟漪；
  * 搜索页关 logo、站名 14sp，见 `showLogo` / `siteNameFontSize`）、
- * 指示条逐帧跟随插值、`beyondViewportPageCount` 默认 0（静止只组合当前页）、
- * 相邻站点点击与滑动切页走 `animateScrollToPage`。
+ * 指示条逐帧跟随插值、站点槽位常驻（`beyondViewportPageCount = sites.size - 1`，
+ * 内容由 `activeSiteIds` 按需门控）、相邻站点点击与滑动切页走 `animateScrollToPage`。
  *
  * 本次新增：① 标签组装得下时水平居中（见 [rememberCenteredEdgePadding]）；
- * ② 点击相隔 ≥2 个站点的 Tab 时播放「两页过渡」，只组合当前页与目标页（见 [SitePagerTabs]）；
- * ③ 两页过渡用站点级 `movableContentOf` 把目标页**节点树搬移**进 Pager —— 不再是
- * 「覆盖层组合一份、落位时 Pager 再组合一份」（后者每跳一次就多组合一整页，是切换卡顿的主要来源）；
+ * ② 点击相隔 ≥2 个站点的 Tab 时播放「两页过渡」（见 [SitePagerTabs]）；
+ * ③ 两页过渡改为**页内原位平移**（[pageJumpOffset]）：源页滑出、目标页滑入、
+ * 无关页停在视口外 ±2W —— 不再有覆盖层，也没有 `movableContentOf` 跨树搬移，
+ * 起跳/落位都不发生节点拆卸与整页重测量（改动前每跳一次都要把目标页节点树搬一次）；
  * ④ 站名颜色改为**绘制期**连续插值（`BasicText` + `ColorProducer`，见 [SiteTabRow]），
  * 相邻站点点击的 `animateScrollToPage` 显式传
  * `tween(PAGE_JUMP_DURATION_MS, FastOutSlowInEasing)` —— 站名与指示条同步跟手，
@@ -128,17 +129,16 @@ private val IndicatorHeight = 3.dp
 private const val PAGE_JUMP_DURATION_MS = 280
 
 /**
- * 「跳过中间页」两页过渡状态 —— 过渡进度随对象创建，目标页覆盖层与 Pager 平移共用它。
+ * 「跳过中间页」两页过渡状态 —— 过渡进度随对象创建，各页的页内位移共用它。
  *
  * 为何进度放在这里而不是页面级 `remember { Animatable }`：每次起跳都新建对象、进度初值恒为 0，
  * 起跳当帧渲染的就是「源页满屏」；若复用同一个 Animatable 再在 `LaunchedEffect` 里
  * `snapTo(0f)`，会先渲染出一帧「新过渡 + 旧进度 1」的画面（目标页整屏闪一帧）。
  *
- * 目标页内容**不再需要独立的网格状态**（改动前此处持有 `overlayGridState`）：本次目标页由
- * [SitePagerTabs] 的站点级 `movableContentOf` 提供，落位是「同一棵节点树搬进 Pager 槽位」
- * 而非「覆盖层与 Pager 各组合一份」—— 真实 [LazyGridState] 在同一时刻只会被一个
- * `LazyVerticalGrid` 挂载，再播种一份复制品只会（1）多出一份组合、（2）交接瞬间靠播种对齐
- * 滚动位置。搬移则连滚动位置一起搬走。
+ * 目标页内容**使用它自己的槽位**（R2 改为页内原位平移）：4 个站点槽位常驻，
+ * 目标页就在 `(target - source)` 个视口之外组合好，过渡时通过 `Modifier.offset` 平移进视口，
+ * 落位后 `scrollToPage(target)` 让 Pager 真正落到目标页。全程同一棵节点树、同一份
+ * [LazyGridState]，不存在「覆盖层与 Pager 各组合一份」的双份网格。
  */
 private class PagerJump(
     val source: Int,
@@ -147,16 +147,39 @@ private class PagerJump(
     /** 0 → 1 过渡进度。 */
     val progress = Animatable(0f)
 
-    /**
-     * 覆盖层是否仍持有目标页的 `movableContent`。
-     * 必须与 [SitePagerTabs] 中 Pager 内容槽的守卫成对使用：`movableContentOf` 的同一实例
-     * **同一时刻只能被调用一次** —— 覆盖层持有时，Pager 里目标页那个槽位必须留空，
-     * 否则同一份内容被组合两次（届时节点归属未定义）。
-     */
-    var overlayActive by mutableStateOf(true)
-
     /** 滑动方向：目标在右为 +1、在左为 -1。 */
     val direction: Int get() = if (target > source) 1 else -1
+}
+
+/**
+ * 跨页过渡的页内位移（task 10-21-tablet-home-pager-fluency R2）。
+ *
+ * Pager 始终**定格在源页**（过渡中不滚动），页 p 的自然位置是 `(p - source) * W`；
+ * 叠加本函数的位移后：
+ * - 源页 → `-direction * progress * W`（滑出）；
+ * - 目标页 → `direction * (1 - progress) * W`（从对侧滑入）；
+ * - 其他页 → `±2W`（落在视口外，不参与构图）。
+ * 进度 1 时目标页位移为 0，随后 `scrollToPage(target)` 让 Pager 真正落到目标页，
+ * 槽位偏移由 `currentPage == target` 守卫归零。
+ */
+private fun pageJumpOffset(
+    active: PagerJump?,
+    pageIdx: Int,
+    currentPage: Int,
+    viewportWidthPx: Int,
+): Int {
+    if (active == null) return 0
+    // 落位后（Pager 已切到目标页）不再偏移，避免 scrollToPage 后残留一帧错位
+    if (currentPage == active.target) return 0
+    val direction = active.direction
+    val progress = active.progress.value
+    val offset = when (pageIdx) {
+        active.source -> -direction * progress * viewportWidthPx
+        active.target ->
+            ((active.source - active.target) + direction * (1f - progress)) * viewportWidthPx
+        else -> ((active.source - pageIdx + 2 * direction) * viewportWidthPx).toFloat()
+    }
+    return offset.roundToInt()
 }
 
 /**
@@ -354,14 +377,14 @@ fun SiteTabRow(
  * 1. 过渡期 Pager **必须保持组合**，只做位移：`PagerState.scrollToPage` 内部
  *    `awaitLayoutModifier.waitForFirstLayout()`（foundation `PagerState.kt`），
  *    把 Pager 摘出组合会让落位挂起。
- * 2. 源页由 Pager 自身渲染（它停在源页，静止时只组合当前页）→ 零重复组合。
- * 3. 目标页由**站点级 `movableContentOf`** 渲染：覆盖层先持有它的节点树，280ms 结束时整棵树
- *    搬进 Pager 的目标槽位 —— 全程只组合一次（改动前覆盖层与落位后的 Pager 各组合一份，
- *    实测每跳一次就多一份目标页组合，是切换重帧的主要来源）。
+ * 2. 过渡期间 Pager 自身不动，位移发生在**每个页槽内部**（[pageJumpOffset]）：
+ *    源页滑出、目标页从对侧滑入、其余页固定停在视口外 ±2W。
+ * 3. 目标页依赖「槽位常驻」：`beyondViewportPageCount = sites.size - 1` 保证目标槽位
+ *    在过渡开始前就已组合（内容由 `activeSiteIds` 门控，冷启动不会一次组合 4 个站点）。
  * 4. 两页位移互补：进度 p 时源页占 [-pW, W-pW]、目标页占 [W-pW, 2W-pW]，
  *    并集恒为视口 → 无空白帧。
- * 5. 结束顺序不可颠倒（也不能在其中插入挂起点）：`scrollToPage(target)` →
- *    (`overlayActive = false`, `jump = null`) 同帧完成，见下方 `LaunchedEffect(jump)` 注释。
+ * 5. 落位顺序：`scrollToPage(target)` 后再 `jump = null`；`currentPage == target` 守卫让
+ *    页内偏移当帧归零，因此不会残留错位帧（见下方 `LaunchedEffect(jump)` 注释）。
  *
  * @param sites 站点列表
  * @param gridStates 各站点网格滚动状态（键 = 站点 id，由壳层持有）
@@ -442,27 +465,33 @@ fun SitePagerTabs(
     var animateScrollJob by remember { mutableStateOf<Job?>(null) }
     val coroutineScope = rememberCoroutineScope()
 
-    // ===== 站点内容「可搬移」槽位 =====
-    // 按站点把该页内容封成 movableContentOf：两页过渡结束时，覆盖层里**已经组合好**的目标页
-    // 节点树会被整体搬进 HorizontalPager 的目标槽位（而不是在 Pager 里从头再组合一份）。
-    // - 绑定**真实** LazyGridState（不再需要临时 overlayGridState）：节点是「搬移」而非「复制」，
-    //   同一时刻只有一个 LazyVerticalGrid 挂载该状态，滚动位置随节点一起搬走。
-    // - rememberUpdatedState(pageContent)：movableContentOf 的 lambda 只在 remember 里创建一次，
-    //   直接捕获 pageContent 会永久持有首次组合那个旧 lambda（调用方每次重组都新建 lambda，
-    //   里面又捕获着 controller / 点击回调）——必须经 rememberUpdatedState 读最新值。
-    // - 同一槽位同一时刻只能被调用一次（覆盖层持有目标页时 Pager 槽位必须留空，见下方守卫）。
-    val currentPageContent by rememberUpdatedState(pageContent)
-    val siteMovableContents = remember(sites, gridStates) {
-        sites.associate { site ->
-            val gridState = gridStates[site.id]
-            site.id to movableContentOf {
-                if (gridState != null) {
-                    currentPageContent(site, gridState)
-                } else {
-                    // 控制器尚未就绪的兜底空页（正常流程不会出现）
-                    Box(modifier = Modifier.fillMaxSize())
-                }
+    // ===== 站点页「按需保活」（task 10-21-tablet-home-pager-fluency R2）=====
+    // `HorizontalPager` 的 4 个站点槽位常驻（切走不销毁），但**内容是否渲染**由本集合门控：
+    // 冷启动/首次进入只组合当前站点，避免一上来就把 4 个站点的 80~120 张卡片全组合。
+    // 用户真正落位过的站点被记住，切回时 0 重建、0 首屏测量（对齐原项目 KeepAlive 的收益）。
+    //
+    // 刻意不做「空闲后把 visited 全量渐进激活」：本仓库实测过「离屏页全部参与布局」会让
+    // 滚动 janky 8.5%→17.7%、PSS 258MB→280MB（ui-compose.md 条目 27 C1），故只保活落位过的站点。
+    val activeSiteIds = remember(sites) { mutableStateMapOf<String, Boolean>() }
+    LaunchedEffect(pagerState, sites) {
+        // 初始页先记一笔，之后每一次「成为当前页」的站点都标记为已访问（离开当前页后内容仍在）
+        activeSiteIds[sites.getOrNull(pagerState.currentPage)?.id ?: return@LaunchedEffect] = true
+        launch {
+            snapshotFlow { pagerState.currentPage }.collect { index ->
+                sites.getOrNull(index)?.let { activeSiteIds[it.id] = true }
             }
+        }
+        // 手势滑动的第一帧就要激活「正在进入」的那一页：只在 currentPage 越过中线时才激活的话，
+        // 前半程会看到一张空白页。offsetFraction 为正 = 下一页正在进来（foundation PagerState
+        // 语义），为负 = 上一页。
+        snapshotFlow { pagerState.currentPageOffsetFraction }.collect { fraction ->
+            if (abs(fraction) <= 0.001f) return@collect
+            val neighbor = if (fraction > 0f) {
+                pagerState.currentPage + 1
+            } else {
+                pagerState.currentPage - 1
+            }
+            sites.getOrNull(neighbor)?.let { activeSiteIds[it.id] = true }
         }
     }
 
@@ -513,16 +542,11 @@ fun SitePagerTabs(
             pagerState.scrollToPage(active.source)
         }
         active.progress.animateTo(1f, tween(PAGE_JUMP_DURATION_MS))
-        // ---- 结束顺序（不可颠倒，且两条状态写之间不得插入挂起点）----
-        // 此刻覆盖层与 Pager 里的目标页槽位**像素级重合**（进度 1：覆盖层 offset = 0；
-        // Pager 被整体平移 -direction·W，其内部落到目标页后同样落在 0）。
-        // ① 先让 Pager 内部切到目标页：目标槽位会被下方守卫留空（overlayActive 仍为 true），
-        //    不会与仍持有内容的覆盖层重复挂载同一份 movableContent；
-        // ② 同一帧内再「撤覆盖层 + 清 jump」→ 覆盖层里的节点树就地移入 Pager 槽位，无空白帧。
-        // 反面顺序（overlayActive 先置 false、再 scrollToPage）会闪一帧：覆盖层已不再持有目标页，
-        // 而 Pager 尚未落到目标页 —— 目标页内容在那一帧里不属于任何槽位。
+        // ---- 落位（task 10-21-tablet-home-pager-fluency R2：改为页内原位平移）----
+        // 进度 1 时目标页的页内偏移已归零、与视口重合；先把 Pager 内部切到目标页，
+        // 再清 jump。全程节点都在自己原来的槽位里（不再跨覆盖层/Pager 两棵树搬移），
+        // 起跳与落位都不发生拆卸/重挂，也就没有「搬完再测一遍整页」的开销。
         pagerState.scrollToPage(active.target)
-        active.overlayActive = false
         jump = null
     }
 
@@ -572,6 +596,9 @@ fun SitePagerTabs(
 
     val onSelect: (Int) -> Unit = { index ->
         val current = pagerState.currentPage.coerceIn(0, lastIndex)
+        // 目标站点一旦被点选就进入保活集合：跨页过渡需要在它的槽位里直接渲染内容
+        // （R2：不再借覆盖层搬移）；相邻滑动同样受益（避免滑到一半才开始组合）。
+        sites.getOrNull(index)?.let { activeSiteIds[it.id] = true }
         when {
             // 过渡进行中忽略重复请求（过渡仅 280ms，排队反而更差）
             jump != null -> Unit
@@ -648,70 +675,48 @@ fun SitePagerTabs(
             Box(modifier = Modifier.weight(1f).fillMaxWidth().clipToBounds()) {
                 HorizontalPager(
                     state = pagerState,
-                    modifier = Modifier
-                        .fillMaxSize()
-                        // 源页：过渡期整体移出视口。在 placement 阶段（offset lambda）读进度
-                        // → 每帧只重排不重组
-                        .offset {
-                            val active = jump ?: return@offset IntOffset.Zero
-                            IntOffset(
-                                x = (-active.direction * active.progress.value * viewportWidthPx)
-                                    .roundToInt(),
-                                y = 0,
-                            )
-                        },
+                    // 4 个站点槽位常驻（内容由 activeSiteIds 门控）：切走不销毁，
+                    // 跨页跳转可直接在各自槽位内平移，不再需要外层覆盖层。
+                    beyondViewportPageCount = (sites.size - 1).coerceAtLeast(0),
+                    modifier = Modifier.fillMaxSize(),
                 ) { page ->
                     // 越界保护：sites 尺寸变化瞬间 pageCount 已更新但页面索引可能短暂越界
                     val pageIdx = page.coerceIn(0, lastIndex)
                     val site = sites[pageIdx]
+                    val gridState = gridStates[site.id]
                     val active = jump
-                    if (active != null && active.overlayActive && pageIdx == active.target) {
-                        // 覆盖层此刻正持有目标页的 movableContent：同一可搬移内容同一时刻只能被
-                        // 调用一次。Pager 的页内容是测量期**子组合**（LazyLayout → SubcomposeLayout），
-                        // 与覆盖层所在的主组合同属一个 Recomposer —— 搬移会跨这两层组合进行，
-                        // 故此槽位必须先留空占位；覆盖层释放后本槽位下一帧即接住那棵节点树。
-                        Box(modifier = Modifier.fillMaxSize())
-                    } else {
-                        val content = siteMovableContents[site.id]
-                        if (content != null) {
+                    val showContent = activeSiteIds[site.id] == true ||
+                        pageIdx == siteIndex ||
+                        pageIdx == active?.target
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            // 原位过渡（R2）：源页向 -direction 滑出、目标页从对侧滑入，
+                            // 无关页保持在视口外 ±2W。placement 阶段读进度 → 每帧只重排不重组。
+                            .offset {
+                                IntOffset(
+                                    x = pageJumpOffset(
+                                        active = active,
+                                        pageIdx = pageIdx,
+                                        currentPage = pagerState.currentPage,
+                                        viewportWidthPx = viewportWidthPx,
+                                    ),
+                                    y = 0,
+                                )
+                            },
+                    ) {
+                        if (showContent && gridState != null) {
                             CompositionLocalProvider(
                                 LocalPagerViewportWidthDp provides viewportWidthDp,
                                 LocalPagerTransitionActive provides isPagerTransitioning,
-                            ) { content() }
+                            ) { pageContent(site, gridState) }
                         } else {
-                            // 站点列表变化瞬间可能取不到槽位（正常流程不会出现）
                             Box(modifier = Modifier.fillMaxSize())
                         }
                     }
                 }
 
-                val active = jump
-                if (active != null) {
-                    // 目标页：从对侧滑入，与源页位移互补（并集恒为视口，无空白帧）
-                    Box(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .offset {
-                                IntOffset(
-                                    x = (active.direction * (1f - active.progress.value) *
-                                        viewportWidthPx).roundToInt(),
-                                    y = 0,
-                                )
-                            },
-                    ) {
-                        val targetSite = sites.getOrNull(active.target)
-                        if (targetSite != null && active.overlayActive) {
-                            val content = siteMovableContents[targetSite.id]
-                            if (content != null) {
-                                CompositionLocalProvider(
-                                    LocalPagerViewportWidthDp provides viewportWidthDp,
-                                    LocalPagerTransitionActive provides isPagerTransitioning,
-                                ) { content() }
-                            } else {
-                                Box(modifier = Modifier.fillMaxSize())
-                            }
-                        }
-                    }
+                if (jump != null) {
                     // 过渡期吞掉触摸：防误触移动中的卡片（Initial 阶段消费，优先级最高）
                     Box(
                         modifier = Modifier
