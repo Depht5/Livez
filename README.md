@@ -1,88 +1,69 @@
-# Livez —— Kotlin 原生 Android 重写
+# Livez
 
-本目录用 **Kotlin + Android 原生栈**重写 `simple_live_core`（纯 Dart 直播聚合核心）与
-`simple_live_app`（Android 端），并**镜像现有 Dart 的文件/模块组织方式**。
+Livez 是一款基于 Kotlin 与 Jetpack Compose 开发的 Android 原生多平台直播聚合客户端。基于 [Simple Live](https://github.com/xiaoyaocz/dart_simple_live) 重写，目前支持哔哩哔哩、斗鱼、虎牙和抖音四大直播平台。
 
-> 开发规范位于维护者的 `.trellis/spec/kotlin_re/`（不随本仓库分发）；
-> Dart 原项目 `dart_simple_live/` 仅作为行为参考，不在本仓库内。
+## 功能特性
 
-## 目录镜像关系
+- **多平台聚合**：浏览哔哩哔哩、斗鱼、虎牙、抖音的推荐直播、分类分区与搜索结果。
+- **原生播放内核**：基于 mpv（libmpv）实现，支持硬件解码（MediaCodec）、多画质选择与多播放线路切换。
+- **自定义弹幕**：通过 Canvas 渲染弹幕层，支持调节弹幕字号、滚动速度、不透明度与同屏密度，支持屏蔽词与规则过滤。
+- **界面与主题**：遵循 Material 3 设计规范，支持浅色、深色与纯黑（AMOLED）主题及系统动态取色；适配平板与折叠屏设备的横屏分栏布局。
+- **关注与历史**：本地管理关注主播列表、开播状态更新与观看历史记录。
+- **账号与数据同步**：支持哔哩哔哩扫码登录与斗鱼、抖音 Cookie 导入；支持本地 JSON 数据导入导出及 WebDAV 云端备份。
+- **应用内更新**：支持 Gitee 和 GitHub 双渠道检查更新，通过系统通知栏显示下载进度并在校验后调起安装。
 
-| Dart 包 | Kotlin 模块 | 内部布局 |
-|---|---|---|
-| `dart_simple_live/simple_live_core` | `core/` | `interfaces/`（Dart `interface/`；Kotlin 保留字，用复数）、`site/`、`danmaku/`、`model/`、`common/` |
-| `dart_simple_live/simple_live_app` | `app/` | `app/`、`di/`、`models/`、`modules/`、`services/`、`widgets/`、`routes/` |
+## 技术栈与架构
 
-包名：`com.kotlin_livez.core` / `com.kotlin_livez.app`。
+- **语言与系统要求**：Kotlin 2.0.21，最低支持 Android 8.0（API 26，受 libmpv 限制），目标版本 Android 15（API 35）。
+- **用户界面**：单 Activity 架构，纯 Jetpack Compose（Material 3）与 Navigation Compose 实现。
+- **模块划分**：
+  - `core/`：纯 Kotlin/JVM 模块，负责各直播平台的接口请求、数据解析、WebSocket 弹幕通信，以及基于 Rhino 引擎的动态 JS 签名执行（抖音 a_bogus / webcast 及斗鱼 crptext）。
+  - `app/`：Android 应用模块，包含 Compose 界面、Room 数据库、DataStore 配置存储、mpv 播放器封装及更新服务。
+- **主要依赖**：OkHttp 4、kotlinx.serialization、Room、DataStore、libmpv、Rhino。
 
-## 技术栈
+## 构建说明
 
-- Kotlin 2.0.21 · AGP 8.13.2 · Gradle 8.14.5
-- kotlinx.serialization（JSON）· OkHttp 4.12.0（HTTP + WebSocket）· kotlinx-coroutines
-- Room + DataStore（持久化，对应 Dart 的 Hive）
-- 手写轻量 DI（`ServiceContainer`，对应 GetX 服务）
-- Rhino 1.7.15（纯 JVM JS 引擎，对应 Dart 的 dart_quickjs）：执行抖音 a_bogus/webcast 签名
-  与斗鱼服务器动态签名的 JS 脚本（脚本资源见下）
+本项目仅打包 `arm64-v8a` 架构（不支持 32 位 armv7a 或 x86 模拟器直接运行）。
 
-### JS 脚本资源（抖音/斗鱼签名）
+### 环境要求
 
-- `core/src/main/resources/douyin/abogus.js`、`webms_sdk.js`：从上游 Dart
-  `douyin_sign.dart` 提取并已提交到仓库，`DouyinSign` 以 Rhino 解释模式执行。
-  提取脚本依赖同级的 Dart 仓库，仅作为维护者本地工具，不随本仓库分发。
-- 斗鱼 `crptext` 为服务器动态下发（内含 `ub98484234`），`DouyuSign` 内置 CryptoJS 并以
-  Rhino 执行（`$` 以 `\u0024` 转义规避字符串模板）。
+- JDK 17+
+- Android SDK（API 35，Build-Tools 35.0.0）
 
-## 构建与验证
+### 常用命令
 
-需要在 **JDK 17+**（Android Gradle Plugin 8.x 要求）下构建。本机 JDK 路径示例：
-
-```bash
+```powershell
 # Windows (PowerShell)
-$env:JAVA_HOME = "D:\Programming\jdk17"
-cd livez
+$env:JAVA_HOME = "D:\Programming\jdk17"  # 根据本机实际 JDK 路径指定
 
-# 核心编译 + 单元测试（纯 JVM，不依赖 Android）
-.\gradlew.bat :core:compileKotlin :core:test
+# 运行核心模块单元测试
+.\gradlew.bat :core:test
 
-# App 编译（需 Android SDK，见 local.properties）
+# 编译 Debug APK
 .\gradlew.bat :app:assembleDebug
-.\gradlew.bat :app:lintDebug
+
+# 编译 Release APK
+.\gradlew.bat :app:assembleRelease
 ```
 
-注意：仅打包 arm64-v8a（镜像 app 构建策略）；x86_64 模拟器无法安装 arm64-only APK，请用
-物理 arm64 设备或 arm64 系统镜像验证。
+```bash
+# Linux / macOS
+./gradlew :core:test
+./gradlew :app:assembleDebug
+./gradlew :app:assembleRelease
+```
 
-## 当前状态
+编译生成的 APK 位于 `app/build/outputs/apk/debug/` 或 `app/build/outputs/apk/release/` 目录下。
 
-- [x] Gradle 多模块工程骨架（core / app + wrapper）
-- [x] core 契约：`LiveSite` / `LiveDanmaku`
-- [x] core 模型：全部 `Live*` 模型 + `FollowRefresh*` / `SyncProgress`
-- [x] core 公共设施：`CoreError` / `CoreLog` / `HttpClient` / `HttpLogSanitizer` / `ConvertHelper` / `WebSocketUtil`
-  + `DouyinSign`（Rhino，含脚本加载时 Rhino 兼容预处理）/ `DouyinCookieHelper` / `AutoExitSession` /
-  `DouyinFollowRefreshLimiter` / `PlayerErrorClassifier` / `PlayerVolumePolicy` / `BinaryWriter`
-- [x] core 站点：bilibili / douyu / huya / douyin（全部注册于 `LiveSiteRegistry`；快手平台已按需求移除）
-- [x] core 弹幕：BiliBili / Douyu（689 协议）/ Huya（Tars）/ Douyin（手写 protobuf）
-- [x] core 单元测试：6 个测试类、32 个用例（ConvertHelper / DouyinCookieHelper /
-  AutoExitSession / PlayerVolumePolicy / DouyinFollowRefreshLimiter / DouyinSign（含真实执行
-  abogus.js 产出 a_bogus 的回归用例））
-- [x] 验证：`:core:compileKotlin` + `:core:test` BUILD SUCCESSFUL（JDK 17）
-- [ ] app 层：模块 / 服务 / 存储 / 界面逐步移植
+## 下载安装
 
-## 冻结标识约定（镜像 Dart 规范）
+可在以下地址下载最新版本的安装包：
 
-站点 key（`bilibili` 等）作为数据/存储键保持不变；错误文案（core）与 UI 文案为冻结中文契约。
-方法职责与 Dart 一一对应（Dart 拼写错误 `getCategores`/`getPlayQualites` 在 Kotlin 中修正，
-但职责一致）。新增公共类在 `LiveSiteRegistry` 聚合入口统一暴露。
+- [GitHub Releases](https://github.com/Depht5/Livez/releases)
+- [Gitee Releases](https://gitee.com/Depht5/livez/releases)
 
-## 许可证
+## 开源协议与声明
 
-本项目以 **GNU General Public License v3.0（GPL-3.0-only）** 发布，完整条款见
-[LICENSE](LICENSE)。Copyright (C) 2026 Depht5。
-
-本项目是 [Simple Live](https://github.com/xiaoyaocz/dart_simple_live)
-（Copyright (C) 2023-2025 xiaoyaocz，GPL-3.0）的 Kotlin / Android 重写：
-协议解析、签名逻辑与内置的抖音 JS 脚本源自上游，上游版权与 GPL 义务同样适用。
-第三方依赖的许可说明见 [NOTICE](NOTICE)。
-
-分发 APK 时须同时提供本仓库源码，且不得附加 GPL 之外的额外限制；修改后的版本
-同样以 GPL-3.0 发布。
+- 本项目采用 [GNU General Public License v3.0](LICENSE)（GPL-3.0-only）开源。
+- 本项目基于 [Simple Live](https://github.com/xiaoyaocz/dart_simple_live)（Copyright (C) 2023-2025 xiaoyaocz, GPL-3.0）重写并沿用其协议。第三方依赖的许可说明见 [NOTICE](NOTICE)。
+- 免责声明：本项目仅供编程学习与个人交流使用。应用内展示的所有直播音视频、弹幕及元数据均通过各平台公开接口获取，相关权利归属原平台所有。
