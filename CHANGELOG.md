@@ -3,6 +3,15 @@
 本文件记录 `kotlin_re/`（Livez Android 原生版）每个发布版本的改动，倒序排列。
 版本号规则、发布日期口径与发布流程见 [`.trellis/spec/kotlin_re/release-and-versioning.md`](../.trellis/spec/kotlin_re/release-and-versioning.md)。
 
+## [0.2.1] - 2026-10-21（versionCode 14）
+
+### 新增
+
+- 「我的」页新增「关于」入口（「抓取日志」下方）：显示当前版本与仓库更新日期，可手动「检查更新」
+- 应用内更新：Gitee（默认）/ GitHub 双渠道、启动时自动检查一次（可关闭）、发现新版本弹窗
+  （左「下载并安装」右「忽略」），正文显示仓库发行的更新说明
+- 更新包下载使用系统通知进度条显示进度，完成后校验包名 / 版本号 / 签名，再调起系统安装器
+
 ## [0.2.0] - 2026-10-21（versionCode 13）
 
 ### 新增
