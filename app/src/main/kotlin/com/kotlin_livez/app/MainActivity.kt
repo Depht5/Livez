@@ -20,6 +20,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.compose.rememberNavController
 import com.kotlin_livez.app.di.ServiceContainer
 import com.kotlin_livez.app.ui.Router
+import com.kotlin_livez.app.ui.components.UpdateHost
 import com.kotlin_livez.app.ui.deviceOrientationPolicy
 import com.kotlin_livez.app.ui.nav.AppNavHost
 import com.kotlin_livez.app.ui.theme.AppTheme
@@ -121,6 +122,11 @@ class MainActivity : ComponentActivity() {
                         .fillMaxSize()
                         .background(MaterialTheme.colorScheme.background),
                 )
+
+                // 更新宿主（task 10-21-settings-about-update-check）：冷启动静默检查 +
+                // 全局「检测到新版本」弹窗 + 下载进度/结果兜底。放在 NavHost 之后、根组合内，
+                // 保证任何页面之上都能弹（Dialog 自成窗口，不参与页面布局）。
+                UpdateHost()
 
                 // 预测性返回已整体移除（task 09-12-predictive-back 系列真机结论：seek 负载
                 // 结构性过高 + 系统默认提交动画叠加掉帧；Manifest 未设

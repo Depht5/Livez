@@ -151,6 +151,12 @@ class LocalStorageService(private val appContext: Context) {
         const val kLiveSubtitleBackgroundEnable = "LiveSubtitleBackgroundEnable"
         const val kLiveSubtitlePositionLocked = "LiveSubtitlePositionLocked"
         const val kLiveSubtitleStartupGuard = "LiveSubtitleStartupGuard"
+        // 应用内更新（task 10-21-settings-about-update-check）：渠道、启动自检开关，
+        // 以及「本机版本对应的仓库发布日期」缓存（带版本名，升级后自动失效）
+        const val kUpdateChannel = "UpdateChannel"
+        const val kUpdateAutoCheck = "UpdateAutoCheck"
+        const val kUpdateReleaseDate = "UpdateReleaseDate"
+        const val kUpdateReleaseDateVersion = "UpdateReleaseDateVersion"
     }
 
     private val Context.settingsStore: DataStore<Preferences> by preferencesDataStore("LocalStorage")

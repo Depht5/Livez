@@ -37,6 +37,8 @@ class AppSettingsController(
     companion object {
         private const val KEYWORD_SHIELD_PREFIX = "keyword:"
         private const val USER_SHIELD_PREFIX = "user:"
+        const val kUpdateChannelGitee = "gitee"
+        const val kUpdateChannelGithub = "github"
         const val kGlobalUserShieldSiteId = "__all__"
         const val kDanmuDedupeModeUser = 0
         const val kDanmuDedupeModeStrict = 1
@@ -358,6 +360,16 @@ class AppSettingsController(
     private val _followShowLiveCover = MutableStateFlow(false)
     val followShowLiveCover: StateFlow<Boolean> = _followShowLiveCover
 
+    /* ---------- 应用内更新（task 10-21-settings-about-update-check） ---------- */
+
+    /** 更新渠道：`gitee`（默认）/ `github`；存储里出现未知值一律回落 gitee。 */
+    private val _updateChannel = MutableStateFlow(kUpdateChannelGitee)
+    val updateChannel: StateFlow<String> = _updateChannel
+
+    /** 启动时自动检查一次更新（默认开启）。 */
+    private val _autoCheckUpdate = MutableStateFlow(true)
+    val autoCheckUpdate: StateFlow<Boolean> = _autoCheckUpdate
+
     /* ---------- 排序 / 多窗口（桌面部分裁剪） ---------- */
 
     private val _siteSort = MutableStateFlow<List<String>>(emptyList())
@@ -525,6 +537,18 @@ class AppSettingsController(
         _styleColor.value = localStorage.getValue(LocalStorageService.kStyleColor, 0xff3498db.toInt())
         _isDynamic.value = localStorage.getValue(LocalStorageService.kIsDynamic, false)
         _amoledBlack.value = localStorage.getValue(LocalStorageService.kAmoledBlack, false)
+        // 更新渠道：只接受已知渠道，历史脏值回落 gitee（默认渠道）
+        val storedChannel = localStorage.getValue(
+            LocalStorageService.kUpdateChannel,
+            kUpdateChannelGitee,
+        )
+        _updateChannel.value = if (storedChannel == kUpdateChannelGithub) {
+            kUpdateChannelGithub
+        } else {
+            kUpdateChannelGitee
+        }
+        _autoCheckUpdate.value =
+            localStorage.getValue(LocalStorageService.kUpdateAutoCheck, true)
         _bilibiliLoginTip.value =
             localStorage.getValue(LocalStorageService.kBilibiliLoginTip, true)
         _playerBufferSize.value =
@@ -989,6 +1013,21 @@ class AppSettingsController(
     fun setAmoledBlack(e: Boolean) {
         _amoledBlack.value = e
         localStorage.setValue(LocalStorageService.kAmoledBlack, e)
+    }
+
+    /** 更新渠道（只允许 gitee / github，其余值忽略）。 */
+    fun setUpdateChannel(value: String) {
+        if (value != kUpdateChannelGitee && value != kUpdateChannelGithub) {
+            Log.d("更新：忽略未知渠道值 $value")
+            return
+        }
+        _updateChannel.value = value
+        localStorage.setValue(LocalStorageService.kUpdateChannel, value)
+    }
+
+    fun setAutoCheckUpdate(e: Boolean) {
+        _autoCheckUpdate.value = e
+        localStorage.setValue(LocalStorageService.kUpdateAutoCheck, e)
     }
 
     fun setBiliBiliLoginTip(e: Boolean) {

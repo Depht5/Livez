@@ -195,3 +195,31 @@ fun SettingGroupCard(
         content = content,
     )
 }
+
+/**
+ * 带自定义尾部控件的行：标题 + 副标题 + 右侧任意控件（task 10-21-settings-about-update-check）。
+ *
+ * 与 [SettingClickRow] 的区别：尾部不是箭头、整行也不可点击 —— 「当前版本」行右侧是
+ * 「检查更新」按钮，点击目标必须只有按钮本身（整行可点会让「看版本号」也触发网络请求）。
+ */
+@Composable
+fun SettingActionRow(
+    title: String,
+    subtitle: String,
+    modifier: Modifier = Modifier,
+    trailing: @Composable () -> Unit,
+) {
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(start = 16.dp, top = 8.dp, end = 12.dp, bottom = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        SettingRowTexts(
+            title = title,
+            subtitle = subtitle,
+            modifier = Modifier.weight(1f),
+        )
+        trailing()
+    }
+}

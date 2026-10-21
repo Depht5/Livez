@@ -11,6 +11,9 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- 应用内更新：下载完成后调起系统安装器（task 10-21-settings-about-update-check）。
+         仅 APK 安装需要，不涉及其它用途；授权由系统「未知来源」流程二次确认 -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 
     <application
         android:name=".LiveApp"
@@ -46,6 +49,18 @@
             android:name=".service.BackgroundPlaybackService"
             android:exported="false"
             android:foregroundServiceType="mediaPlayback" />
+
+        <!-- 应用内更新安装包共享：下载目录 filesDir/updates 通过 FileProvider 交给系统安装器
+             （content:// 协议，无需暴露存储权限；task 10-21-settings-about-update-check） -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
     </application>
 
 </manifest>

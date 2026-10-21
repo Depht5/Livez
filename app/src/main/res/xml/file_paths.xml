@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 应用内更新安装包的 FileProvider 路径（task 10-21-settings-about-update-check）。
+     仅暴露应用私有目录下的 updates/ 子目录：下载的 APK 放在 filesDir/updates/。 -->
+<paths>
+    <files-path
+        name="updates"
+        path="updates/" />
+</paths>

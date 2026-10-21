@@ -271,6 +271,17 @@ fun SettingsScreen(modifier: Modifier = Modifier) {
                 onChange = { settings.setDanmuBubble(it) },
             )
         }
+
+        // ===== 关于（task 10-21-settings-about-update-check）=====
+        // 按需求：分组内只有一行「关于」，且**不显示副标题**（版本信息放在关于页内）
+        SettingSectionTitle("关于")
+        SettingGroupCard {
+            SettingClickRow(
+                title = "关于",
+                subtitle = "",
+                onClick = { Router.navigate("about") },
+            )
+        }
         }
     }
 

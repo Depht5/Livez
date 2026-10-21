@@ -11,6 +11,7 @@ import com.kotlin_livez.app.services.DouyuAccountService
 import com.kotlin_livez.app.modules.live_room.LiveRoomController
 import com.kotlin_livez.app.modules.search.AppSearchController
 import com.kotlin_livez.app.services.LocalStorageService
+import com.kotlin_livez.app.services.UpdateService
 
 /**
  * 轻量服务容器（替代 GetX 的 GetxService 全局注册）。
@@ -41,6 +42,9 @@ object ServiceContainer {
 
     /** 应用设置控制器（对应 Dart AppSettingsController）。 */
     val appSettings: AppSettingsController by lazy { AppSettingsController(localStorage) }
+
+    /** 应用内更新服务（Gitee / GitHub 检查 + 下载安装，task 10-21-settings-about-update-check）。 */
+    val updateService: UpdateService by lazy { UpdateService(app, appSettings, localStorage) }
 
     private var appSearchControllerInstance: AppSearchController? = null
 

@@ -59,6 +59,7 @@ import com.kotlin_livez.app.modules.home.HomeController
 import com.kotlin_livez.app.ui.Router
 import com.kotlin_livez.app.ui.useWideLayout
 import com.kotlin_livez.app.ui.screens.AccountScreen
+import com.kotlin_livez.app.ui.screens.AboutScreen
 import com.kotlin_livez.app.ui.screens.CategoryDetailScreen
 import com.kotlin_livez.app.ui.screens.CategoryScreen
 import com.kotlin_livez.app.ui.screens.FollowScreen
@@ -188,6 +189,9 @@ private fun SharedTransitionScope.NavHostContent(
 
         // 设置（Batch 4）：条目绑定 AppSettingsController，无路由参数
         composable("settings") { SettingsScreen() }
+
+        // 关于（task 10-21-settings-about-update-check）：版本信息 + 更新渠道 + 检查更新
+        composable("about") { AboutScreen() }
 
         // 观看历史（Batch 4）：控制器在 Screen 内 remember 创建、出栈销毁
         composable("history") { HistoryScreen() }
