@@ -120,7 +120,13 @@ fun HistoryScreen(modifier: Modifier = Modifier) {
                             onClick = {
                                 val site = Sites.allSites[item.siteId]
                                 if (site != null) {
-                                    Router.openLiveRoom(site, item.roomId)
+                                    // 历史项只有昵称/头像，封面与标题仍由网络详情补齐
+                                    Router.openLiveRoom(
+                                        site = site,
+                                        roomId = item.roomId,
+                                        userName = item.userName,
+                                        userAvatar = item.face,
+                                    )
                                 } else {
                                     Router.toast("无法打开历史记录：站点不存在")
                                 }

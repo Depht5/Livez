@@ -68,12 +68,31 @@ object Router {
         Toast.makeText(ctx, message, Toast.LENGTH_SHORT).show()
     }
 
-    /** 打开直播间详情（对应 AppNavigator.toLiveRoomDetail；参数经 URL 编码进 route path）。 */
-    fun openLiveRoom(site: Site, roomId: String) {
+    /**
+     * 打开直播间详情（对应 AppNavigator.toLiveRoomDetail；参数经 URL 编码进 route path）。
+     *
+     * [cover]/[title]/[userName]/[userAvatar] 是卡片已有的初始展示元数据：随转场种子下发，
+     * 直播间第 0 帧即可显示封面/标题（task 10-21-tablet-shared-element-transition-fluency R5）。
+     */
+    fun openLiveRoom(
+        site: Site,
+        roomId: String,
+        cover: String = "",
+        title: String = "",
+        userName: String = "",
+        userAvatar: String = "",
+    ) {
         Log.d("路由：打开直播间 site=${site.id} roomId=$roomId")
-        // 先标记本次转场房间：列表卡片据此按需挂载共享元素（未命中的卡片 0 节点，
-        // 见 SharedTransition.activeSharedRoomKey）；标记必须早于 navigate 的第一次组合。
-        activateSharedRoom(site.id, roomId)
+        // 先标记本次转场房间：列表卡片据此按需挂载共享元素（未命中的卡片 0 节点），
+        // 同时把卡片元数据带进直播间；标记必须早于 navigate 的第一次组合。
+        activateSharedRoom(
+            siteId = site.id,
+            roomId = roomId,
+            cover = cover,
+            title = title,
+            userName = userName,
+            userAvatar = userAvatar,
+        )
         navigate("livertoom/${Uri.encode(site.id)}/${Uri.encode(roomId)}")
     }
 

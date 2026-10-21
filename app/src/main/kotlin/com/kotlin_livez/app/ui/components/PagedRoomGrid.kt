@@ -37,7 +37,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.kotlin_livez.app.app.controller.BasePageController
-import com.kotlin_livez.app.ui.nav.activeSharedRoomKey
 import com.kotlin_livez.app.ui.nav.sharedElementBlockedIndexes
 import com.kotlin_livez.core.model.LiveRoomItem
 import kotlinx.coroutines.flow.first
@@ -108,12 +107,11 @@ fun PagedRoomGrid(
     // 同一 roomId 的第 2 次及以后出现、以及空 roomId 不挂一镜到底
     //（LazyGrid 的 `#n` 兜底只保护 item key，不保护共享元素 key）。
     val rooms = listController.list.collectAsStateWithLifecycle().value
-    // R1（task 10-21-tablet-home-pager-fluency）：只有存在激活房间时才需要同屏去重遍历——
-    // 否则卡片根本不会创建共享节点（见 liveRoomCoverSharedElement 的门控），遍历纯属浪费。
-    val sharedRoomActive = activeSharedRoomKey != null
-    val blockedIndexes = remember(rooms, sharedRoomActive) {
-        if (sharedRoomActive) sharedElementBlockedIndexes(rooms.map { it.roomId }) else emptySet()
-    }
+    // 同屏共享元素 key 唯一性守卫（见 SharedTransition.sharedElementBlockedIndexes）：
+    // 列表仅在网络分页完成时变化，故按 `rooms` 缓存即可 —— 不订阅 activeSharedRoomKey，
+    // 进出直播间时本组件（以及 4 个常驻站点页的网格）0 次重组
+    //（task 10-21-tablet-shared-element-transition-fluency R1）。
+    val blockedIndexes = remember(rooms) { sharedElementBlockedIndexes(rooms.map { it.roomId }) }
     PagedRoomGridCore(
         listController = listController,
         gridState = gridState,

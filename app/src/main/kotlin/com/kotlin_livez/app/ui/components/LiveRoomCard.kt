@@ -26,6 +26,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.kotlin_livez.app.app.Utils
+import com.kotlin_livez.app.ui.nav.activateSharedRoom
 import com.kotlin_livez.app.ui.nav.liveRoomContainerSharedElement
 import com.kotlin_livez.app.ui.nav.liveRoomCoverSharedElement
 import com.kotlin_livez.app.ui.theme.CustomIcons
@@ -89,7 +90,23 @@ fun LiveRoomCard(
             // 若 clip 在其之前，阴影会被同一圆角裁掉；放之后则只裁内容与涟漪，阴影照常绘制。
             .clip(RoundedCornerShape(8.dp))
             .background(cardContainerColor(), RoundedCornerShape(8.dp))
-            .clickable(onClick = onClick),
+            .clickable(
+                onClick = {
+                    // 点击瞬间把卡片已有的封面/标题/主播名写进转场种子（task
+                    // 10-21-tablet-shared-element-transition-fluency R5）：直播间第 0 帧
+                    // 即可命中同一张 Coil 内存缓存封面与真实标题，不必等网络详情。
+                    if (sharedElementSiteId != null) {
+                        activateSharedRoom(
+                            siteId = sharedElementSiteId,
+                            roomId = item.roomId,
+                            cover = item.cover,
+                            title = item.title.trim().ifEmpty { item.userName },
+                            userName = item.userName,
+                        )
+                    }
+                    onClick()
+                },
+            ),
     ) {
         // 封面：16:9。圆角由外层 Column 的 `.clip(RoundedCornerShape(8.dp))` 统一裁切，
         // 内层不再重复 shape（task 10-21-tablet-home-pager-fluency R4：省一层冗余圆角裁剪）。

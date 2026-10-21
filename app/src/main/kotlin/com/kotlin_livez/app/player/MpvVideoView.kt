@@ -58,6 +58,13 @@ class MpvVideoView @JvmOverloads constructor(
         if (PlayerEngine.instance.attachSurface(sessionId, surface)) {
             attachedSurface = surface
             applySurfaceFrameRate(surface)
+            // 补发尺寸（task 10-21-tablet-shared-element-transition-fluency R2）：
+            // 播放器初始化被推迟到进房转场结束后，`surfaceChanged` 可能先于 `initialize()`
+            // 执行（那时 sessionId 为 null，尺寸上报被跳过）——绑定成功后若已有尺寸则立即补一次，
+            // 保证 mpv 的 android-surface-size 在任何时序下都准确。
+            if (width > 0 && height > 0) {
+                PlayerEngine.instance.setSurfaceSize(sessionId, width, height)
+            }
         }
     }
 

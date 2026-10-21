@@ -280,7 +280,15 @@ fun FollowScreen(
 private fun openRoom(item: FollowUser) {
     val site = Sites.allSites[item.siteId]
     if (site != null) {
-        Router.openLiveRoom(site, item.roomId)
+        // 带上关注项已有的房间元数据：直播间第 0 帧即可显示封面/标题/主播
+        Router.openLiveRoom(
+            site = site,
+            roomId = item.roomId,
+            cover = item.roomCover,
+            title = item.roomTitle.ifEmpty { item.userName },
+            userName = item.userName,
+            userAvatar = item.face,
+        )
     } else {
         Router.toast("无法打开直播间：站点不存在")
     }

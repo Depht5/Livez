@@ -37,7 +37,6 @@ import com.kotlin_livez.app.ui.components.CompactSearchBar
 import com.kotlin_livez.app.ui.components.LiveRoomCard
 import com.kotlin_livez.app.ui.components.PagedRoomGridCore
 import com.kotlin_livez.app.ui.components.SitePagerTabs
-import com.kotlin_livez.app.ui.nav.activeSharedRoomKey
 import com.kotlin_livez.app.ui.nav.sharedElementBlockedIndexes
 import com.kotlin_livez.app.ui.theme.CustomIcons
 import com.kotlin_livez.app.ui.theme.LiveIndicatorRed
@@ -184,14 +183,12 @@ fun SearchScreen(modifier: Modifier = Modifier) {
                     val pageList = listController.list.collectAsStateWithLifecycle().value
                     // 共享元素守卫：下标与 PagedRoomGridCore 内的 items 同源（同一条 StateFlow，同帧一致）。
                     // 主播行（非 LiveRoomItem）映射为 null，不参与判定。
-                    // R1（task 10-21-tablet-home-pager-fluency）：无激活房间时跳过遍历。
-                    val sharedRoomActive = activeSharedRoomKey != null
-                    val blockedIndexes = remember(pageList, sharedRoomActive) {
-                        if (sharedRoomActive) {
-                            sharedElementBlockedIndexes(pageList.map { (it as? LiveRoomItem)?.roomId })
-                        } else {
-                            emptySet()
-                        }
+                    // 不订阅 activeSharedRoomKey：结果列表只在搜索完成时变化，进出直播间 0 重组
+                    //（task 10-21-tablet-shared-element-transition-fluency R1）。
+                    val blockedIndexes = remember(pageList) {
+                        sharedElementBlockedIndexes(
+                            pageList.map { (it as? LiveRoomItem)?.roomId },
+                        )
                     }
                     PagedRoomGridCore(
                         listController = listController,
@@ -223,7 +220,14 @@ fun SearchScreen(modifier: Modifier = Modifier) {
                                 is LiveAnchorItem -> {
                                     AnchorResultRow(
                                         item = item,
-                                        onClick = { openRoom(site, item.roomId) },
+                                        onClick = {
+                                            openRoom(
+                                                site,
+                                                item.roomId,
+                                                userName = item.userName,
+                                                userAvatar = item.avatar,
+                                            )
+                                        },
                                         showDivider = index < pageList.lastIndex,
                                     )
                                 }
@@ -247,8 +251,14 @@ fun SearchScreen(modifier: Modifier = Modifier) {
 }
 
 /** 打开直播间（两种结果类型统一入口，对齐现版点击回调）。 */
-private fun openRoom(site: Site, roomId: String) {
-    Router.openLiveRoom(site, roomId)
+private fun openRoom(
+    site: Site,
+    roomId: String,
+    userName: String = "",
+    userAvatar: String = "",
+) {
+    // 直播间卡片类结果由 LiveRoomCard 自己注入封面/标题；主播行这里补昵称与头像
+    Router.openLiveRoom(site, roomId, userName = userName, userAvatar = userAvatar)
 }
 
 /**

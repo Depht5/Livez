@@ -16,7 +16,9 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.EnterExitState
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -77,6 +79,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -139,6 +142,9 @@ import com.kotlin_livez.app.ui.nav.liveRoomContainerSharedElement
 import com.kotlin_livez.app.ui.nav.liveRoomCoverSharedElement
 import com.kotlin_livez.app.ui.nav.activateSharedRoom
 import com.kotlin_livez.app.ui.nav.clearSharedRoomIfMatch
+import com.kotlin_livez.app.ui.nav.activeSharedRoomSeed
+import com.kotlin_livez.app.ui.nav.liveRoomPairKey
+import com.kotlin_livez.app.ui.nav.LocalNavAnimatedVisibilityScope
 import com.kotlin_livez.app.ui.theme.CustomIcons
 import com.kotlin_livez.app.ui.theme.LocalAppDarkTheme
 import com.kotlin_livez.app.ui.theme.appThemeResolvedDark
@@ -151,8 +157,10 @@ import com.kotlin_livez.core.model.LiveSuperChatMessage
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.math.roundToInt
 
 /**
@@ -239,11 +247,46 @@ fun LiveRoomScreen(
         onDispose { view.keepScreenOn = false }
     }
 
+    /* ---------- 进场转场完成门控（task 10-21-tablet-shared-element-transition-fluency）---------- */
+
+    // 280ms 一镜到底 / 淡入转场是否已落位。转场期间要刻意「什么都不做」：不挂 SurfaceView、
+    // 不跑转圈动画、不初始化 mpv / 控制器、不降刷新率 —— 否则逐帧重测量 + JNI + 网络回调
+    // 会把高刷平板 6.94ms 的帧预算直接打穿（见该任务 design.md 的帧预算表）。
+    // remember key 为 (siteId, roomId)：房间存活期间保持 true（含旋转、进退全屏、房内换台），
+    // 因此不会导致 AndroidView 卸载重建（task 10-16 铁律）。
+    val navTransition = LocalNavAnimatedVisibilityScope.current?.transition
+    var enterTransitionDone by remember(siteId, roomId) {
+        mutableStateOf(
+            navTransition == null ||
+                (navTransition.currentState == EnterExitState.Visible && !navTransition.isRunning),
+        )
+    }
+    // 正在退场（leaveRoom 起手即置位）：转场期间不挂原生 SurfaceView、不跑转圈、恢复封面
+    var leaving by remember { mutableStateOf(false) }
+    LaunchedEffect(siteId, roomId, navTransition) {
+        if (enterTransitionDone) return@LaunchedEffect
+        // 先让出首帧，确保导航与共享元素转场已在首帧启动
+        withFrameNanos { }
+        // 320ms 超时兜底：极端情况下转场状态不收敛，也不能让播放器永远不初始化
+        withTimeoutOrNull(320L) {
+            snapshotFlow {
+                navTransition == null ||
+                    (navTransition.currentState == EnterExitState.Visible &&
+                        !navTransition.isRunning)
+            }.first { it }
+        }
+        enterTransitionDone = true
+    }
+
     /* ---------- 全屏态（UI 层状态；等价原 isFullScreen 字段）---------- */
 
     // rememberSaveable：进程重建恢复语义对照原 onSaveInstanceState(KEY_FULL_SCREEN)——
     // 恢复为 true 时下面的窗口副作用 LaunchedEffect 自动重新进入全屏
     var isFullScreen by rememberSaveable { mutableStateOf(false) }
+    // 是否真正进过全屏（task 10-21-tablet-shared-element-transition-fluency R3）：
+    // 非全屏进房的第 1 帧不应执行 requestedOrientation / 系统栏这些跨进程调用
+    //（转场窗口内每次 IPC 都能吃掉一帧）；只有实际进过全屏，退场/退全屏时才需要恢复。
+    var hasEnteredFullScreen by remember { mutableStateOf(isFullScreen) }
 
     // 全屏系统栏/方向副作用：进入全屏 → SENSOR_LANDSCAPE + 隐藏 systemBars（滑动临时呼出）。
     // 等价原 enterFullScreen/exitFull 的窗口操作。控制层顶栏不做刘海避让（用户决策：
@@ -263,6 +306,7 @@ fun LiveRoomScreen(
         val window = activity.window
         val insetsController = WindowInsetsControllerCompat(window, window.decorView)
         if (isFullScreen) {
+            hasEnteredFullScreen = true
             // 运行时方向覆盖 Manifest portrait（configChanges 已声明 → 不 recreate）
             activity.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
             insetsController.hide(WindowInsetsCompat.Type.systemBars())
@@ -272,7 +316,7 @@ fun LiveRoomScreen(
             //（false = 浅色图标）；否则深色图标在黑底上不可见。
             insetsController.isAppearanceLightStatusBars = false
             insetsController.isAppearanceLightNavigationBars = false
-        } else {
+        } else if (hasEnteredFullScreen) {
             // 退出全屏恢复方向按设备档位：平板 → 释放（可继续横屏用大屏分栏布局）；
             // 紧凑手机 → 竖屏（原固定 PORTRAIT 的语义，见 ui/WideLayout.kt）
             activity.requestedOrientation = activity.deviceOrientationPolicy()
@@ -289,7 +333,8 @@ fun LiveRoomScreen(
     DisposableEffect(context) {
         onDispose {
             val activity = context as? Activity
-            if (activity != null) {
+            // 非全屏进房、且从未进过全屏 → 本页没改过方向/系统栏，跳过这几次跨进程恢复
+            if (activity != null && (hasEnteredFullScreen || isFullScreen)) {
                 runCatching {
                     // 同样按设备档位恢复（平板不强行掰回竖屏，否则离开直播间后无法保持横屏大屏布局）
                     activity.requestedOrientation = activity.deviceOrientationPolicy()
@@ -306,31 +351,39 @@ fun LiveRoomScreen(
             }
         }
     }
-    // 窗口首选刷新率（task 10-17-ui-power-and-recomposition-governance）：直播流本身
-    // 30–60fps，高刷屏（120/144Hz）下多出的帧对观看无增益、只增显示功耗；进入直播间把
-    // 窗口钉到 60Hz，退出时恢复进入前的值（通常 0f = 系统默认/跟随系统最高）。
-    // 宿主不保证是 Activity（LocalContext 类型无保证，见上方屏幕常亮的既有教训）——
-    // 取不到就静默跳过，不做盲目强转。preferredRefreshRate 属窗口属性，只做 set，
-    // 不触碰系统栏/方向（那是上面 LaunchedEffect(isFullScreen) 的职责）。
-    DisposableEffect(context) {
-        val activity = context as? Activity
-        val window = activity?.window
-        if (window == null) {
-            onDispose { }
-        } else {
+    // 窗口首选刷新率（task 10-17 功耗治理 + task 10-21-tablet-shared-element-transition-fluency R3）：
+    // 直播流本身 30–60fps，高刷屏多出的帧只增功耗 ⇒ 稳态观看时把窗口钉到 60Hz；
+    // 但 280ms 的进出场一镜到底动画**必须跑满原生高刷**，因此把「降频」时机从「进房第 1 帧」
+    // 推迟到 `enterTransitionDone`，并在 `leaveRoom()` 启动退场动画**之前**先恢复进入前的值
+    //（否则退场动画同样被锁在 60fps）。
+    val activityWindow = (context as? Activity)?.window
+    val savedRefreshRate = remember(activityWindow) {
+        activityWindow?.attributes?.preferredRefreshRate ?: 0f
+    }
+    fun restoreWindowRefreshRate() {
+        val window = activityWindow ?: return
+        runCatching {
             val attributes = window.attributes
-            val savedRefreshRate = attributes.preferredRefreshRate
-            attributes.preferredRefreshRate = 60f
-            window.attributes = attributes
-            onDispose {
-                // 恢复进入前的值（Activity 若已在转场中销毁，setAttributes 可能抛异常，静默）
-                runCatching {
-                    val restore = window.attributes
-                    restore.preferredRefreshRate = savedRefreshRate
-                    window.attributes = restore
-                }
+            if (attributes.preferredRefreshRate != savedRefreshRate) {
+                attributes.preferredRefreshRate = savedRefreshRate
+                window.attributes = attributes
             }
         }
+    }
+    LaunchedEffect(activityWindow, enterTransitionDone, leaving) {
+        val window = activityWindow ?: return@LaunchedEffect
+        if (!enterTransitionDone || leaving) return@LaunchedEffect
+        runCatching {
+            val attributes = window.attributes
+            if (attributes.preferredRefreshRate != 60f) {
+                attributes.preferredRefreshRate = 60f
+                window.attributes = attributes
+            }
+        }
+    }
+    // 非常规出栈（进程兜底 / 被系统回收）也要恢复
+    DisposableEffect(activityWindow) {
+        onDispose { restoreWindowRefreshRate() }
     }
 
     // 通知权限（后台保活通知可见性）：Android 13+ POST_NOTIFICATIONS 为运行时权限，
@@ -338,7 +391,8 @@ fun LiveRoomScreen(
     val notificationPermissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission(),
     ) { }
-    LaunchedEffect(Unit) {
+    LaunchedEffect(enterTransitionDone, leaving) {
+        if (!enterTransitionDone || leaving) return@LaunchedEffect
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
             ContextCompat.checkSelfPermission(
                 context,
@@ -411,10 +465,11 @@ fun LiveRoomScreen(
     // 修复：返回前先停止控制器并释放本页面拥有的播放器会话，再把两个互操作 View 置
     // GONE；这样不会把仍绑定旧 Surface 的全局 MPVLib 留给下一次进入。等待两帧确保
     // Surface 图层从合成器移除后再 popBackStack。
-    var leaving by remember { mutableStateOf(false) }
     fun leaveRoom() {
         if (leaving) return
         leaving = true
+        // 先恢复进入前的刷新率：退场的 280ms 一镜到底动画也要跑满原生高刷
+        restoreWindowRefreshRate()
         // 退出发生在 pop 之前，此处可以确定性地完整释放当前会话；onDispose 仍作为
         // 非常规出栈路径的兜底，且 controller/videoView 的 dispose 均已幂等。
         runCatching { PlayerEngine.instance.stop() }
@@ -446,7 +501,23 @@ fun LiveRoomScreen(
 
     // 放在同一个 DisposableEffect 里保证销毁顺序确定；正常返回已在 leaveRoom 提前执行，
     // 此处负责非常规出栈兜底，两个释放入口均为幂等操作。
+    // 注意：初始化被移到下方 `LaunchedEffect(..., enterTransitionDone)`（task 10-21 R4），
+    // 这里只保留销毁；未初始化就被销毁的场景（转场 280ms 内立刻返回）必须安全幂等。
     DisposableEffect(controller, videoView) {
+        onDispose {
+            if (ServiceContainer.activeLiveRoom === controller) {
+                ServiceContainer.activeLiveRoom = null
+            }
+            controller.dispose()
+            videoView.destroy()
+        }
+    }
+
+    // 重负载初始化错峰到转场落位之后（task 10-21-tablet-shared-element-transition-fluency R4）：
+    // mpv JNI（MPVLib.create + 25+ 项参数 + init）与控制器网络/数据库请求若在 280ms 转场窗口内
+    // 开跑，回调会在飞行途中回来，把整页重组 + 全屏 sharedBounds 图层重录叠加到动画帧上。
+    LaunchedEffect(controller, videoView, enterTransitionDone) {
+        if (!enterTransitionDone || leaving) return@LaunchedEffect
         val videoConfig =
             MpvOptionsService.videoControllerConfiguration(ServiceContainer.appSettings)
         runCatching {
@@ -471,12 +542,12 @@ fun LiveRoomScreen(
         controller.subscribePlayerEvents()
         // 注册当前直播间（后台播放接线：MainActivity 前后台切换转发到此控制器）
         ServiceContainer.activeLiveRoom = controller
-        onDispose {
-            if (ServiceContainer.activeLiveRoom === controller) {
-                ServiceContainer.activeLiveRoom = null
-            }
-            controller.dispose()
-            videoView.destroy()
+        // 进房自动全屏（原独立 LaunchedEffect 合并到这里：必须在 create 之后、
+        // 且只在转场落位后触发，避免首帧方向 IPC 打断入场动画）
+        if (ServiceContainer.appSettings.autoFullScreen.value && !isFullScreen) {
+            isFullScreen = true
+            controlsVisible = true
+            controlsTouchTick++
         }
     }
 
@@ -527,6 +598,18 @@ fun LiveRoomScreen(
     //（`_rxSite`/`_rxRoomId`，同样喂给 CurrentRoomService）。首帧兜底用路由参数避免闪一下无高亮。
     val rxSite by controller.rxSite.collectAsStateWithLifecycle()
     val rxRoomId by controller.rxRoomId.collectAsStateWithLifecycle()
+
+    // 转场种子回退（task 10-21-tablet-shared-element-transition-fluency R5）：
+    // 仅当控制器仍停留在**路由初始房间**时使用（房内换台后 rxRoomId/rxSite 变化，不再误用旧种子）。
+    // 有了它，进场第 0 帧就能显示与卡片同一张封面（命中 Coil 内存缓存）与真实标题/主播名，
+    // 而不是黑底 + 转圈等网络。源数据在点击卡片瞬间由激活入口写入。
+    val isInitialRouteRoom =
+        (rxRoomId.isEmpty() || rxRoomId == roomId) && (rxSite == null || rxSite?.id == siteId)
+    val roomSeed = if (isInitialRouteRoom) {
+        activeSharedRoomSeed?.takeIf { it.pairKey == liveRoomPairKey(siteId, roomId) }
+    } else {
+        null
+    }
 
     // 视频源宽高比（width/height/aspect 均由 mpv video-params 属性监听维护）：
     // 优先采用 aspect（video-params/aspect = DAR 显示宽高比）——变形分辨率（anamorphic）
@@ -627,15 +710,8 @@ fun LiveRoomScreen(
         danmakuOverlay.clear()
     }
 
-    // 进房自动全屏：设置开启时读一次即进入（等价原 videoFrame.post { enterFullScreen() }，
-    // 位于 create 之后执行，无需持续 collect）
-    LaunchedEffect(controller) {
-        if (ServiceContainer.appSettings.autoFullScreen.value && !isFullScreen) {
-            isFullScreen = true
-            controlsVisible = true
-            controlsTouchTick++
-        }
-    }
+    // 进房自动全屏已合并进上方 `LaunchedEffect(controller, videoView, enterTransitionDone)`
+    // （task 10-21 R4：转场落位后再触发，避免首帧方向 IPC 打断入场动画）。
 
     /* ---------- 动作函数（控制层按钮回调）---------- */
 
@@ -943,7 +1019,9 @@ fun LiveRoomScreen(
                     )
                 }
                 Text(
-                    text = detail?.title?.ifEmpty { null } ?: "直播间",
+                    text = detail?.title?.ifEmpty { null }
+                        ?: roomSeed?.title?.ifEmpty { null }
+                        ?: "直播间",
                     fontSize = 16.sp,
                     fontWeight = FontWeight.Medium,
                     color = MaterialTheme.colorScheme.onSurface,
@@ -1010,10 +1088,14 @@ fun LiveRoomScreen(
                 // 180ms 淡出，alpha 归零后**从组合树移除**（`coverAlpha > 0.01f` 守卫 ——
                 // tween 结束时值精确落在 0f，故必然被移除；这条守卫就是上面「渲染后必须移除」
                 // 规范的落实，**不能**只把 alpha 留在 0 而让占位图常驻组合）。
-                val roomCover = detail?.cover.orEmpty()
+                val roomCover = detail?.cover?.takeIf { it.isNotEmpty() }
+                    ?: roomSeed?.cover.orEmpty()
+                // 退场立即恢复封面（snap）：退回列表的一镜到底动画要全程显示封面图，
+                // 不能是「首帧黑色 + 180ms 淡入」。稳态仍按首帧到达淡出（180ms）。
+                val showCover = leaving || playerState.width == null
                 val coverAlpha by animateFloatAsState(
-                    targetValue = if (playerState.width == null) 1f else 0f,
-                    animationSpec = tween(durationMillis = 180),
+                    targetValue = if (showCover) 1f else 0f,
+                    animationSpec = if (leaving) snap() else tween(durationMillis = 180),
                     label = "liveRoomCoverAlpha",
                 )
                 if (roomCover.isNotEmpty() && coverAlpha > 0.01f) {
@@ -1027,11 +1109,19 @@ fun LiveRoomScreen(
                     )
                 }
                 // mpv 渲染内核（互操作白名单）：Surface 附加由 MpvVideoView 的
-                // SurfaceHolder.Callback 自动处理（surfaceCreated → attachSurface）
-                AndroidView(
-                    factory = { videoView },
-                    modifier = Modifier.fillMaxSize(),
-                )
+                // SurfaceHolder.Callback 自动处理（surfaceCreated → attachSurface）。
+                //
+                // 转场窗口内**不挂载**（task 10-21-tablet-shared-element-transition-fluency R2）：
+                // SurfaceView 是独立图层，280ms 内逐帧尺寸变化会触发 updateSurface() 跨进程事务 +
+                // setSurfaceSize JNI；转场期间屏幕上只是封面在飞（ScaleToBounds 缩放），
+                // 落位后再一次性挂载即可，观感无差、帧预算完全不同。
+                val attachNativeViews = enterTransitionDone && !leaving
+                if (attachNativeViews) {
+                    AndroidView(
+                        factory = { videoView },
+                        modifier = Modifier.fillMaxSize(),
+                    )
+                }
             }
             // 浮层弹幕：铺满整个视频区（**外层**，全屏时含 letterbox 黑边）。
             // 根因说明（task danmaku-overlay-fix：全屏弹幕从右侧直接出现/靠近左侧直接消失）：
@@ -1039,11 +1129,13 @@ fun LiveRoomScreen(
             // 弹幕层窄于屏幕（左右黑边），弹幕从 letterbox 右缘滑入、出左缘即越界消失，
             // 观感为「未从屏幕外移入/未移出屏幕」。对齐原项目：canvas_danmaku 弹幕层 =
             // 整个播放器区域（Positioned.fill，全屏含黑边），弹幕从物理屏右缘外滑入、
-            // 完全走出左缘才消失。非交互层不拦截点击。
-            AndroidView(
-                factory = { danmakuOverlay },
-                modifier = Modifier.fillMaxSize(),
-            )
+            // 完全走出左缘才消失。非交互层不拦截点击。同样受转场门控（见上）。
+            if (enterTransitionDone && !leaving) {
+                AndroidView(
+                    factory = { danmakuOverlay },
+                    modifier = Modifier.fillMaxSize(),
+                )
+            }
             // 未开播覆盖层：白字居中（对应原 unliveOverlay）。与另两个居中覆盖层严格互斥——
             // 详情未就绪（detail == null）或刷新中让位给转圈（同处居中位置会互相压字），
             // 错误层显示时让位，且加载失败时本就无法断言「未开播」。
@@ -1060,7 +1152,10 @@ fun LiveRoomScreen(
             // 避免刷新完成瞬间转圈硬切消失。visible=false 时 AnimatedVisibility 不渲染该节点。
             // 与下方错误层互斥：`!showRoomError` 取代原 `!loadError`（见 showRoomError 定义处）。
             androidx.compose.animation.AnimatedVisibility(
-                visible = (detail == null || refreshing) && !showRoomError,
+                // 转场窗口内不显示转圈（task 10-21 R2）：无限旋转动画会让共享覆盖层的
+                // DisplayList 逐帧失效重录，144Hz 下等于每帧多一次全屏重录。
+                visible = enterTransitionDone && !leaving &&
+                    (detail == null || refreshing) && !showRoomError,
                 modifier = Modifier.fillMaxSize(),
                 enter = fadeIn(tween(150)),
                 exit = fadeOut(tween(200)),
@@ -1210,13 +1305,13 @@ fun LiveRoomScreen(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             NetImage(
-                url = detail?.userAvatar.orEmpty(),
+                url = detail?.userAvatar?.takeIf { it.isNotEmpty() } ?: roomSeed?.userAvatar.orEmpty(),
                 modifier = Modifier.size(48.dp),
                 isRound = true,
             )
             Column(modifier = Modifier.weight(1f).padding(horizontal = 12.dp)) {
                 Text(
-                    text = detail?.userName ?: "",
+                    text = detail?.userName?.ifEmpty { null } ?: roomSeed?.userName.orEmpty(),
                     fontSize = 14.sp,
                     color = MaterialTheme.colorScheme.onSurface,
                     maxLines = 1,
