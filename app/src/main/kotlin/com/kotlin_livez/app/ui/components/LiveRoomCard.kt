@@ -91,7 +91,8 @@ fun LiveRoomCard(
             .background(cardContainerColor(), RoundedCornerShape(8.dp))
             .clickable(onClick = onClick),
     ) {
-        // 封面：16:9，顶部两角圆角（底部直角，由卡片整体裁剪配合）
+        // 封面：16:9。圆角由外层 Column 的 `.clip(RoundedCornerShape(8.dp))` 统一裁切，
+        // 内层不再重复 shape（task 10-21-tablet-home-pager-fluency R4：省一层冗余圆角裁剪）。
         NetImage(
             url = item.cover,
             modifier = coverSharedModifier
@@ -99,7 +100,6 @@ fun LiveRoomCard(
                 .aspectRatio(16f / 9f)
                 // 封面底色主题感知（深色不再亮白，本任务）
                 .background(imagePlaceholderColor()),
-            shape = RoundedCornerShape(topStart = 8.dp, topEnd = 8.dp),
         )
 
         // 文字区：固定 64dp 高、8dp 内边距

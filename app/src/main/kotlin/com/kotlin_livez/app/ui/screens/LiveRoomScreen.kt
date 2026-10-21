@@ -137,6 +137,8 @@ import com.kotlin_livez.app.ui.components.RoomSheet
 import com.kotlin_livez.app.ui.components.SheetClickRow
 import com.kotlin_livez.app.ui.nav.liveRoomContainerSharedElement
 import com.kotlin_livez.app.ui.nav.liveRoomCoverSharedElement
+import com.kotlin_livez.app.ui.nav.activateSharedRoom
+import com.kotlin_livez.app.ui.nav.clearSharedRoomIfMatch
 import com.kotlin_livez.app.ui.theme.CustomIcons
 import com.kotlin_livez.app.ui.theme.LocalAppDarkTheme
 import com.kotlin_livez.app.ui.theme.appThemeResolvedDark
@@ -197,6 +199,14 @@ fun LiveRoomScreen(
         // 空白帧等待返回动画（下一帧即 popBackStack）
         Box(modifier = modifier.fillMaxSize().background(MaterialTheme.colorScheme.surface))
         return
+    }
+
+    // 一镜到底共享元素的房间标记（task 10-21-tablet-home-pager-fluency R1）：
+    // - 进入即标记本房间，使列表里对应卡片同时挂上共享节点（含直播间内换房场景）；
+    // - 路由真正离栈（退场动画结束、本组合销毁）时清除，返回列表稳态后卡片 0 共享节点。
+    DisposableEffect(siteId, roomId) {
+        activateSharedRoom(siteId, roomId)
+        onDispose { clearSharedRoomIfMatch(siteId, roomId) }
     }
 
     val context = LocalContext.current
@@ -971,7 +981,8 @@ fun LiveRoomScreen(
     val roomVideo: @Composable (Modifier) -> Unit = { outerModifier ->
         Box(
             modifier = outerModifier
-                .liveRoomCoverSharedElement(siteId, roomId)
+                // 房间侧始终挂载：进场/退场都必须有共享节点参与配对
+                .liveRoomCoverSharedElement(siteId, roomId, alwaysEnable = true)
                 .then(videoGestureModifier)
                 .background(Color.Black),
         ) {
@@ -1384,7 +1395,7 @@ fun LiveRoomScreen(
     // ---------- 根容器：宽屏（平板横屏）两列 / 窄屏单列 ----------
     // 背景色沿用原根容器写法：全屏黑底（刘海延伸区观感），竖屏主题底色。
     val rootModifier = modifier
-        .liveRoomContainerSharedElement(siteId, roomId)
+        .liveRoomContainerSharedElement(siteId, roomId, alwaysEnable = true)
         .fillMaxSize()
         .background(if (isFullScreen) Color.Black else MaterialTheme.colorScheme.surface)
         .statusBarsPadding()

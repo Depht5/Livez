@@ -26,6 +26,7 @@ import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ScrollableTabRow
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -605,6 +606,8 @@ fun SitePagerTabs(
     BoxWithConstraints(modifier = modifier.fillMaxSize()) {
         // 过渡幅宽 = 分页区宽度（像素）：两页各占一屏，位移按像素计算避免 Dp 取整误差
         val viewportWidthPx = constraints.maxWidth
+        // 视口宽度（dp）下发给页内网格：页内不再套第二层 BoxWithConstraints（SubcomposeLayout）
+        val viewportWidthDp = maxWidth.value
 
         Column(modifier = Modifier.fillMaxSize()) {
             SiteTabRow(
@@ -660,7 +663,9 @@ fun SitePagerTabs(
                     } else {
                         val content = siteMovableContents[site.id]
                         if (content != null) {
-                            content()
+                            CompositionLocalProvider(
+                                LocalPagerViewportWidthDp provides viewportWidthDp,
+                            ) { content() }
                         } else {
                             // 站点列表变化瞬间可能取不到槽位（正常流程不会出现）
                             Box(modifier = Modifier.fillMaxSize())
@@ -686,7 +691,9 @@ fun SitePagerTabs(
                         if (targetSite != null && active.overlayActive) {
                             val content = siteMovableContents[targetSite.id]
                             if (content != null) {
-                                content()
+                                CompositionLocalProvider(
+                                    LocalPagerViewportWidthDp provides viewportWidthDp,
+                                ) { content() }
                             } else {
                                 Box(modifier = Modifier.fillMaxSize())
                             }

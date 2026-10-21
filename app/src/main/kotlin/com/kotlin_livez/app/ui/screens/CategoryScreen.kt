@@ -4,7 +4,6 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Spacer
@@ -46,6 +45,7 @@ import com.kotlin_livez.app.modules.category.CategoryController
 import com.kotlin_livez.app.modules.category.CategoryListController
 import com.kotlin_livez.app.ui.components.NetImage
 import com.kotlin_livez.app.ui.components.SitePagerTabs
+import com.kotlin_livez.app.ui.components.ViewportWidthBox
 import com.kotlin_livez.app.ui.theme.LocalAppDarkTheme
 import com.kotlin_livez.app.ui.theme.cardContainerColor
 import com.kotlin_livez.core.model.LiveSubCategory
@@ -256,9 +256,10 @@ private fun CategorySiteGrid(
         }
     }
 
-    BoxWithConstraints(modifier = modifier.fillMaxSize()) {
-        // 列数对齐 Dart/现版：(视口宽 / 80).clamp(1, 12)
-        val columns = (maxWidth.value / 80f).toInt().coerceIn(1, 12)
+    ViewportWidthBox(modifier = modifier.fillMaxSize()) { viewportWidthDp ->
+        // 列数对齐 Dart/现版：(视口宽 / 80).clamp(1, 12)；
+        // 视口宽度优先来自 SitePagerTabs 下发的 Local（0 层 SubcomposeLayout）
+        val columns = (viewportWidthDp / 80f).toInt().coerceIn(1, 12)
         val pullState = rememberPullToRefreshState()
 
         // 下拉指示器自保（见 ui-compose.md 条目 19）：onRefresh 若因 2s 冷却被 early-return，

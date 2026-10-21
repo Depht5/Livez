@@ -7,6 +7,7 @@ import android.widget.Toast
 import androidx.navigation.NavController
 import com.kotlin_livez.app.app.Log
 import com.kotlin_livez.app.app.Site
+import com.kotlin_livez.app.ui.nav.activateSharedRoom
 
 /**
  * 全局路由 —— 对应 Flutter 端 `lib/routes/` 的导航职责。
@@ -70,6 +71,9 @@ object Router {
     /** 打开直播间详情（对应 AppNavigator.toLiveRoomDetail；参数经 URL 编码进 route path）。 */
     fun openLiveRoom(site: Site, roomId: String) {
         Log.d("路由：打开直播间 site=${site.id} roomId=$roomId")
+        // 先标记本次转场房间：列表卡片据此按需挂载共享元素（未命中的卡片 0 节点，
+        // 见 SharedTransition.activeSharedRoomKey）；标记必须早于 navigate 的第一次组合。
+        activateSharedRoom(site.id, roomId)
         navigate("livertoom/${Uri.encode(site.id)}/${Uri.encode(roomId)}")
     }
 

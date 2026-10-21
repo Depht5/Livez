@@ -506,7 +506,6 @@ private fun FollowItemCard(
                     .fillMaxSize()
                     // 封面底色主题感知（深色不再亮白，本任务）
                     .background(imagePlaceholderColor()),
-                shape = RoundedCornerShape(topStart = 8.dp, topEnd = 8.dp),
             )
             if (item.liveStatus != 0) {
                 val live = item.liveStatus == 2

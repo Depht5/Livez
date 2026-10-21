@@ -4,7 +4,6 @@ import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
@@ -38,6 +37,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.kotlin_livez.app.app.controller.BasePageController
+import com.kotlin_livez.app.ui.nav.activeSharedRoomKey
 import com.kotlin_livez.app.ui.nav.sharedElementBlockedIndexes
 import com.kotlin_livez.core.model.LiveRoomItem
 import kotlinx.coroutines.flow.first
@@ -108,7 +108,12 @@ fun PagedRoomGrid(
     // 同一 roomId 的第 2 次及以后出现、以及空 roomId 不挂一镜到底
     //（LazyGrid 的 `#n` 兜底只保护 item key，不保护共享元素 key）。
     val rooms = listController.list.collectAsStateWithLifecycle().value
-    val blockedIndexes = remember(rooms) { sharedElementBlockedIndexes(rooms.map { it.roomId }) }
+    // R1（task 10-21-tablet-home-pager-fluency）：只有存在激活房间时才需要同屏去重遍历——
+    // 否则卡片根本不会创建共享节点（见 liveRoomCoverSharedElement 的门控），遍历纯属浪费。
+    val sharedRoomActive = activeSharedRoomKey != null
+    val blockedIndexes = remember(rooms, sharedRoomActive) {
+        if (sharedRoomActive) sharedElementBlockedIndexes(rooms.map { it.roomId }) else emptySet()
+    }
     PagedRoomGridCore(
         listController = listController,
         gridState = gridState,
@@ -239,9 +244,11 @@ fun <T> PagedRoomGridCore(
         }
     }
 
-    BoxWithConstraints(modifier = modifier.fillMaxSize()) {
-        // 网格规格按视口宽度实时计算（对应 Dart LayoutBuilder + LiveRoomGridLayout.resolve）
-        val spec = resolveLiveRoomGrid(maxWidth.value)
+    ViewportWidthBox(modifier = modifier.fillMaxSize()) { viewportWidthDp ->
+        // 网格规格按视口宽度实时计算（对应 Dart LayoutBuilder + LiveRoomGridLayout.resolve）；
+        // 视口宽度优先来自 SitePagerTabs 下发的 Local（0 层 SubcomposeLayout），
+        // 页外调用方（分类详情/关注）回退 BoxWithConstraints——见 ViewportWidthBox。
+        val spec = resolveLiveRoomGrid(viewportWidthDp)
         val pullState = rememberPullToRefreshState()
 
         // 下拉指示器自保（见 ui-compose.md 条目 19）：onRefresh 若因关键词为空 / 2s 冷却被 early-return，

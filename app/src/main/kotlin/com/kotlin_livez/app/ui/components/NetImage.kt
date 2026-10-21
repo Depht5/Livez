@@ -42,6 +42,10 @@ fun NetImage(
     isRound: Boolean = false,
     shape: Shape? = null,
     contentScale: ContentScale = ContentScale.Crop,
+    // 淡入动画默认关闭（task 10-21-tablet-home-pager-fluency R4）：原项目 ExtendedImage 无淡入；
+    // 一屏 20~30 张封面在切页/滑行时各启动一个淡入动画，会与滑动动画抢主线程帧。
+    // 需要淡入的调用方显式传 true。
+    crossfade: Boolean = false,
     // 主题感知默认值（本任务）：@Composable 出现在默认参数位置合法（同 MaterialTheme.colorScheme.primary
     // 的用法），签名不变。深色/纯黑下取色槽灰，不再出现亮白占位块。
     placeholderColor: Color = imagePlaceholderColor(),
@@ -66,10 +70,10 @@ fun NetImage(
     // 且每次重组都会重新执行函数体——原先 ImageRequest.Builder 与两个 ColorPainter 都是
     // 每次重组新建的对象，现按各自输入缓存：只在 URL（或 Context）变化时重建请求，
     // 只在颜色参数变化时重建 painter。
-    val request = remember(context, pic) {
+    val request = remember(context, pic, crossfade) {
         ImageRequest.Builder(context)
             .data(pic)
-            .crossfade(true)
+            .crossfade(crossfade)
             // 尺寸精度放宽：解码尺寸不必与目标严格一致（目标可自行缩放），Coil 可复用更大尺寸的
             // 内存缓存条目并避免多余放大解码；
             // 允许 RGB_565：图片确定为不透明时用 16 位色位图，内存减半（代价是轻微色阶损失）。

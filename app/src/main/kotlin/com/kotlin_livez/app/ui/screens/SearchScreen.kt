@@ -37,6 +37,7 @@ import com.kotlin_livez.app.ui.components.CompactSearchBar
 import com.kotlin_livez.app.ui.components.LiveRoomCard
 import com.kotlin_livez.app.ui.components.PagedRoomGridCore
 import com.kotlin_livez.app.ui.components.SitePagerTabs
+import com.kotlin_livez.app.ui.nav.activeSharedRoomKey
 import com.kotlin_livez.app.ui.nav.sharedElementBlockedIndexes
 import com.kotlin_livez.app.ui.theme.CustomIcons
 import com.kotlin_livez.app.ui.theme.LiveIndicatorRed
@@ -183,8 +184,14 @@ fun SearchScreen(modifier: Modifier = Modifier) {
                     val pageList = listController.list.collectAsStateWithLifecycle().value
                     // 共享元素守卫：下标与 PagedRoomGridCore 内的 items 同源（同一条 StateFlow，同帧一致）。
                     // 主播行（非 LiveRoomItem）映射为 null，不参与判定。
-                    val blockedIndexes = remember(pageList) {
-                        sharedElementBlockedIndexes(pageList.map { (it as? LiveRoomItem)?.roomId })
+                    // R1（task 10-21-tablet-home-pager-fluency）：无激活房间时跳过遍历。
+                    val sharedRoomActive = activeSharedRoomKey != null
+                    val blockedIndexes = remember(pageList, sharedRoomActive) {
+                        if (sharedRoomActive) {
+                            sharedElementBlockedIndexes(pageList.map { (it as? LiveRoomItem)?.roomId })
+                        } else {
+                            emptySet()
+                        }
                     }
                     PagedRoomGridCore(
                         listController = listController,

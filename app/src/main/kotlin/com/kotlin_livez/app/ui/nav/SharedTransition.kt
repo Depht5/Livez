@@ -11,6 +11,9 @@ import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Rect
@@ -38,6 +41,40 @@ fun liveRoomContainerKey(siteId: String, roomId: String): String =
     "live_container_${siteId}_$roomId"
 
 /**
+ * 房间配对键（`siteId_roomId`）—— 比共享元素 key 更轻的「当前是否是这个房间的转场」判据。
+ */
+fun liveRoomPairKey(siteId: String, roomId: String): String = "${siteId}_$roomId"
+
+/**
+ * 当前**唯一**参与一镜到底的房间键（null = 不在转场中）。
+ *
+ * 为什么需要它（task 10-21-tablet-home-pager-fluency R1）：
+ * `Modifier.sharedBounds` / `sharedElement` 每个调用点都会常驻一个 `SharedBoundsNode` +
+ * 图形层，并在每次 Placement 把新的屏幕坐标写进 `sharedElement.currentBounds`（MutableState）。
+ * 大屏首页同屏 20~30 张卡片、双页过渡 40~60 张，水平位移会让这几十个快照状态每帧失效，
+ * 迫使全部卡片在滑动期间逐帧重录绘制指令 —— 而一镜到底真正用到的只有被点击的那 1 张。
+ * 因此在列表侧**按需挂载**：只有房间键命中时才有共享节点。
+ *
+ * 写入方：[activateSharedRoom]（Router 导航前 / 直播间进入时）、
+ * [clearSharedRoomIfMatch]（直播间退场卸载时）。
+ */
+var activeSharedRoomKey by mutableStateOf<String?>(null)
+    private set
+
+/** 标记某房间为当前转场房间（空值忽略，避免空 key 把整屏卡片的守卫误开）。 */
+fun activateSharedRoom(siteId: String, roomId: String) {
+    if (siteId.isEmpty() || roomId.isEmpty()) return
+    activeSharedRoomKey = liveRoomPairKey(siteId, roomId)
+}
+
+/** 退场时清除标记，但只在「当前标记仍是这个房间」时清（换房场景不会误清新房间）。 */
+fun clearSharedRoomIfMatch(siteId: String, roomId: String) {
+    if (activeSharedRoomKey == liveRoomPairKey(siteId, roomId)) {
+        activeSharedRoomKey = null
+    }
+}
+
+/**
  * 共享元素/共享容器的 bounds 动画时长与曲线 —— 与 [AppNavHost] 的全局路由转场
  * （`slideInHorizontally(tween(280))` / `fadeIn(tween(280))`）保持一致。
  *
@@ -63,9 +100,17 @@ private val SharedBoundsTransform = BoundsTransform { _, _ ->
  * 封面共享元素 modifier：卡片封面与直播间视频容器两端调用，key 一致即配对。
  * scope 缺失（未在 SharedTransitionLayout/路由转场作用域内）时原样返回——
  * 无匹配 key 的入口（如历史页）自然退化为普通转场。
+ *
+ * @param alwaysEnable 房间侧（直播间）传 true：进场/退场都必须挂载；
+ *   列表卡片保持默认 false，仅当本次转场正是这个房间时才创建共享节点（见 [activeSharedRoomKey]）。
  */
 @Composable
-fun Modifier.liveRoomCoverSharedElement(siteId: String, roomId: String): Modifier {
+fun Modifier.liveRoomCoverSharedElement(
+    siteId: String,
+    roomId: String,
+    alwaysEnable: Boolean = false,
+): Modifier {
+    if (!alwaysEnable && activeSharedRoomKey != liveRoomPairKey(siteId, roomId)) return this
     val sharedTransitionScope = LocalSharedTransitionScope.current ?: return this
     val animatedVisibilityScope = LocalNavAnimatedVisibilityScope.current ?: return this
     return with(sharedTransitionScope) {
@@ -85,7 +130,12 @@ fun Modifier.liveRoomCoverSharedElement(siteId: String, roomId: String): Modifie
  * 即 MaterialContainerTransform 的 Compose 原生等价物。
  */
 @Composable
-fun Modifier.liveRoomContainerSharedElement(siteId: String, roomId: String): Modifier {
+fun Modifier.liveRoomContainerSharedElement(
+    siteId: String,
+    roomId: String,
+    alwaysEnable: Boolean = false,
+): Modifier {
+    if (!alwaysEnable && activeSharedRoomKey != liveRoomPairKey(siteId, roomId)) return this
     val sharedTransitionScope = LocalSharedTransitionScope.current ?: return this
     val animatedVisibilityScope = LocalNavAnimatedVisibilityScope.current ?: return this
     return with(sharedTransitionScope) {
