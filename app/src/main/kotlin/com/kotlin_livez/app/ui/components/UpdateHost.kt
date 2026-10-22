@@ -160,11 +160,10 @@ private fun UpdateAvailableDialog(
                     color = MaterialTheme.colorScheme.onSurface,
                 )
                 Spacer(Modifier.height(12.dp))
-                Text(
-                    text = release.notes.ifBlank { "该版本未提供更新说明" },
-                    fontSize = 14.sp,
-                    lineHeight = 20.sp,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                // 发布说明是 Markdown（GitHub / Gitee 都按 Markdown 存储）：渲染标题/列表/代码/链接
+                // 等常见语法，而不是把 `##`、`-` 原样当正文显示（task 10-28-update-dialog-markdown）。
+                MarkdownText(
+                    markdown = release.notes.ifBlank { "该版本未提供更新说明" },
                     modifier = Modifier
                         .heightIn(max = 320.dp)
                         .verticalScroll(rememberScrollState()),
