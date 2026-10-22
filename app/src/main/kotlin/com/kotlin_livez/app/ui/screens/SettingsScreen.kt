@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.rememberScrollState
@@ -393,6 +394,9 @@ private fun SingleChoiceDialog(
                     ) {
                         // onClick = null：点击统一由行处理（圆圈不再单独拦截手势）
                         RadioButton(selected = selected, onClick = null)
+                        // 选中圈与文字之间留 12dp（task 10-22-mine-header-dialog-spacing）：
+                        // RadioButton 自带 48dp 触控区，文字此前紧贴圆圈边缘，观感像一个整体
+                        Spacer(Modifier.width(12.dp))
                         val description = descriptions?.getOrNull(index)
                         if (!description.isNullOrBlank()) {
                             // 带描述：主标题 + 说明两段式（mpv 档位三档各带一行说明）

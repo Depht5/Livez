@@ -4,14 +4,19 @@ import android.Manifest
 import android.content.pm.PackageManager
 import android.os.Build
 import androidx.activity.ComponentActivity
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
@@ -27,14 +32,21 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
+import com.kotlin_livez.app.BuildConfig
+import com.kotlin_livez.app.R
 import com.kotlin_livez.app.services.LogCaptureService
 import com.kotlin_livez.app.ui.Router
 import com.kotlin_livez.app.ui.components.SettingGroupCard
+import com.kotlin_livez.app.ui.theme.LocalAppDarkTheme
+import com.kotlin_livez.core.update.VersionName
 
 /**
  * 我的页（Compose 版）—— 对应 Dart `mine_page.dart`（账号 + 功能入口列表），
@@ -65,6 +77,46 @@ fun MineScreen(modifier: Modifier = Modifier) {
             .statusBarsPadding()
             .verticalScroll(rememberScrollState()),
     ) {
+        // 顶部信息区（task 10-22-mine-header-dialog-spacing）：应用图标 + 应用名（包名）+ 版本名。
+        // 随内容一起滚动（与布局预览 mine_screen_preview.html 一致），不吸顶。
+        // 应用名显示**包名**：debug 变体带 `.debug` 后缀，能一眼分清装的是哪个包
+        //（应用标签在 debug 下是「Livez D」，与正式版混在一起时反而更难分辨）。
+        // 版本名与关于页同一口径（VersionName.display），bump 后自动跟随。
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(top = 16.dp, bottom = 4.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            // 图标阴影沿用直播间/分类卡片的策略：浅色画 2dp 阴影，深色/纯黑不画
+            //（深色底上阴影几乎不可见，却仍要多录一层阴影绘制指令）。
+            val iconShadow = if (LocalAppDarkTheme.current) {
+                Modifier
+            } else {
+                Modifier.shadow(elevation = 2.dp, shape = RoundedCornerShape(16.dp))
+            }
+            Image(
+                painter = painterResource(R.mipmap.ic_launcher),
+                contentDescription = null,
+                modifier = Modifier
+                    .size(72.dp)
+                    .then(iconShadow),
+            )
+            Spacer(Modifier.height(12.dp))
+            Text(
+                text = LocalContext.current.packageName,
+                fontSize = 18.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onSurface,
+            )
+            Spacer(Modifier.height(2.dp))
+            Text(
+                text = VersionName.display(BuildConfig.VERSION_NAME),
+                fontSize = 13.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        Spacer(Modifier.height(12.dp))
         SettingGroupCard {
             entries.forEach { entry ->
                 MineMenuRow(

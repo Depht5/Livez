@@ -136,7 +136,9 @@ fun AboutScreen(onBack: () -> Unit = { Router.back() }) {
                 .navigationBarsPadding()
                 .padding(bottom = 16.dp),
         ) {
-            SettingSectionTitle("当前版本")
+            // 按需求去掉「当前版本」分组小标题（task 10-22-mine-header-dialog-spacing）：
+            // 版本卡片直接跟在顶栏下面，补 8dp 间距代替原小标题自带的 14dp 上边距。
+            Spacer(Modifier.height(8.dp))
             SettingGroupCard {
                 SettingActionRow(
                     title = "当前版本",
