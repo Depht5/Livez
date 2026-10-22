@@ -25,3 +25,6 @@ scripts/extract_douyin_js.py
 *.jks
 *.keystore
 keystore/
+
+# 设计预览稿（HTML mockup，只用于讨论布局，不随代码入库）
+mine_screen_preview.html
