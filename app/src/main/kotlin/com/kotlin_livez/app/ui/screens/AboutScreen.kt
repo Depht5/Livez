@@ -59,6 +59,9 @@ import com.kotlin_livez.core.update.VersionName
  * 反馈分工：检查到新版本 → 由根组合的 [com.kotlin_livez.app.ui.components.UpdateHost] 弹全局弹窗
  * （手动与静默检查共用同一形态）；本页只处理「已是最新」Toast 与「检查失败」弹窗。
  */
+/** 开源主页地址（GitHub 仓库）：关于页「开源主页」行用系统浏览器打开。 */
+private const val OPEN_SOURCE_URL = "https://github.com/Depht5/Livez"
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun AboutScreen(onBack: () -> Unit = { Router.back() }) {
@@ -168,6 +171,12 @@ fun AboutScreen(onBack: () -> Unit = { Router.back() }) {
                         }
                     },
                 )
+                // 开源主页（用户要求）：点击用系统浏览器打开 GitHub 仓库
+                SettingClickRow(
+                    title = "开源主页",
+                    subtitle = "github.com/Depht5/Livez",
+                    onClick = { Router.openUrl(OPEN_SOURCE_URL) },
+                )
             }
 
             SettingSectionTitle("更新")
@@ -244,8 +253,7 @@ fun AboutScreen(onBack: () -> Unit = { Router.back() }) {
     }
 }
 
-/** 当前版本行副标题：`v0.2.0，更新日期：2026-10-21`（日期未知时为 `—`）。 */
-private fun versionSubtitle(releaseDate: String?): String =
+/** 当前版本行副标题：`v0.2.0，更新日期：2026-10-21`（日期未知时为 `—`）。 */private fun versionSubtitle(releaseDate: String?): String =
     "${VersionName.display(com.kotlin_livez.app.BuildConfig.VERSION_NAME)}，" +
         "更新日期：${releaseDate ?: "—"}"
 

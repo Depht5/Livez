@@ -1,6 +1,7 @@
 package com.kotlin_livez.app.ui
 
 import android.content.Context
+import android.content.Intent
 import android.net.Uri
 import android.os.SystemClock
 import android.widget.Toast
@@ -66,6 +67,16 @@ object Router {
         val ctx = appContext ?: return
         Log.d("Toast: $message")
         Toast.makeText(ctx, message, Toast.LENGTH_SHORT).show()
+    }
+
+    /** 用系统浏览器打开外部链接（无浏览器/被策略拦截时 toast 提示，不让用户点了没反应）。 */
+    fun openUrl(url: String) {
+        val ctx = appContext ?: return
+        Log.d("路由：打开外部链接 $url")
+        val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url))
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        runCatching { ctx.startActivity(intent) }
+            .onFailure { toast("无法打开链接：$url") }
     }
 
     /**
