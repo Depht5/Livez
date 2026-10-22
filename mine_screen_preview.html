@@ -1,0 +1,471 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Livez - 「我的」页布局预览</title>
+  <script src="https://www.gstatic.com/antigravity/web/dev/tailwindcss.min.js"></script>
+  <style>
+    /* 模拟 Android 字体与水波纹过渡效果 */
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+      user-select: none;
+      -webkit-tap-highlight-color: transparent;
+    }
+    .ripple {
+      transition: background-color 0.15s ease;
+    }
+    .ripple:active {
+      background-color: var(--ripple-color);
+    }
+    /* 页面切换动画 */
+    .screen-slide-enter {
+      animation: slideIn 0.22s cubic-bezier(0, 0, 0.2, 1) forwards;
+    }
+    .screen-slide-exit {
+      animation: slideOut 0.18s cubic-bezier(0.4, 0, 1, 1) forwards;
+    }
+    @keyframes slideIn {
+      from { transform: translateX(30px); opacity: 0; }
+      to { transform: translateX(0); opacity: 1; }
+    }
+    @keyframes slideOut {
+      from { transform: translateX(0); opacity: 1; }
+      to { transform: translateX(30px); opacity: 0; }
+    }
+  </style>
+</head>
+<body class="bg-slate-900 text-slate-100 min-h-screen flex flex-col items-center justify-start p-4 md:p-8">
+
+  <!-- 顶部控制条（切换主题与说明） -->
+  <header class="w-full max-w-md mb-4 flex flex-wrap items-center justify-between gap-3 bg-slate-800/80 backdrop-blur border border-slate-700/60 rounded-2xl px-4 py-3 shadow-lg">
+    <div class="flex items-center gap-2">
+      <span class="inline-block w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse"></span>
+      <span class="text-sm font-medium text-slate-200">Compose UI 原生预览</span>
+    </div>
+    <!-- 主题选择器 -->
+    <div class="flex items-center bg-slate-900/90 rounded-xl p-1 border border-slate-700 text-xs">
+      <button onclick="setTheme('light')" id="btn-light" class="px-2.5 py-1 rounded-lg transition-colors text-slate-400 hover:text-white">浅色</button>
+      <button onclick="setTheme('dark')" id="btn-dark" class="px-2.5 py-1 rounded-lg transition-colors bg-blue-600 text-white font-medium shadow-sm">深色</button>
+      <button onclick="setTheme('amoled')" id="btn-amoled" class="px-2.5 py-1 rounded-lg transition-colors text-slate-400 hover:text-white">纯黑</button>
+    </div>
+  </header>
+
+  <!-- 手机外壳容器 -->
+  <main id="phone-frame" class="w-full max-w-[390px] h-[780px] rounded-[44px] p-3 shadow-2xl relative flex flex-col border transition-all duration-300"
+       style="background: #1e293b; border-color: #334155; box-shadow: 0 25px 60px -15px rgba(0, 0, 0, 0.7);">
+
+    <!-- 手机屏幕内部 -->
+    <div id="screen-container" class="w-full h-full rounded-[34px] overflow-hidden relative flex flex-col transition-colors duration-200"
+         style="background: #141218; color: #E6E0E9;">
+
+      <!-- 1. 系统状态栏 (statusBarsPadding) -->
+      <div class="w-full h-10 px-6 pt-2 flex items-center justify-between text-xs font-semibold tracking-wider shrink-0 select-none z-10" id="status-bar">
+        <span>19:11</span>
+        <div class="flex items-center gap-1.5">
+          <!-- 信号图标 -->
+          <svg class="w-3.5 h-3.5 fill-current" viewBox="0 0 24 24"><path d="M12 3c-4.97 0-9 4.03-9 9 0 2.12.74 4.07 1.97 5.61L12 22l7.03-4.39C20.26 16.07 21 14.12 21 12c0-4.97-4.03-9-9-9z"/></svg>
+          <!-- WiFi 图标 -->
+          <svg class="w-3.5 h-3.5 fill-current" viewBox="0 0 24 24"><path d="M12 4C7.31 4 3.07 5.9 0 8.98L12 21 24 8.98C20.93 5.9 16.69 4 12 4zm0 3.5c3.78 0 7.22 1.5 9.77 3.96L12 19.3 2.23 11.46C4.78 9 8.22 7.5 12 7.5z"/></svg>
+          <!-- 电池图标 -->
+          <svg class="w-4 h-4 fill-current rotate-90" viewBox="0 0 24 24"><path d="M15.67 4H14V2h-4v2H8.33C7.6 4 7 4.6 7 5.33v15.33C7 21.4 7.6 22 8.33 22h7.33c.74 0 1.34-.6 1.34-1.33V5.33C17 4.6 16.4 4 15.67 4z"/></svg>
+        </div>
+      </div>
+
+      <!-- 2. 主页面内容滚动区 -->
+      <div id="page-content" class="flex-1 overflow-y-auto overflow-x-hidden relative scroll-smooth pb-4">
+
+        <!-- ===== VIEW A: 「我的」主页 (MineScreen) ===== -->
+        <div id="mine-view" class="pt-2 px-3 flex flex-col gap-3">
+
+          <!-- 顶部居中空白信息区：应用图标、应用名称、软件版本 -->
+          <div class="flex flex-col items-center justify-center pt-4 pb-2">
+            <!-- 应用图标 (对齐 ic_launcher.xml 设计) -->
+            <div class="w-[72px] h-[72px] rounded-2xl bg-white shadow-md flex items-center justify-center relative overflow-hidden transition-transform hover:scale-105">
+              <!-- 深灰圆底 -->
+              <div class="w-11 h-11 rounded-full bg-[#333333] flex items-center justify-center relative">
+                <!-- 播放三角 -->
+                <svg class="w-5 h-5 text-white fill-current ml-0.5" viewBox="0 0 24 24">
+                  <path d="M8 5v14l11-7z"/>
+                </svg>
+              </div>
+              <!-- 左下角红色圆点 -->
+              <div class="absolute bottom-2 left-2.5 w-3.5 h-3.5 rounded-full bg-[#E53935] shadow-xs"></div>
+            </div>
+            <!-- 应用名称 -->
+            <div class="text-[18px] font-semibold mt-3 item-title tracking-tight">Livez</div>
+            <!-- 软件版本 -->
+            <div class="text-[13px] mt-0.5 item-subtitle" style="color: #CAC4D0;">v0.2.1</div>
+          </div>
+
+          <!-- M3 SettingGroupCard 容器 -->
+          <div id="setting-group-card" class="w-full rounded-2xl overflow-hidden shadow-sm border transition-colors duration-200"
+               style="background-color: #2B2831; border-color: rgba(255,255,255,0.04);">
+
+            <!-- 1. 账号管理 -->
+            <div onclick="showToast('打开：账号管理')" class="ripple flex items-center justify-between px-4 py-3 cursor-pointer" style="--ripple-color: rgba(255,255,255,0.08);">
+              <div class="flex flex-col">
+                <span class="text-[15px] font-medium item-title">账号管理</span>
+              </div>
+              <span class="text-lg item-chevron">›</span>
+            </div>
+            <div class="h-[1px] w-full item-divider"></div>
+
+            <!-- 2. 观看历史 -->
+            <div onclick="showToast('打开：观看历史')" class="ripple flex items-center justify-between px-4 py-3 cursor-pointer" style="--ripple-color: rgba(255,255,255,0.08);">
+              <div class="flex flex-col">
+                <span class="text-[15px] font-medium item-title">观看历史</span>
+              </div>
+              <span class="text-lg item-chevron">›</span>
+            </div>
+            <div class="h-[1px] w-full item-divider"></div>
+
+            <!-- 3. 设置 -->
+            <div onclick="showToast('打开：设置')" class="ripple flex items-center justify-between px-4 py-3 cursor-pointer" style="--ripple-color: rgba(255,255,255,0.08);">
+              <div class="flex flex-col">
+                <span class="text-[15px] font-medium item-title">设置</span>
+              </div>
+              <span class="text-lg item-chevron">›</span>
+            </div>
+            <div class="h-[1px] w-full item-divider"></div>
+
+            <!-- 4. 局域网同步 -->
+            <div onclick="showToast('打开：局域网同步')" class="ripple flex items-center justify-between px-4 py-3 cursor-pointer" style="--ripple-color: rgba(255,255,255,0.08);">
+              <div class="flex flex-col">
+                <span class="text-[15px] font-medium item-title">局域网同步</span>
+              </div>
+              <span class="text-lg item-chevron">›</span>
+            </div>
+            <div class="h-[1px] w-full item-divider"></div>
+
+            <!-- 5. 远端房间同步 -->
+            <div onclick="showToast('打开：远端房间同步')" class="ripple flex items-center justify-between px-4 py-3 cursor-pointer" style="--ripple-color: rgba(255,255,255,0.08);">
+              <div class="flex flex-col">
+                <span class="text-[15px] font-medium item-title">远端房间同步</span>
+              </div>
+              <span class="text-lg item-chevron">›</span>
+            </div>
+            <div class="h-[1px] w-full item-divider"></div>
+
+            <!-- 6. WebDAV 同步 -->
+            <div onclick="showToast('打开：WebDAV 同步')" class="ripple flex items-center justify-between px-4 py-3 cursor-pointer" style="--ripple-color: rgba(255,255,255,0.08);">
+              <div class="flex flex-col">
+                <span class="text-[15px] font-medium item-title">WebDAV 同步</span>
+              </div>
+              <span class="text-lg item-chevron">›</span>
+            </div>
+            <div class="h-[1px] w-full item-divider"></div>
+
+            <!-- 7. 解析链接 -->
+            <div onclick="showToast('打开：解析链接')" class="ripple flex items-center justify-between px-4 py-3 cursor-pointer" style="--ripple-color: rgba(255,255,255,0.08);">
+              <div class="flex flex-col">
+                <span class="text-[15px] font-medium item-title">解析链接</span>
+              </div>
+              <span class="text-lg item-chevron">›</span>
+            </div>
+            <div class="h-[1px] w-full item-divider"></div>
+
+            <!-- 8. 抓取日志 -->
+            <div onclick="openLogDialog()" class="ripple flex items-center justify-between px-4 py-3 cursor-pointer" style="--ripple-color: rgba(255,255,255,0.08);">
+              <div class="flex flex-col">
+                <span class="text-[15px] font-medium item-title">抓取日志</span>
+              </div>
+              <span class="text-lg item-chevron">›</span>
+            </div>
+            <div class="h-[1px] w-full item-divider"></div>
+
+            <!-- 9. 关于（移至抓取日志下方） -->
+            <div onclick="navigateToAbout()" class="ripple flex items-center justify-between px-4 py-3 cursor-pointer" style="--ripple-color: rgba(255,255,255,0.08);">
+              <div class="flex flex-col">
+                <div class="flex items-center gap-1.5">
+                  <span class="text-[15px] font-medium item-title">关于</span>
+                  <span class="text-[11px] font-normal px-1.5 py-0.5 rounded-full bg-red-500/15 text-red-400 border border-red-500/20">新版 0.2.1</span>
+                </div>
+              </div>
+              <span class="text-lg item-chevron">›</span>
+            </div>
+
+          </div>
+        </div>
+
+        <!-- ===== VIEW B: 二级页「关于」(AboutScreen) ===== -->
+        <div id="about-view" class="hidden screen-slide-enter px-3 flex flex-col gap-3">
+          <!-- 顶栏 (CustomIcons.Back + 标题) -->
+          <div class="flex items-center gap-4 py-2">
+            <button onclick="navigateBackToMine()" class="w-10 h-10 -ml-2 rounded-full flex items-center justify-center hover:bg-white/10 active:scale-95 transition-all">
+              <svg class="w-5 h-5 fill-current" viewBox="0 0 24 24"><path d="M20 11H7.83l5.59-5.59L12 4l-8 8 8 8 1.41-1.41L7.83 13H20v-2z"/></svg>
+            </button>
+            <h1 class="text-xl font-medium item-title">关于</h1>
+          </div>
+
+          <!-- 分组 1：当前版本卡片 -->
+          <div class="about-card rounded-2xl p-4 flex items-center justify-between border" style="background-color: #2B2831; border-color: rgba(255,255,255,0.04);">
+            <div>
+              <div class="text-[15px] font-medium item-title">当前版本</div>
+              <div class="text-xs mt-1 item-subtitle" style="color: #CAC4D0;">v0.2.1，更新日期：2026-10-21</div>
+            </div>
+            <button onclick="checkUpdate()" id="btn-check-update" class="px-3.5 py-1.5 rounded-full text-xs font-medium text-white transition-all active:scale-95 flex items-center gap-1.5" style="background: #FF3F4B;">
+              <span>检查更新</span>
+            </button>
+          </div>
+
+          <!-- 分组 2：更新设置 -->
+          <div class="text-xs font-semibold px-1 mt-2 text-red-400 uppercase tracking-wider">更新配置</div>
+          <div class="about-card rounded-2xl overflow-hidden border" style="background-color: #2B2831; border-color: rgba(255,255,255,0.04);">
+            <!-- 自动检查更新开关 -->
+            <div class="flex items-center justify-between px-4 py-3.5">
+              <div>
+                <div class="text-[15px] font-medium item-title">自动检查更新</div>
+                <div class="text-xs mt-0.5 item-subtitle" style="color: #CAC4D0;">启动应用时自动检查一次</div>
+              </div>
+              <label class="relative inline-flex items-center cursor-pointer">
+                <input type="checkbox" checked class="sr-only peer">
+                <div class="w-11 h-6 bg-slate-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-red-500"></div>
+              </label>
+            </div>
+            <div class="h-[1px] w-full item-divider"></div>
+            <!-- 更新渠道选择 -->
+            <div onclick="showToast('当前渠道：Gitee (默认)')" class="ripple flex items-center justify-between px-4 py-3.5 cursor-pointer" style="--ripple-color: rgba(255,255,255,0.08);">
+              <div>
+                <div class="text-[15px] font-medium item-title">更新渠道</div>
+                <div class="text-xs mt-0.5 item-subtitle" style="color: #CAC4D0;">Gitee</div>
+              </div>
+              <span class="text-lg item-chevron">›</span>
+            </div>
+          </div>
+        </div>
+
+      </div>
+
+      <!-- 3. M3 底部导航栏 (MainBottomBar - 64dp 高度，纯图标) -->
+      <nav id="bottom-bar" class="w-full h-16 px-4 flex items-center justify-around border-t transition-colors duration-200 shrink-0 z-10"
+           style="background-color: #211F26; border-color: rgba(255,255,255,0.05);">
+
+        <!-- Tab 0: 首页 -->
+        <button onclick="showToast('切换到：首页')" class="flex flex-col items-center justify-center w-14 h-11 rounded-2xl group transition-all">
+          <svg class="w-6 h-6 nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
+        </button>
+
+        <!-- Tab 1: 关注 -->
+        <button onclick="showToast('切换到：关注')" class="flex flex-col items-center justify-center w-14 h-11 rounded-2xl group transition-all">
+          <svg class="w-6 h-6 nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>
+        </button>
+
+        <!-- Tab 2: 分类 -->
+        <button onclick="showToast('切换到：分类')" class="flex flex-col items-center justify-center w-14 h-11 rounded-2xl group transition-all">
+          <svg class="w-6 h-6 nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
+        </button>
+
+        <!-- Tab 3: 我的 (选中态 - M3 药丸形状指示器 NavigationBarItem) -->
+        <button onclick="showToast('已在当前「我的」Tab')" class="flex flex-col items-center justify-center w-16 h-8 rounded-full transition-all relative"
+                id="active-pill" style="background-color: #4A4459;">
+          <svg class="w-6 h-6" id="active-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" style="color: #E8DEF8;"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+        </button>
+
+      </nav>
+
+      <!-- 4. 底部手势横条 (System Navigation Inset) -->
+      <div class="w-full h-4 flex items-center justify-center pb-1 shrink-0" id="gesture-bar-container" style="background-color: #211F26;">
+        <div class="w-32 h-1 rounded-full bg-white/25"></div>
+      </div>
+
+      <!-- ===== 浮层 1: Android Toast 提示 ===== -->
+      <div id="toast" class="absolute bottom-20 left-1/2 -translate-x-1/2 px-4 py-2 rounded-full text-xs font-medium text-white shadow-xl opacity-0 pointer-events-none transition-all duration-300 z-50 whitespace-nowrap"
+           style="background-color: #313033;">
+        已是最新版本 v0.2.1
+      </div>
+
+      <!-- ===== 浮层 2: 「抓取日志」AlertDialog 弹窗 ===== -->
+      <div id="log-dialog" class="absolute inset-0 bg-black/60 backdrop-blur-xs flex items-center justify-center p-6 opacity-0 pointer-events-none transition-opacity duration-200 z-40">
+        <div class="w-full rounded-[28px] p-6 shadow-2xl transition-all scale-95" id="dialog-content"
+             style="background-color: #2B2831; color: #E6E0E9;">
+          <h3 class="text-xl font-medium mb-3">抓取日志</h3>
+          <p class="text-sm leading-relaxed mb-6 opacity-80" id="dialog-text">
+            开启后将实时写入 logcat 日志文件（/storage/emulated/0/Download/livez_logs/），用于定位闪退。<br><br>
+            需要先进入直播间复现问题，再回来停止采集。
+          </p>
+          <div class="flex items-center justify-end gap-2">
+            <button onclick="closeLogDialog()" class="px-4 py-2 text-sm font-medium rounded-full hover:bg-white/10 active:scale-95 transition-all text-slate-300">取消</button>
+            <button onclick="confirmLogCapture()" class="px-4 py-2 text-sm font-medium rounded-full text-white active:scale-95 transition-all" style="background: #FF3F4B;">开始</button>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </main>
+
+  <!-- 底部功能特性说明标签 -->
+  <footer class="mt-6 text-xs text-slate-400 text-center space-y-1">
+    <p>💡 提示：点击列表中的 <strong>「抓取日志」</strong> 可弹出 M3 对话框；点击 <strong>「关于」</strong> 可查看二级页与检查更新联动。</p>
+    <p class="text-slate-500">结构严格对齐 <code>com.kotlin_livez.app.ui.screens.MineScreen.kt</code> 源码</p>
+  </footer>
+
+  <!-- 交互逻辑脚本 -->
+  <script>
+    let toastTimeout = null;
+
+    // Toast 模拟
+    function showToast(message) {
+      const toast = document.getElementById('toast');
+      toast.textContent = message;
+      toast.classList.remove('opacity-0', 'translate-y-2');
+      toast.classList.add('opacity-100', 'translate-y-0');
+      clearTimeout(toastTimeout);
+      toastTimeout = setTimeout(() => {
+        toast.classList.remove('opacity-100', 'translate-y-0');
+        toast.classList.add('opacity-0', 'translate-y-2');
+      }, 2000);
+    }
+
+    // 抓取日志对话框
+    function openLogDialog() {
+      const dialog = document.getElementById('log-dialog');
+      dialog.classList.remove('opacity-0', 'pointer-events-none');
+      dialog.classList.add('opacity-100');
+      dialog.querySelector('#dialog-content').classList.remove('scale-95');
+      dialog.querySelector('#dialog-content').classList.add('scale-100');
+    }
+
+    function closeLogDialog() {
+      const dialog = document.getElementById('log-dialog');
+      dialog.classList.add('opacity-0', 'pointer-events-none');
+      dialog.classList.remove('opacity-100');
+      dialog.querySelector('#dialog-content').classList.remove('scale-100');
+      dialog.querySelector('#dialog-content').classList.add('scale-95');
+    }
+
+    function confirmLogCapture() {
+      closeLogDialog();
+      showToast('开始抓取：/storage/emulated/0/Download/livez_logs/livez_261022.log');
+    }
+
+    // 页面跳转切换
+    function navigateToAbout() {
+      document.getElementById('mine-view').classList.add('hidden');
+      const aboutView = document.getElementById('about-view');
+      aboutView.classList.remove('hidden');
+    }
+
+    function navigateBackToMine() {
+      document.getElementById('about-view').classList.add('hidden');
+      document.getElementById('mine-view').classList.remove('hidden');
+    }
+
+    // 检查更新按钮动画与 Toast
+    function checkUpdate() {
+      const btn = document.getElementById('btn-check-update');
+      const origText = btn.innerHTML;
+      btn.innerHTML = `<svg class="animate-spin -ml-1 mr-1 h-3.5 w-3.5 text-white inline" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"></path></svg> 检查中...`;
+      btn.disabled = true;
+      setTimeout(() => {
+        btn.innerHTML = origText;
+        btn.disabled = false;
+        showToast('已是最新版本 v0.2.1');
+      }, 800);
+    }
+
+    // 主题切换控制
+    function setTheme(mode) {
+      const screen = document.getElementById('screen-container');
+      const card = document.getElementById('setting-group-card');
+      const bottomBar = document.getElementById('bottom-bar');
+      const gestureBar = document.getElementById('gesture-bar-container');
+      const activePill = document.getElementById('active-pill');
+      const activeIcon = document.getElementById('active-icon');
+      const dialogContent = document.getElementById('dialog-content');
+      const aboutCards = document.querySelectorAll('.about-card');
+      const itemTitles = document.querySelectorAll('.item-title');
+      const itemSubtitles = document.querySelectorAll('.item-subtitle');
+      const itemChevrons = document.querySelectorAll('.item-chevron');
+      const itemDividers = document.querySelectorAll('.item-divider');
+      const navIcons = document.querySelectorAll('.nav-icon');
+
+      // 更新按钮高亮
+      ['light', 'dark', 'amoled'].forEach(m => {
+        const btn = document.getElementById(`btn-${m}`);
+        if (m === mode) {
+          btn.className = 'px-2.5 py-1 rounded-lg transition-colors bg-blue-600 text-white font-medium shadow-sm';
+        } else {
+          btn.className = 'px-2.5 py-1 rounded-lg transition-colors text-slate-400 hover:text-white';
+        }
+      });
+
+      if (mode === 'light') {
+        // M3 浅色主题
+        screen.style.backgroundColor = '#FAF9FD';
+        screen.style.color = '#1D1B20';
+        card.style.backgroundColor = '#F0EDF4';
+        card.style.borderColor = 'rgba(0,0,0,0.06)';
+        bottomBar.style.backgroundColor = '#F5F2F9';
+        bottomBar.style.borderColor = 'rgba(0,0,0,0.06)';
+        gestureBar.style.backgroundColor = '#F5F2F9';
+        activePill.style.backgroundColor = '#E8DEF8';
+        activeIcon.style.color = '#1D192B';
+        dialogContent.style.backgroundColor = '#F0EDF4';
+        dialogContent.style.color = '#1D1B20';
+
+        aboutCards.forEach(c => {
+          c.style.backgroundColor = '#F0EDF4';
+          c.style.borderColor = 'rgba(0,0,0,0.06)';
+        });
+        itemTitles.forEach(t => t.style.color = '#1D1B20');
+        itemSubtitles.forEach(s => s.style.color = '#49454E');
+        itemChevrons.forEach(ch => ch.style.color = '#7A757F');
+        itemDividers.forEach(d => d.style.backgroundColor = 'rgba(0,0,0,0.05)');
+        navIcons.forEach(ic => ic.style.color = '#49454E');
+
+      } else if (mode === 'dark') {
+        // M3 深色基线主题
+        screen.style.backgroundColor = '#141218';
+        screen.style.color = '#E6E0E9';
+        card.style.backgroundColor = '#2B2831';
+        card.style.borderColor = 'rgba(255,255,255,0.04)';
+        bottomBar.style.backgroundColor = '#211F26';
+        bottomBar.style.borderColor = 'rgba(255,255,255,0.05)';
+        gestureBar.style.backgroundColor = '#211F26';
+        activePill.style.backgroundColor = '#4A4459';
+        activeIcon.style.color = '#E8DEF8';
+        dialogContent.style.backgroundColor = '#2B2831';
+        dialogContent.style.color = '#E6E0E9';
+
+        aboutCards.forEach(c => {
+          c.style.backgroundColor = '#2B2831';
+          c.style.borderColor = 'rgba(255,255,255,0.04)';
+        });
+        itemTitles.forEach(t => t.style.color = '#E6E0E9');
+        itemSubtitles.forEach(s => s.style.color = '#CAC4D0');
+        itemChevrons.forEach(ch => ch.style.color = '#948F9A');
+        itemDividers.forEach(d => d.style.backgroundColor = 'rgba(255,255,255,0.06)');
+        navIcons.forEach(ic => ic.style.color = '#CAC4D0');
+
+      } else if (mode === 'amoled') {
+        // AMOLED 纯黑主题
+        screen.style.backgroundColor = '#000000';
+        screen.style.color = '#FFFFFF';
+        card.style.backgroundColor = '#161616';
+        card.style.borderColor = 'rgba(255,255,255,0.08)';
+        bottomBar.style.backgroundColor = '#101010';
+        bottomBar.style.borderColor = 'rgba(255,255,255,0.08)';
+        gestureBar.style.backgroundColor = '#101010';
+        activePill.style.backgroundColor = '#383838';
+        activeIcon.style.color = '#FFFFFF';
+        dialogContent.style.backgroundColor = '#161616';
+        dialogContent.style.color = '#FFFFFF';
+
+        aboutCards.forEach(c => {
+          c.style.backgroundColor = '#161616';
+          c.style.borderColor = 'rgba(255,255,255,0.08)';
+        });
+        itemTitles.forEach(t => t.style.color = '#FFFFFF');
+        itemSubtitles.forEach(s => s.style.color = '#AAAAAA');
+        itemChevrons.forEach(ch => ch.style.color = '#777777');
+        itemDividers.forEach(d => d.style.backgroundColor = 'rgba(255,255,255,0.08)');
+        navIcons.forEach(ic => ic.style.color = '#999999');
+      }
+    }
+
+    // 默认执行一次初始化
+    setTheme('dark');
+  </script>
+</body>
+</html>

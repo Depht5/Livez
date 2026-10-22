@@ -3,6 +3,17 @@
 本文件记录 `kotlin_re/`（Livez Android 原生版）每个发布版本的改动，倒序排列。
 版本号规则、发布日期口径与发布流程见 [`.trellis/spec/kotlin_re/release-and-versioning.md`](../.trellis/spec/kotlin_re/release-and-versioning.md)。
 
+## [0.2.2] - 2026-10-22（versionCode 16）
+
+### 新增
+
+- 「我的」页顶部新增应用信息区：应用图标、应用名（包名）与当前版本号
+
+### 优化
+
+- 「关于」页去掉「当前版本」分组小标题，版本卡片直接跟在顶栏下方
+- 设置页单选弹窗加大选中圈与文字之间的间距，选项层次更清楚
+
 ## [0.2.1.261021] - 2026-10-21（versionCode 15）
 
 ### 优化
