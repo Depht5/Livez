@@ -19,18 +19,6 @@ import kotlinx.coroutines.launch
  */
 class BiliBiliWebLoginController {
 
-    companion object {
-        /**
-         * B 站登录页 UA —— 与 Dart `web_login_page.dart` 的 `initialSettings.userAgent` 完全一致。
-         *
-         * 必须显式设置：默认 Android Chrome UA 在平板上会让 passport 页面按 1385dp 视口排版，
-         * 出现元素错位/下方大片空白；iPhone UA 命中 B 站为移动端准备的窄屏 H5 布局。
-         */
-        const val USER_AGENT =
-            "Mozilla/5.0 (iPhone; CPU iPhone OS 13_2_3 like Mac OS X) AppleWebKit/605.1.15 " +
-                "(KHTML, like Gecko) Version/13.0.3 Mobile/15E148 Safari/604.1 Edg/118.0.0.0"
-    }
-
     /** UI 层注入的 WebView（页面容器）。 */
     var webView: WebView? = null
 
@@ -40,8 +28,6 @@ class BiliBiliWebLoginController {
 
     /** 异步保存账号用（网络请求不得占用主线程）。 */
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
-
-    val userAgent: String get() = USER_AGENT
 
     fun loginUrl(): String = "https://passport.bilibili.com/login"
 
@@ -60,8 +46,8 @@ class BiliBiliWebLoginController {
      * UI 层在 `shouldOverrideUrlLoading` 调用：登录完成的导航要拦下来。
      *
      * Dart 在 `m.bilibili.com` **与** `www.bilibili.com` 两处都 `CANCEL` 并保存 Cookie；
-     * 若只认 `m.bilibili.com`，登录成功后 WebView 会被 B 站整站页面接替（看起来"位置全乱"），
-     * 而且可能永远不触发保存。命中即返回 true（取消导航）。
+     * 若只认 `m.bilibili.com`，登录成功后 WebView 会被 B 站整站页面接替，而且可能永远
+     * 不触发保存。命中即返回 true（取消导航）。
      */
     fun shouldInterceptNavigation(host: String?): Boolean {
         if (host != "m.bilibili.com" && host != "www.bilibili.com") return false
