@@ -35,12 +35,15 @@ class SyncClientRequest {
     /** GET /info（对应 Dart getClientInfo）。 */
     suspend fun getClientInfo(client: SyncClient): SyncClientInfoModel = withContext(Dispatchers.IO) {
         val url = "${baseUrl(client)}/info"
+        com.kotlin_livez.app.app.Log.d("HTTP 连接 → $url")
         val request = Request.Builder().url(url).get().build()
         httpClient.newCall(request).execute().use { resp ->
             if (!resp.isSuccessful) {
+                com.kotlin_livez.app.app.Log.e("HTTP 连接失败 ← $url HTTP ${resp.code}")
                 throw IllegalStateException("GET $url failed: ${resp.code}")
             }
             val body = resp.body?.string() ?: throw IllegalStateException("空响应")
+            com.kotlin_livez.app.app.Log.d("HTTP 连接成功 ← $body")
             SyncClientInfoModel.fromJson(json.parseToJsonElement(body))
         }
     }
@@ -135,12 +138,17 @@ class SyncClientRequest {
             "$k=${java.net.URLEncoder.encode(v, "UTF-8")}"
         }
         val url = "${baseUrl(client)}/sync/$path$query"
+        // 诊断日志：发送侧每次推送的完整 URL（body 不打印——账号端点含 Cookie 凭据）
+        com.kotlin_livez.app.app.Log.d("HTTP 推送 → $url")
         val body = data.toRequestBody("application/json".toMediaType())
         val request = Request.Builder().url(url).post(body).build()
         httpClient.newCall(request).execute().use { resp ->
             val respBody = resp.body?.string() ?: ""
             val parsed = runCatching { json.parseToJsonElement(respBody).jsonObject }.getOrNull()
             val status = parsed?.get("status")?.let { (it as? kotlinx.serialization.json.JsonPrimitive)?.content == "true" } ?: resp.isSuccessful
+            com.kotlin_livez.app.app.Log.d(
+                "HTTP 推送 ← $url HTTP ${resp.code} status=$status${if (!status) " body=$respBody" else ""}",
+            )
             if (!status) {
                 val message = parsed?.get("message")?.let { (it as? kotlinx.serialization.json.JsonPrimitive)?.content } ?: "同步失败（${resp.code}）"
                 throw IllegalStateException(message)

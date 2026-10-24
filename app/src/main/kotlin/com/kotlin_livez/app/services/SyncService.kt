@@ -114,6 +114,8 @@ object SyncService {
 
     private fun listenUdp(str: String, fromAddress: String) {
         if (!str.startsWith("{") || !str.endsWith("}")) return
+        // 诊断日志（对齐 Dart Log.i）：抓取日志时能确认收没收到对端广播
+        Log.i("UDP 收到：$str from $fromAddress")
         try {
             val data = Json.parseToJsonElement(str).jsonObject
             // 自己的广播不处理
@@ -319,6 +321,8 @@ class SyncHttpServer(port: Int) : NanoHTTPD(port) {
     private fun handle(session: IHTTPSession): Response {
         val uri = session.uri
         val method = session.method
+        // 诊断日志：接收侧收到的每个 HTTP 请求（uri 不含 query；query 另行打印）
+        Log.i("HTTP 请求：$method $uri${session.queryParameterString?.takeIf { it.isNotBlank() }?.let { "?$it" } ?: ""}")
         val parms = session.parms ?: emptyMap()
         val service = SyncService
 

@@ -1,6 +1,7 @@
 package com.kotlin_livez.app.app
 
 import com.kotlin_livez.app.BuildConfig
+import com.kotlin_livez.app.services.LogCaptureService
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.update
@@ -38,21 +39,25 @@ object Log {
     fun d(message: String, writeFile: Boolean = true) {
         addDebugLog(message, "D")
         android.util.Log.d(TAG, message)
+        LogCaptureService.tee("D", TAG, message)
     }
 
     fun i(message: String, writeFile: Boolean = true) {
         addDebugLog(message, "I")
         android.util.Log.i(TAG, message)
+        LogCaptureService.tee("I", TAG, message)
     }
 
     fun e(message: String, throwable: Throwable? = null, writeFile: Boolean = true) {
         addDebugLog("$message\r\n\r\n${throwable?.stackTraceToString() ?: ""}", "E")
         android.util.Log.e(TAG, message, throwable)
+        LogCaptureService.tee("E", TAG, if (throwable != null) "$message\n${throwable.stackTraceToString()}" else message)
     }
 
     fun w(message: String, writeFile: Boolean = true) {
         addDebugLog(message, "W")
         android.util.Log.w(TAG, message)
+        LogCaptureService.tee("W", TAG, message)
     }
 
     fun logPrint(obj: Any?, writeFile: Boolean = true) {
@@ -60,6 +65,7 @@ object Log {
         if (BuildConfig.DEBUG) {
             android.util.Log.d(TAG, obj?.toString().orEmpty())
         }
+        LogCaptureService.tee("P", TAG, obj?.toString().orEmpty())
     }
 }
 

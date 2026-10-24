@@ -3,6 +3,21 @@
 本文件记录 `kotlin_re/`（Livez Android 原生版）每个发布版本的改动，倒序排列。
 版本号规则、发布日期口径与发布流程见 [`.trellis/spec/kotlin_re/release-and-versioning.md`](../.trellis/spec/kotlin_re/release-and-versioning.md)。
 
+## [0.2.4.261024] - 2026-10-24（versionCode 20）
+
+### 修复
+
+- **抓取日志空白**：开启后日志文件为空。改为双通道采集——应用侧日志（`Log`/`CoreLog`）在抓取
+  期间直写抓取文件（tee 保底，不再依赖系统 logcat 可用性；Android 13+ 应用 exec logcat 被限制为
+  仅自身日志、个别系统上连自身日志也读不到）；logcat 通道先 `-d` 转储存量再流式，stderr 合并进
+  文件（logcat 被系统拒绝会直接写在文件里）；文件头写版本/设备/命令元数据，空白文件不可能再出现
+- 抓取期间强制放开 CoreLog（release 默认静默），停止时恢复原值；移除无权限必然失败的 `logcat -c`
+
+### 新增
+
+- 局域网同步诊断日志：UDP 收到广播、接收侧每个 HTTP 请求行、发送侧连接/推送 URL 与响应结果
+  （账号端点不打印请求 body，避免 Cookie 凭据落盘）
+
 ## [0.2.4] - 2026-10-24（versionCode 19）
 
 ### 新增

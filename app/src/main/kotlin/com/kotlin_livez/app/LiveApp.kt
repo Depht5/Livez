@@ -19,9 +19,13 @@ class LiveApp : Application() {
         super.onCreate()
         // Release 包静默 core 日志：避免每次网络请求/弹幕解析都执行时间戳格式化和
         // HTTP 头脱敏扫描（task 10-20-live-playback-power-optimization）。
+        // 抓取日志开启期间由 LogCaptureService 强制置 true 并在停止时恢复。
         CoreLog.enableLog = BuildConfig.DEBUG
         CoreLog.onPrintLog = { level, message ->
             android.util.Log.d("CoreLog", message)
+            // tee 通道（未抓取时为一次布尔读直接返回）：logcat 在部分系统上读不到
+            // 应用自身日志，抓取期间 core 日志直写抓取文件保底
+            com.kotlin_livez.app.services.LogCaptureService.tee(level.name, "CoreLog", message)
         }
         ServiceContainer.install(app = this)
         // 启动即刷新一次关注列表 + 状态（用户决策：无条件执行，绕过进页开关与 30s 冷却）
