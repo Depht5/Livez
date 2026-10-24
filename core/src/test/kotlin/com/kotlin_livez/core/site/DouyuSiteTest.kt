@@ -259,6 +259,65 @@ class DouyuSiteTest {
         }
     }
 
+    /* --------------------------- ensureFreshCookie 续期 --------------------------- */
+
+    /** 构造只带 exp 的假 JWT（与 DouyuPassport.isCookieExpired 的解析形态一致）。 */
+    private fun jwtWithExp(expSeconds: Long): String {
+        val payload = java.util.Base64.getUrlEncoder().withoutPadding()
+            .encodeToString("""{"exp":$expSeconds}""".toByteArray())
+        return "eyJhbGciOiJIUzI1NiJ9.$payload.sig"
+    }
+
+    @Test
+    fun ensureFreshCookie_skipsWhenAnonymous() = kotlinx.coroutines.runBlocking {
+        val site = DouyuSite()
+        var called = 0
+        site.onCookieExpired = { called++; "acf_uid=1" }
+        site.cookie = ""
+        site.ensureFreshCookie()
+        assertEquals(0, called, "匿名态（无 Cookie）不应触发续期")
+    }
+
+    @Test
+    fun ensureFreshCookie_skipsWhenCookieStillValid() = kotlinx.coroutines.runBlocking {
+        val site = DouyuSite()
+        var called = 0
+        site.onCookieExpired = { called++; "acf_uid=1" }
+        site.cookie = "acf_jwt_token=${jwtWithExp(System.currentTimeMillis() / 1000 + 3600)}"
+        site.ensureFreshCookie()
+        assertEquals(0, called, "未过期不应触发续期")
+        assertTrue(site.cookie.contains("acf_jwt_token="), "Cookie 应原样保留")
+    }
+
+    @Test
+    fun ensureFreshCookie_renewsExpiredCookie() = kotlinx.coroutines.runBlocking {
+        val site = DouyuSite()
+        site.onCookieExpired = { "acf_uid=1001; acf_auth=fresh" }
+        site.cookie = "acf_jwt_token=${jwtWithExp(System.currentTimeMillis() / 1000 - 60)}"
+        site.ensureFreshCookie()
+        assertEquals("acf_uid=1001; acf_auth=fresh", site.cookie, "续期结果应写回 cookie")
+    }
+
+    @Test
+    fun ensureFreshCookie_keepsOldCookieWhenRenewReturnsNull() = kotlinx.coroutines.runBlocking {
+        val site = DouyuSite()
+        site.onCookieExpired = { null }
+        val old = "acf_jwt_token=${jwtWithExp(System.currentTimeMillis() / 1000 - 60)}"
+        site.cookie = old
+        site.ensureFreshCookie()
+        assertEquals(old, site.cookie, "续期失败必须沿用旧 Cookie（由断流重试兜底）")
+    }
+
+    @Test
+    fun ensureFreshCookie_swallowsRenewError() = kotlinx.coroutines.runBlocking {
+        val site = DouyuSite()
+        site.onCookieExpired = { throw IllegalStateException("network down") }
+        val old = "acf_jwt_token=${jwtWithExp(System.currentTimeMillis() / 1000 - 60)}"
+        site.cookie = old
+        site.ensureFreshCookie()
+        assertEquals(old, site.cookie, "续期抛错不应中断播放链路，也不应改写 Cookie")
+    }
+
     private companion object {
         const val kRoomId = "288016"
         const val kDefaultDid = "10000000000000000000000000001501"

@@ -101,6 +101,8 @@ class BiliBiliQRLoginController {
                         ServiceContainer.biliBiliAccount.setCookie(cookies)
                         ServiceContainer.biliBiliAccount.loadUserInfo()
                         pollJob?.cancel()
+                        qrcodeKey = ""
+                        onToast?.invoke("B 站账号登录成功")
                         onExit?.invoke()
                     }
                 }
@@ -147,6 +149,8 @@ class BiliBiliQRLoginController {
     /** 销毁（对应 Dart onClose）。 */
     fun close() {
         pollJob?.cancel()
+        pollJob = null
+        qrcodeKey = ""
     }
 }
 

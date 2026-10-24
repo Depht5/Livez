@@ -36,8 +36,8 @@ android {
         // targetSdk 35（Android 15）：强制 edge-to-edge（本 app 已全局 e2e，无行为回归预期）；
         // 系统栏 setter（statusBarColor/navigationBarColor）在 35 弃用，已迁移 enableEdgeToEdge()。
         targetSdk = 35
-        versionCode = 16
-        versionName = "0.2.2"
+        versionCode = 17
+        versionName = "0.2.3"
     }
 
     compileOptions {
@@ -164,6 +164,9 @@ dependencies {
 
     // 局域网同步：轻量 HTTP 服务端（对应 Dart 端 shelf + shelf_router，Android 无 com.sun.net.httpserver）
     implementation(libs.nanohttpd)
+
+    // 二维码编码：扫码登录页把二维码内容渲染成图（对应 Dart qr_flutter 的 QrImageView）
+    implementation(libs.zxing.core)
 
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.test.ext.junit)

@@ -1,6 +1,8 @@
 package com.kotlin_livez.core.site
 
 import com.kotlin_livez.core.common.CoreError
+import com.kotlin_livez.core.common.CoreLog
+import com.kotlin_livez.core.common.DouyuPassport
 import com.kotlin_livez.core.common.HttpClient
 import com.kotlin_livez.core.common.intv
 import com.kotlin_livez.core.common.str
@@ -52,6 +54,34 @@ class DouyuSite : LiveSite() {
      */
     @JvmField
     var deviceId: String = ""
+
+    /**
+     * 取流前 Cookie 续期回调：由 app 层注入（扫码登录后用 LTP0 + dy_did 经 safeAuth 换新 Cookie）。
+     * 返回新 Cookie；返回 null 或抛错时沿用现有 Cookie（对应 Dart `DouyuSite.onCookieExpired`）。
+     */
+    var onCookieExpired: (suspend () -> String?)? = null
+
+    /**
+     * 取流前检查 Cookie 有效期（`acf_jwt_token` 的 JWT exp，约 7 天）：过期时调用
+     * [onCookieExpired] 换新，成功即写回 [cookie]。
+     *
+     * 续期失败**不抛给播放链路**（只记日志）：沿用旧 Cookie，由断流重试/换线路兜底，
+     * 与 Dart `_ensureFreshCookie` 的宽容语义一致。
+     */
+    internal suspend fun ensureFreshCookie() {
+        val current = cookie.trim()
+        if (current.isEmpty() || !DouyuPassport.isCookieExpired(current)) return
+        val renew = onCookieExpired ?: return
+        try {
+            val renewed = renew()?.trim().orEmpty()
+            if (renewed.isNotEmpty()) {
+                cookie = renewed
+                CoreLog.i("[DouyuSite] 斗鱼播放 Cookie 已自动续期")
+            }
+        } catch (e: Exception) {
+            CoreLog.w("[DouyuSite] 斗鱼 Cookie 自动续期失败：${e.message}")
+        }
+    }
 
     override fun danmaku(): LiveDanmaku = DouyuDanmaku()
 
@@ -236,6 +266,8 @@ class DouyuSite : LiveSite() {
     }
 
     override suspend fun playQualities(detail: LiveRoomDetail): List<LivePlayQuality> {
+        // 取流前先确认登录 Cookie 未过期（过期则用 LTP0/dy_did 自动续期）。
+        ensureFreshCookie()
         val qualities = mutableListOf<LivePlayQuality>()
         // 签名参数每次请求重取：房间停留期间旧签名会过期，复用会让斗鱼对高画质流
         // 返回 timestamp 错误（对应 Dart `_getFreshPlayArgs` 的动机注释）。
@@ -270,6 +302,8 @@ class DouyuSite : LiveSite() {
     }
 
     override suspend fun playUrls(detail: LiveRoomDetail, quality: LivePlayQuality): LivePlayUrl {
+        // 同 playQualities：每次取流前校验/续期登录 Cookie（对应 Dart getPlayUrls 首行）。
+        ensureFreshCookie()
         val args = freshPlayArgs(detail.roomId, detail.data?.toString().orEmpty())
         val data = quality.data as? DouyuPlayData ?: DouyuPlayData(0, emptyList())
 

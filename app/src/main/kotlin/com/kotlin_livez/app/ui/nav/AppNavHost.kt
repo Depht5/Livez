@@ -62,6 +62,7 @@ import com.kotlin_livez.app.ui.screens.AccountScreen
 import com.kotlin_livez.app.ui.screens.AboutScreen
 import com.kotlin_livez.app.ui.screens.CategoryDetailScreen
 import com.kotlin_livez.app.ui.screens.CategoryScreen
+import com.kotlin_livez.app.ui.screens.DouyuQRLoginScreen
 import com.kotlin_livez.app.ui.screens.FollowScreen
 import com.kotlin_livez.app.ui.screens.HomeScreen
 import com.kotlin_livez.app.ui.screens.HistoryScreen
@@ -224,6 +225,12 @@ private fun SharedTransitionScope.NavHostContent(
         // B 站扫码登录（Batch 5）：generate + 3s 轮询在控制器内，无路由参数
         composable("qrlogin") {
             QRLoginScreen(onBack = { navController.popBackStack() })
+        }
+
+        // 斗鱼扫码登录（task 10-24）：二维码由 zxing 本地渲染成图（不打开 WebView），
+        // generate + 3s 轮询在控制器内，登录成功后控制器回调出栈
+        composable("douyuqrlogin") {
+            DouyuQRLoginScreen(onBack = { navController.popBackStack() })
         }
 
         // 关注用户（Batch 6）：控制器在 Screen 内 remember 创建、出栈销毁；

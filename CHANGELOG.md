@@ -3,6 +3,28 @@
 本文件记录 `kotlin_re/`（Livez Android 原生版）每个发布版本的改动，倒序排列。
 版本号规则、发布日期口径与发布流程见 [`.trellis/spec/kotlin_re/release-and-versioning.md`](../.trellis/spec/kotlin_re/release-and-versioning.md)。
 
+## [0.2.3] - 2026-10-24（versionCode 17）
+
+### 新增
+
+- 斗鱼扫码登录：用斗鱼 APP 扫二维码并在 APP 内确认，自动换取播放 Cookie（对齐上游 1.13.2）
+- 扫码登录后自动续期：播放 Cookie（约 7 天）过期时用 LTP0 / dy_did 经 Passport safeAuth 换取新 Cookie，无需定期手动更新
+- 账号页斗鱼入口改为小窗：扫码登录 / 手动配置 Cookie / 退出登录；退出时一并清除续期凭据
+
+### 修复
+
+- B 站扫码登录页不再打开网页：二维码改为本地渲染成图（此前用 WebView 打开扫码 H5，被页面 deeplink 顶成「网页无法打开」）
+- B 站扫码登录补充「二维码已失效 / 加载失败」的重试按钮，关闭页面时清空轮询用的 code
+- 网页登录页顶部进度条加载结束后不再残留（只在加载中显示，完成或失败立即消失）
+- 网页登录页在平板上元素错位、下方大片空白：B 站改用 iPhone UA 并开启 viewport 缩放适配
+- 网页登录成功后不落库、页面被 B 站整站接替：补 `m.bilibili.com` / `www.bilibili.com` 双 host 拦截并保存 Cookie，非 http(s) scheme 一律拦下
+- 网页登录页底部被系统导航栏遮挡、键盘弹出遮住输入框；页面改为首次完成测量后再加载，避免 0 尺寸视口排版导致的首屏错位
+- B 站网页登录读取用户信息不再阻塞主线程（原实现为主线程网络请求，有 ANR 风险）
+
+### 构建
+
+- 新增依赖 `com.google.zxing:core`（本地渲染二维码，B 站与斗鱼扫码登录共用）
+
 ## [0.2.2] - 2026-10-22（versionCode 16）
 
 ### 新增

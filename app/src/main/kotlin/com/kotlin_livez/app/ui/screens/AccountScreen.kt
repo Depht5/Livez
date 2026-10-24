@@ -52,8 +52,9 @@ import kotlinx.coroutines.launch
  * 版式与「我的」页一致：**圆角分组卡片 + 一平台一行**（副标题显示该平台登录态）。
  * 点击行为按"该平台配置项数量"区分：
  * - B站：弹底部小窗（ModalBottomSheet）承载多个登录方式（对应 Dart `Utils.showBottomSheet`）；
- * - 斗鱼 / 抖音：**直接弹 Cookie 输入框**——只有一个有效动作，且输入框自带「清除」按钮，
- *   再套一层小窗是多余层级（用户决策；抖音的「网页登录」「恢复默认 ttwid」两项已按此移除）。
+ * - 斗鱼：同样弹小窗——扫码登录 / 手动配置 Cookie / 退出登录（对齐上游 1.13.2 douyuTap）；
+ * - 抖音：**直接弹 Cookie 输入框**（只有一个有效动作，输入框自带「清除」；
+ *   「网页登录」「恢复默认 ttwid」两项已按用户决策移除）。
  * 平台顺序 B站 → 斗鱼 → 虎牙 → 抖音（快手已按需求移除）。
  *
  * 对话框（粘贴 Cookie / 退出确认）仍是 AlertDialog，为 View 层职责；
@@ -88,8 +89,9 @@ fun AccountScreen(modifier: Modifier = Modifier) {
     val douyuSummary = remember(douyuHasCookie) { account.getDouyuCookieSummaryText() }
     val douyinSummary = remember(douyinHasCookie) { account.getDouyinCookieSummaryText() }
 
-    // 哔哩哔哩登录方式小窗开关（斗鱼/抖音直接弹对话框，不经小窗）
+    // 哔哩哔哩 / 斗鱼登录方式小窗开关（抖音直接弹对话框，不经小窗）
     var showBiliSheet by remember { mutableStateOf(false) }
+    var showDouyuSheet by remember { mutableStateOf(false) }
 
     // 对话框显隐状态：粘贴 Cookie（B 站/斗鱼/抖音）、退出登录确认
     var showBiliCookieDialog by remember { mutableStateOf(false) }
@@ -146,8 +148,8 @@ fun AccountScreen(modifier: Modifier = Modifier) {
                 SettingClickRow(
                     title = "斗鱼直播",
                     subtitle = douyuSummary,
-                    // 斗鱼只有「配置 Cookie」一个动作：直接弹输入框（自带清除），不套小窗
-                    onClick = { showDouyuCookieDialog = true },
+                    // 三个动作（扫码 / 手动 Cookie / 退出登录）：套小窗，与上游 douyuTap 一致
+                    onClick = { showDouyuSheet = true },
                 )
                 // 虎牙无需登录（禁用行，对齐 Dart account_page 的 enabled: false 占位）
                 SettingClickRow(
@@ -209,6 +211,38 @@ fun AccountScreen(modifier: Modifier = Modifier) {
 
     // ===== 对话框 =====
 
+    if (showDouyuSheet) {
+        AccountSheet(title = "斗鱼账号", onDismiss = { showDouyuSheet = false }) {
+            SettingClickRow(
+                title = "扫码登录",
+                subtitle = "用斗鱼 APP 扫码确认，自动换取并续期 Cookie，无需定期手动更新",
+                onClick = {
+                    showDouyuSheet = false
+                    Router.navigate("douyuqrlogin")
+                },
+            )
+            SettingClickRow(
+                title = "手动配置 Cookie",
+                subtitle = "粘贴 www.douyu.com 的完整 Cookie",
+                onClick = {
+                    showDouyuSheet = false
+                    showDouyuCookieDialog = true
+                },
+            )
+            if (douyuHasCookie) {
+                SettingClickRow(
+                    title = "退出登录",
+                    subtitle = "清除 Cookie 与续期凭据，恢复匿名播放",
+                    onClick = {
+                        showDouyuSheet = false
+                        // setCookie("") 会同时清空 LTP0 / dy_did 两个续期凭据
+                        Router.toast(account.applyDouyuCookieInput(""))
+                    },
+                )
+            }
+        }
+    }
+
     if (showBiliCookieDialog) {
         CookieInputDialog(
             title = "B 站 Cookie",
@@ -229,7 +263,8 @@ fun AccountScreen(modifier: Modifier = Modifier) {
         CookieInputDialog(
             title = "配置斗鱼 Cookie",
             message = "匿名用户的斗鱼高画质可能约 10 分钟后断流；粘贴登录后的 " +
-                "www.douyu.com 完整 Cookie 可恢复高画质长期播放。Cookie 只保存在本机。",
+                "www.douyu.com 完整 Cookie 可恢复高画质长期播放。Cookie 只保存在本机；" +
+                "若 Cookie 内含 LTP0/dy_did，过期后也会自动续期。",
             initialText = account.currentDouyuCookie(),
             onDismiss = { showDouyuCookieDialog = false },
             onConfirm = { input ->

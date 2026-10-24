@@ -116,6 +116,11 @@ class LocalStorageService(private val appContext: Context) {
         // 斗鱼本机设备号（32 位小写 hex，对应 DouyuSite 的签名 did 与 dy_did/acf_did）。
         // 本机专属：备份/WebDAV 同步导出时剔除，导入时保留本机现有值（防止多设备共用同一 did）。
         const val kDouyuDeviceId = "DouyuDeviceId"
+        // 斗鱼扫码登录得到的续期凭据（Passport LTP0 + dy_did）：播放 Cookie 约 7 天过期后
+        // 由 safeAuth 自动换取新 Cookie。键名与 Dart 一致（备份/同步兼容）；
+        // 属于账号凭据、跟账号走，**不**列入 deviceLocalSettings（见面板/备份过滤逻辑）。
+        const val kDouyuLtp0 = "DouyuLtp0"
+        const val kDouyuPassportDid = "DouyuPassportDid"
         const val kStyleColor = "kStyleColor"
         const val kIsDynamic = "kIsDynamic"
         const val kBilibiliLoginTip = "BilibiliLoginTip"
