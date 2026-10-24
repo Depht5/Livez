@@ -142,8 +142,6 @@ class LocalStorageService(private val appContext: Context) {
         const val kWebDAVPassword = "kWebDAVPassword"
         const val kWebDAVLastUploadTime = "kWebDAVLastUploadTime"
         const val kWebDAVLastRecoverTime = "kWebDAVLastRecoverTime"
-        const val kSyncServerUrl = "SyncServerUrl"
-        const val kSyncProxyUrl = "SyncProxyUrl"
         const val kLiveSubtitleEnable = "LiveSubtitleEnable"
         const val kLiveSubtitleModelPath = "LiveSubtitleModelPath"
         const val kLiveSubtitleLanguage = "LiveSubtitleLanguage"

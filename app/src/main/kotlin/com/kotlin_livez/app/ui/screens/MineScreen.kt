@@ -149,7 +149,6 @@ private fun buildMineEntries(): List<MineEntry> = listOf(
     MineEntry("history", "观看历史"),
     MineEntry("settings", "设置"),
     MineEntry("local_sync", "局域网同步"),
-    MineEntry("remote_sync", "远端房间同步"),
     MineEntry("webdav", "WebDAV 同步"),
     MineEntry("parse", "解析链接"),
     MineEntry("log", "抓取日志"),
@@ -169,7 +168,6 @@ private fun handleEntryClick(
         "history" -> Router.openFeature("history", "观看历史")
         "settings" -> Router.openFeature("settings", "设置")
         "local_sync" -> Router.openFeature("local_sync", "局域网同步")
-        "remote_sync" -> Router.openFeature("remote_sync", "远端房间同步")
         "webdav" -> Router.openFeature("webdav", "WebDAV 同步")
         "parse" -> Router.openFeature("parse", "解析链接")
         "log" -> toggleLogCapture(activity, onToggleLog)
