@@ -3,6 +3,17 @@
 本文件记录 `kotlin_re/`（Livez Android 原生版）每个发布版本的改动，倒序排列。
 版本号规则、发布日期口径与发布流程见 [`.trellis/spec/kotlin_re/release-and-versioning.md`](../.trellis/spec/kotlin_re/release-and-versioning.md)。
 
+## [0.2.3.261024] - 2026-10-24（versionCode 18）
+
+### 修复
+
+- 网页登录页（B 站）底部协议行压在「登录」按钮上、下方大片空白：根因是 Compose `AndroidView`
+  以默认 `WRAP_CONTENT` 承载 WebView 时 Chromium 启用 `forceZeroLayoutHeight`，页面内 CSS `vh`
+  基准恒为 0，`.login-wrap{min-height:100vh}` 塌成内容高度。修法两头夹击：创建 WebView 时显式
+  `MATCH_PARENT` 布局参数，并用页面实测视口像素高度覆写 `min-height`（首帧可见 / 加载完成 /
+  尺寸变化三处触发，软键盘弹出时不缩小）
+- 网页登录页补 `navigationBarsPadding()`，内容不再被系统导航栏/手势条压住
+
 ## [0.2.3] - 2026-10-24（versionCode 17）
 
 ### 新增
@@ -18,10 +29,9 @@
 - 网页登录页顶部进度条加载结束后不再残留（只在加载中显示，完成或失败立即消失）
 - 网页登录成功后不落库、页面被 B 站整站接替：补 `m.bilibili.com` / `www.bilibili.com` 双 host 拦截并保存 Cookie，非 http(s) scheme 一律拦下
 - B 站网页登录读取用户信息不再阻塞主线程（原实现为主线程网络请求，有 ANR 风险）
-- 已知问题（未修）：B 站网页登录页里协议行（`bottom:1.6rem` 绝对定位）压在登录按钮上、下方大片空白。
-  根因已定位为**该 WebView 实例内 CSS `100vh` 恒等于 0**（`innerHeight=727` 但 `height:100vh` 的元素高度为 0），
-  导致页面 `.login-wrap{min-height:100vh}` 塌成内容高度；试过的改法（去掉 IME 内边距、尺寸稳定后再加载、
-  等待 WebView 自身布局、`reload()`、`useWideViewPort`、iPhone UA）**均无效**，已全部回滚，留待后续再查。
+- 已知问题（已在 0.2.3.261024 修复）：B 站网页登录页里协议行（`bottom:1.6rem` 绝对定位）压在登录按钮上、下方大片空白。
+  根因是该 WebView 实例内 CSS `100vh` 恒等于 0（`innerHeight=727` 但 `height:100vh` 的元素高度为 0px），
+  导致页面 `.login-wrap{min-height:100vh}` 塌成内容高度；修复见 0.2.3.261024 条目。
 
 ### 构建
 
