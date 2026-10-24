@@ -3,6 +3,19 @@
 本文件记录 `kotlin_re/`（Livez Android 原生版）每个发布版本的改动，倒序排列。
 版本号规则、发布日期口径与发布流程见 [`.trellis/spec/kotlin_re/release-and-versioning.md`](../.trellis/spec/kotlin_re/release-and-versioning.md)。
 
+## [0.2.4.261025] - 2026-10-25（versionCode 21）
+
+### 修复（依据真机抓取日志诊断，Xiaomi M332BF / Android 17 ↔ TB371FC）
+
+- **局域网同步推送全部失败**（`SocketTimeoutException: Read timed out`）：接收端读请求体用的
+  `session.inputStream.readBytes()` 读到 body 末尾后会继续等 keep-alive 连接的下一包，
+  直至 5s socket 超时——每次 POST 同步必超时。改用 `parseBody`（按 content-length 精确读取，
+  非表单 body 存于 `files["postData"]`）
+- **设备发现失效**：UDP 广播（hello / 自身信息）在主线程执行 `socket.send`，被 BlockGuard 以
+  `NetworkOnMainThreadException` 拦截，广播从未发出（Dart 无此限制，移植时未踩到）——发送挪至
+  独立守护线程
+- 启动日志 `Serving at` 打印的是 StateFlow 对象而非地址值（取 `.value` 修正）
+
 ## [0.2.4.261024] - 2026-10-24（versionCode 20）
 
 ### 修复

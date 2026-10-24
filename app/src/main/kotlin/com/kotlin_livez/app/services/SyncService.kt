@@ -144,36 +144,42 @@ object SyncService {
         }
     }
 
-    /** 广播 hello（对应 Dart sendHello）。 */
+    /** 广播 hello（对应 Dart sendHello）。
+     *  ⚠ socket.send 必须在后台线程：主线程发 UDP 会触发 BlockGuard 的
+     *  NetworkOnMainThreadException（真机实证 2026-10-25：广播从未发出、设备发现全挂）。 */
     fun sendHello() {
-        val socket = udpSocket ?: return
-        if (!udpRunning.value) return
-        try {
-            val payload = buildJsonObject {
+        sendBroadcast(
+            buildJsonObject {
                 put("id", deviceId)
                 put("type", "hello")
-            }.toString().toByteArray(Charsets.UTF_8)
-            socket.send(DatagramPacket(payload, payload.size, broadcastAddress(), udpPort))
-            Log.d("send udp: hello")
-        } catch (e: Exception) {
-            Log.logPrint(e)
-        }
+            }.toString(),
+        ) { "send udp: hello" }
     }
 
-    /** 广播自身信息（对应 Dart sendInfo）。 */
+    /** 广播自身信息（对应 Dart sendInfo）。同样须后台线程发送（见 [sendHello]）。 */
     fun sendInfo() {
-        val socket = udpSocket ?: return
-        if (!udpRunning.value) return
-        try {
-            val payload = buildJsonObject {
+        sendBroadcast(
+            buildJsonObject {
                 put("id", deviceId)
                 put("type", "android")
                 put("name", getDeviceName())
-            }.toString().toByteArray(Charsets.UTF_8)
-            socket.send(DatagramPacket(payload, payload.size, broadcastAddress(), udpPort))
-            Log.d("send udp info")
-        } catch (e: Exception) {
-            Log.logPrint(e)
+            }.toString(),
+        ) { "send udp info" }
+    }
+
+    /** 统一的 UDP 广播出口：组包在调用线程、发送在独立守护线程（见 sendHello 的主线程限制说明），
+     *  成功后回传日志文案由 [successLog] 提供。 */
+    private fun sendBroadcast(payloadJson: String, successLog: () -> String) {
+        val socket = udpSocket ?: return
+        if (!udpRunning.value) return
+        val payload = payloadJson.toByteArray(Charsets.UTF_8)
+        thread(isDaemon = true, name = "sync-udp-send") {
+            try {
+                socket.send(DatagramPacket(payload, payload.size, broadcastAddress(), udpPort))
+                Log.d(successLog())
+            } catch (e: Exception) {
+                Log.logPrint(e)
+            }
         }
     }
 
@@ -229,7 +235,7 @@ object SyncService {
             httpRunning.value = true
             httpErrorMsg.value = ""
             ipAddress.value = getLocalIP()
-            Log.d("Serving at http://$ipAddress:$httpPort")
+            Log.d("Serving at http://${ipAddress.value}:$httpPort")
         } catch (e: Exception) {
             httpRunning.value = false
             httpErrorMsg.value = formatPortError(e, httpPort, "HTTP同步服务")
@@ -357,7 +363,13 @@ class SyncHttpServer(port: Int) : NanoHTTPD(port) {
         session: IHTTPSession,
         parms: Map<String, String>,
     ): Response {
-        val body = session.inputStream.readBytes().toString(Charsets.UTF_8)
+        // ⚠ 读取 body 必须走 parseBody（按 content-length 精确读取）：
+        // session.inputStream 是 keep-alive 的原始 socket 流，readBytes() 读到 body 末尾后
+        // 会继续等下一包直到 5s socket 超时（真机实测 2026-10-25：所有 POST 同步必超时）。
+        // 非表单 content-type 的 body 由 parseBody 整体存入 files["postData"]。
+        val files = HashMap<String, String>()
+        session.parseBody(files)
+        val body = files["postData"] ?: ""
         val overlay = (parms["overlay"] ?: "0").toIntOrNull() ?: 0
         val chunk = SyncChunk(
             chunkIndex = (parms["chunkIndex"] ?: "").toIntOrNull() ?: 1,
