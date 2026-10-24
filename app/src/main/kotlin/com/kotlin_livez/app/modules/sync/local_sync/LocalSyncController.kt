@@ -7,6 +7,7 @@ import com.kotlin_livez.app.services.SyncClient
 import com.kotlin_livez.app.services.SyncService
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
@@ -42,21 +43,10 @@ class LocalSyncController(
         }
     }
 
-    /** 解析地址（对应 Dart parseAddress）。 */
-    fun parseAddress(rawAddress: String): Pair<String, Int>? {
-        var address = rawAddress.trim()
-        if (address.isEmpty()) return null
-        if (!address.startsWith("http://") && !address.startsWith("https://")) {
-            address = "http://$address"
-        }
-        val uri = runCatching { java.net.URI(address) }.getOrNull() ?: return null
-        val host = uri.host
-        if (host.isNullOrEmpty()) return null
-        val port = if (uri.port != -1) uri.port else SyncService.httpPort
-        return host to port
-    }
+    /** 解析地址（对应 Dart parseAddress；纯函数，供单测复用）。 */
+    fun parseAddress(rawAddress: String): Pair<String, Int>? = parseAddressStatic(rawAddress)
 
-    /** 连接指定地址（对应 Dart connect + connectClient）。 */
+    /** 连接指定地址（对应 Dart connect：解析输入框文本 → 构造手动输入设备 → connectClient）。 */
     fun connect(
         onSuccess: (SyncClient, SyncClientInfoModel) -> Unit,
         onError: (String) -> Unit,
@@ -75,6 +65,15 @@ class LocalSyncController(
             name = "手动输入",
             type = "android",
         )
+        connectClient(client, onSuccess, onError)
+    }
+
+    /** 连接指定设备（对应 Dart connectClient：GET /info 成功即进设备页，失败弹长文案）。 */
+    fun connectClient(
+        client: SyncClient,
+        onSuccess: (SyncClient, SyncClientInfoModel) -> Unit,
+        onError: (String) -> Unit,
+    ) {
         scope.launch {
             try {
                 val info = withContext(Dispatchers.IO) { request.getClientInfo(client) }
@@ -99,5 +98,33 @@ class LocalSyncController(
             .map { "$it:${SyncService.httpPort}" }
             .joinToString(";")
         return addresses
+    }
+
+    /** 取消协程（对齐 Dart onClose；页面出栈时由 Screen 的 DisposableEffect 调用）。 */
+    fun dispose() {
+        scope.coroutineContext[Job]?.cancel()
+    }
+
+    companion object {
+        /** 地址解析（对应 Dart parseAddress）：补 http:// 前缀、默认端口 23234、取 host。 */
+        fun parseAddressStatic(rawAddress: String): Pair<String, Int>? {
+            var address = rawAddress.trim()
+            if (address.isEmpty()) return null
+            if (!address.startsWith("http://") && !address.startsWith("https://")) {
+                address = "http://$address"
+            }
+            val uri = runCatching { java.net.URI(address) }.getOrNull() ?: return null
+            val host = uri.host
+            if (host.isNullOrEmpty()) return null
+            val port = if (uri.port != -1) uri.port else SyncService.httpPort
+            return host to port
+        }
+
+        /**
+         * 扫码结果拆分（对应 Dart toScanQr 的 `;` 拆分）：返回去空白后的地址列表。
+         * ≥2 个地址由 UI 弹选择；单地址直接回填（6 位房间号分支已随远程同步移除）。
+         */
+        fun splitScanAddresses(content: String): List<String> =
+            content.split(";").map { it.trim() }.filter { it.isNotEmpty() }
     }
 }

@@ -46,7 +46,19 @@ class SyncProgress(
     val current: Int = 0,
     val total: Int = 0,
     val message: String = "",
-)
+) {
+    val percent: Double get() = if (total <= 0) 0.0 else (current.toDouble() / total).coerceIn(0.0, 1.0)
+
+    /** total<=0 视为无总量（进度条走不确定样式）。 */
+    val isIndeterminate: Boolean get() = total <= 0
+
+    val displayMessage: String
+        get() = when {
+            message.isNotEmpty() -> message
+            total > 0 -> "$stage $current/$total"
+            else -> stage
+        }
+}
 
 /** 同步进度回调（对应 Dart SyncProgressCallback）。 */
 fun interface SyncProgressCallback {

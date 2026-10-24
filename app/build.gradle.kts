@@ -36,8 +36,8 @@ android {
         // targetSdk 35（Android 15）：强制 edge-to-edge（本 app 已全局 e2e，无行为回归预期）；
         // 系统栏 setter（statusBarColor/navigationBarColor）在 35 弃用，已迁移 enableEdgeToEdge()。
         targetSdk = 35
-        versionCode = 18
-        versionName = "0.2.3.261024"
+        versionCode = 19
+        versionName = "0.2.4"
     }
 
     compileOptions {
@@ -167,6 +167,10 @@ dependencies {
 
     // 二维码编码：扫码登录页把二维码内容渲染成图（对应 Dart qr_flutter 的 QrImageView）
     implementation(libs.zxing.core)
+
+    // 二维码扫描（task 10-24-lan-sync-ui）：局域网同步「扫一扫」，自带 CaptureActivity +
+    // ActivityResult ScanContract（对应 Dart qr_code_scanner_plus）
+    implementation(libs.zxing.android.embedded)
 
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.test.ext.junit)

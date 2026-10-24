@@ -29,6 +29,9 @@ brotli = "0.1.2"
 rhino = "1.7.15"
 # 二维码编码（扫码登录出码：B 站 / 斗鱼共用；纯 Java 实现，无 Android 依赖）
 zxing = "3.5.3"
+# 二维码扫描（局域网同步「扫一扫」：自带竖屏扫码 Activity + ActivityResult ScanContract，
+# 复用上面的 zxing core 解码；journeyapps 维护）
+zxingEmbedded = "4.3.0"
 
 # 测试
 junit = "4.13.2"
@@ -77,6 +80,7 @@ okhttp = { module = "com.squareup.okhttp3:okhttp", version.ref = "okhttp" }
 brotli-dec = { module = "org.brotli:dec", version.ref = "brotli" }
 rhino = { module = "org.mozilla:rhino", version.ref = "rhino" }
 zxing-core = { module = "com.google.zxing:core", version.ref = "zxing" }
+zxing-android-embedded = { module = "com.journeyapps:zxing-android-embedded", version.ref = "zxingEmbedded" }
 
 # 测试
 junit = { module = "junit:junit", version.ref = "junit" }

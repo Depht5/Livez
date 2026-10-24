@@ -107,6 +107,24 @@ class SyncClientRequest {
     suspend fun syncDouyinAccount(client: SyncClient, cookie: String): Boolean =
         postJson(client, "account/douyin", buildJsonObject { put("cookie", cookie) }.toString())
 
+    /**
+     * POST /sync/account/douyu（对应 Dart syncDouyuAccount）。
+     * 续期凭据（ltp0/dyDid）为可选字段，仅在非空时携带；旧接收端只读 cookie 字段，协议向后兼容。
+     */
+    suspend fun syncDouyuAccount(
+        client: SyncClient,
+        cookie: String,
+        ltp0: String = "",
+        dyDid: String = "",
+    ): Boolean = postJson(
+        client, "account/douyu",
+        buildJsonObject {
+            put("cookie", cookie)
+            if (ltp0.isNotEmpty()) put("ltp0", ltp0)
+            if (dyDid.isNotEmpty()) put("dyDid", dyDid)
+        }.toString(),
+    )
+
     private suspend fun postJson(
         client: SyncClient,
         path: String,

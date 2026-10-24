@@ -116,6 +116,7 @@ object Router {
             "account" -> navigate("account")
             "search" -> navigate("search")
             "follow" -> navigate("follow")
+            "local_sync" -> navigate("localsync")
             else -> toast("$title 页面将在后续版本接入")
         }
     }

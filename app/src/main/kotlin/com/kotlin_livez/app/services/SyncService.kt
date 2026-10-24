@@ -5,12 +5,15 @@ import com.kotlin_livez.app.app.Log
 import com.kotlin_livez.app.di.ServiceContainer
 import fi.iki.elonen.NanoHTTPD
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
@@ -48,8 +51,17 @@ object SyncService {
     private var udpSocket: DatagramSocket? = null
     private var httpServer: SyncHttpServer? = null
 
-    /** 同步进度通知（对应 Dart SyncProgressDialog 系列；UI 层注入）。 */
-    var onSyncProgress: ((SyncProgress) -> Unit)? = null
+    /**
+     * 接收侧 UI 事件流（对应 Dart SyncProgressDialog 的 show/update/dismiss + SmartDialog.showToast）。
+     * NanoHTTPD 服务线程以 [emitEvent] 发射；全局宿主 `ui/components/SyncProgressHost.kt` 收集渲染，
+     * 使任意页面被推送时都可见。
+     */
+    private val _syncUiEvents = MutableSharedFlow<SyncUiEvent>(extraBufferCapacity = 64)
+    val syncUiEvents: SharedFlow<SyncUiEvent> = _syncUiEvents
+
+    fun emitEvent(event: SyncUiEvent) {
+        _syncUiEvents.tryEmit(event)
+    }
 
     /** 服务启动（对应 Dart onInit）。 */
     fun install() {
@@ -262,6 +274,21 @@ class SyncClient(
     val type: String,
 )
 
+/** 接收侧同步 UI 事件（对应 Dart SyncProgressDialog 系列 + SmartDialog.showToast 的时机语义）。 */
+sealed interface SyncUiEvent {
+    /** 收到推送块，弹出进度框。 */
+    data class Show(val progress: SyncProgress) : SyncUiEvent
+
+    /** 更新进度框内容。 */
+    data class Update(val progress: SyncProgress) : SyncUiEvent
+
+    /** 关闭进度框（末块或异常）。 */
+    data object Dismiss : SyncUiEvent
+
+    /** 结果 toast（「已同步…」等，由全局宿主弹出）。 */
+    data class Toast(val message: String) : SyncUiEvent
+}
+
 /** 同步分段信息（对应 Dart _SyncChunk）。 */
 class SyncChunk(
     val chunkIndex: Int = 1,
@@ -341,6 +368,7 @@ class SyncHttpServer(port: Int) : NanoHTTPD(port) {
         return try {
             when (path) {
                 "follow" -> {
+                    emitShow("接收关注", chunk)
                     val list = parseArray(body, "关注列表格式不是数组")
                     val result = runBlocking(Dispatchers.IO) {
                         BulkDataImportService.importFollowUsers(
@@ -351,10 +379,12 @@ class SyncHttpServer(port: Int) : NanoHTTPD(port) {
                     Log.d("本地同步关注完成：${result.logSummary}")
                     if (chunk.isLastChunk) {
                         com.kotlin_livez.app.app.EventBus.emit(com.kotlin_livez.app.app.Constant.kUpdateFollow, 0)
+                        emitDone("已同步关注用户列表（${chunkCount(chunk, result.imported)} 条）")
                     }
                     successResponse()
                 }
                 "tag" -> {
+                    emitShow("接收标签", chunk)
                     val list = parseArray(body, "标签列表格式不是数组")
                     val result = runBlocking(Dispatchers.IO) {
                         BulkDataImportService.importFollowTags(
@@ -365,10 +395,12 @@ class SyncHttpServer(port: Int) : NanoHTTPD(port) {
                     Log.d("本地同步标签完成：${result.logSummary}")
                     if (chunk.isLastChunk) {
                         com.kotlin_livez.app.app.EventBus.emit(com.kotlin_livez.app.app.Constant.kUpdateFollow, 0)
+                        emitDone("已同步标签列表（${chunkCount(chunk, result.imported)} 条）")
                     }
                     successResponse()
                 }
                 "history" -> {
+                    emitShow("接收历史", chunk)
                     val list = parseArray(body, "历史记录格式不是数组")
                     val result = runBlocking(Dispatchers.IO) {
                         BulkDataImportService.importHistories(
@@ -379,10 +411,12 @@ class SyncHttpServer(port: Int) : NanoHTTPD(port) {
                     Log.d("本地同步历史完成：${result.logSummary}")
                     if (chunk.isLastChunk) {
                         com.kotlin_livez.app.app.EventBus.emit(com.kotlin_livez.app.app.Constant.kUpdateHistory, 0)
+                        emitDone("已同步观看记录（${chunkCount(chunk, result.imported)} 条）")
                     }
                     successResponse()
                 }
                 "blocked_word" -> {
+                    emitShow("接收屏蔽词", chunk)
                     val list = parseStringArray(body, "屏蔽词格式不是数组")
                     val result = runBlocking(Dispatchers.IO) {
                         BulkDataImportService.importShieldValues(
@@ -391,17 +425,23 @@ class SyncHttpServer(port: Int) : NanoHTTPD(port) {
                         )
                     }
                     Log.d("本地同步屏蔽词完成：${result.logSummary}")
+                    if (chunk.isLastChunk) {
+                        emitDone("已同步弹幕屏蔽词（${chunkCount(chunk, result.imported)} 条）")
+                    }
                     successResponse()
                 }
                 "profile" -> {
+                    emitEvent(SyncUiEvent.Show(SyncProgress(stage = "接收配置包")))
                     val summary = runBlocking(Dispatchers.IO) {
                         ProfileBackupService.importProfileJson(
                             body,
                             overwrite = overlay == 1,
-                            onProgress = { SyncService.onSyncProgress?.invoke(it) },
+                            onProgress = { progress -> emitEvent(SyncUiEvent.Update(progress)) },
                         )
                     }
                     Log.d("已同步配置包：${summary.message}")
+                    emitEvent(SyncUiEvent.Toast("已同步配置包"))
+                    emitEvent(SyncUiEvent.Dismiss)
                     toJsonResponse(buildJsonObject {
                         put("status", true)
                         put("message", summary.message)
@@ -410,13 +450,29 @@ class SyncHttpServer(port: Int) : NanoHTTPD(port) {
                 "account/bilibili" -> {
                     val cookie = parseAccountCookie(body)
                     ServiceContainer.biliBiliAccount.setCookie(cookie)
+                    // 对齐 Dart 接收端：落 Cookie 后立即拉用户信息（失败不影响同步结果）
+                    runCatching { runBlocking(Dispatchers.IO) { ServiceContainer.biliBiliAccount.loadUserInfo() } }
+                        .onFailure { Log.logPrint(it) }
                     Log.d("已同步哔哩哔哩账号")
+                    emitEvent(SyncUiEvent.Toast("已同步哔哩哔哩账号"))
                     successResponse()
                 }
                 "account/douyin" -> {
                     val cookie = parseAccountCookie(body)
                     ServiceContainer.douyinAccount.setCookie(cookie)
                     Log.d("已同步抖音账号")
+                    emitEvent(SyncUiEvent.Toast("已同步抖音账号"))
+                    successResponse()
+                }
+                "account/douyu" -> {
+                    val account = parseDouyuAccountBody(json, body)
+                    // 斗鱼允许空 cookie（语义 = 清除对端账号）；凭据缺失传 null →
+                    // setCookie 内部走 Cookie 反解并保留旧值（对齐 Dart）
+                    ServiceContainer.douyuAccount.setCookie(account.cookie, account.ltp0, account.dyDid)
+                    Log.d(if (account.cookie.isEmpty()) "已清除斗鱼账号" else "已同步斗鱼账号")
+                    emitEvent(
+                        SyncUiEvent.Toast(if (account.cookie.isEmpty()) "已清除斗鱼账号" else "已同步斗鱼账号"),
+                    )
                     successResponse()
                 }
                 else -> toJsonResponse(buildJsonObject {
@@ -425,11 +481,43 @@ class SyncHttpServer(port: Int) : NanoHTTPD(port) {
                 })
             }
         } catch (e: Exception) {
+            // 接收失败：收起进度框即可，错误详情经 HTTP status=false 由发送方 toast（对齐 Dart）
+            emitEvent(SyncUiEvent.Dismiss)
             toJsonResponse(buildJsonObject {
                 put("status", false)
                 put("message", e.toString())
             })
         }
+    }
+
+    /** 收到推送块：弹进度框并给出分段阶段进度（对应 Dart _stageProgress）。 */
+    private fun emitShow(stage: String, chunk: SyncChunk) {
+        val total = if (chunk.itemTotal > 0) chunk.itemTotal else chunk.chunkTotal
+        val current = if (chunk.itemTotal > 0) chunk.itemEnd else chunk.chunkIndex
+        emitEvent(
+            SyncUiEvent.Show(
+                SyncProgress(
+                    stage = stage,
+                    current = current,
+                    total = total,
+                    message = if (chunk.chunkTotal > 1) "接收第 ${chunk.chunkIndex}/${chunk.chunkTotal} 段" else stage,
+                ),
+            ),
+        )
+    }
+
+    /** 末块收尾：结果 toast + 关闭进度框（对应 Dart SyncProgressDialog.dismiss + showToast）。 */
+    private fun emitDone(toastMessage: String) {
+        emitEvent(SyncUiEvent.Toast(toastMessage))
+        emitEvent(SyncUiEvent.Dismiss)
+    }
+
+    /** 末块结果条数：优先分段声明的 itemTotal，缺省回落实际导入数（对应 Dart）。 */
+    private fun chunkCount(chunk: SyncChunk, imported: Int): Int =
+        if (chunk.itemTotal > 0) chunk.itemTotal else imported
+
+    private fun emitEvent(event: SyncUiEvent) {
+        SyncService.emitEvent(event)
     }
 
     private fun parseArray(body: String, errMsg: String): List<JsonElement> {
@@ -446,14 +534,18 @@ class SyncHttpServer(port: Int) : NanoHTTPD(port) {
 
     private fun parseAccountCookie(body: String): String {
         val obj = json.parseToJsonElement(body).jsonObject
-        val cookie = obj["cookie"]?.strOrEmpty() ?: ""
+        val cookie = obj["cookie"].strOrNull() ?: ""
         if (cookie.isEmpty()) throw IllegalArgumentException("账号 Cookie 为空")
         return cookie
     }
 
+    /**
+     * 分块导入进度 → UI 事件（对应 Dart _wrapChunkProgress）：
+     * itemTotal<=0（无分段声明）直传；否则以 itemStart 为基准偏移，并夹取到 itemTotal。
+     */
     private fun wrapChunkProgress(chunk: SyncChunk): SyncProgressCallback {
         return SyncProgressCallback { progress ->
-            SyncService.onSyncProgress?.invoke(progress)
+            emitEvent(SyncUiEvent.Update(chunkProgress(progress, chunk)))
         }
     }
 
@@ -469,4 +561,41 @@ class SyncHttpServer(port: Int) : NanoHTTPD(port) {
 
     private fun JsonElement?.strOrEmpty(): String =
         (this as? JsonPrimitive)?.content?.takeIf { it != "null" } ?: ""
+}
+
+/** 取可空字符串字段：缺失 / JsonNull → null（区别于「存在但为空串」）。 */
+private fun JsonElement?.strOrNull(): String? =
+    (this as? JsonPrimitive)?.takeIf { it !is JsonNull }?.content
+
+/** /sync/account/douyu 请求体：cookie（允许空 = 清除账号）+ 可选续期凭据。 */
+internal data class DouyuAccountBody(
+    val cookie: String,
+    val ltp0: String?,
+    val dyDid: String?,
+)
+
+/** 解析 /sync/account/douyu 请求体（纯函数，供单测复用）。 */
+internal fun parseDouyuAccountBody(json: Json, body: String): DouyuAccountBody {
+    val obj = json.parseToJsonElement(body).jsonObject
+    return DouyuAccountBody(
+        cookie = obj["cookie"].strOrNull() ?: "",
+        ltp0 = obj["ltp0"].strOrNull(),
+        dyDid = obj["dyDid"].strOrNull(),
+    )
+}
+
+/**
+ * 分块导入进度的偏移换算（对应 Dart `_wrapChunkProgress` 公式，纯函数）：
+ * itemTotal<=0（无分段声明）原样返回；否则 current 以 itemStart 为基准偏移并夹取到 itemTotal，
+ * total 统一为 itemTotal、message 带 `当前/总数`。
+ */
+internal fun chunkProgress(progress: SyncProgress, chunk: SyncChunk): SyncProgress {
+    if (chunk.itemTotal <= 0) return progress
+    val current = (chunk.itemStart + progress.current).coerceIn(0, chunk.itemTotal)
+    return SyncProgress(
+        stage = progress.stage,
+        current = current,
+        total = chunk.itemTotal,
+        message = "${progress.stage} $current/${chunk.itemTotal}",
+    )
 }

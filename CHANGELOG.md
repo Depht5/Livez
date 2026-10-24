@@ -3,6 +3,39 @@
 本文件记录 `kotlin_re/`（Livez Android 原生版）每个发布版本的改动，倒序排列。
 版本号规则、发布日期口径与发布流程见 [`.trellis/spec/kotlin_re/release-and-versioning.md`](../.trellis/spec/kotlin_re/release-and-versioning.md)。
 
+## [0.2.4] - 2026-10-24（versionCode 19）
+
+### 新增
+
+- 局域网同步（对齐上游 1.13.2，协议与 Dart 版完全互通）：「我的 → 局域网同步」进入，
+  支持手动输入地址 / 扫二维码 / UDP 自动发现三种方式连接同局域网设备
+- 设备页七类数据推送：完整配置包 / 关注列表（含标签）/ 观看记录 / 弹幕屏蔽词 /
+  哔哩哔哩 / 抖音 / 斗鱼账号；大列表自动分块，推送前可选「覆盖 / 合并」
+- 接收侧全局进度反馈：停留在任意页面被推送时弹出进度框 + 结果 toast；
+  接收 B 站账号后立即拉取用户信息（对齐 Dart）
+- 斗鱼账号同步通道：连同 LTP0 / dy_did 自动续期凭据一起推送（用户决策纳入；
+  两台设备将共用同一登录身份）；推送空 Cookie 可使对端退出斗鱼登录
+- 扫码连接：新增相机扫码（zxing-android-embedded，仅 QR），扫对端「本机信息」二维码
+  自动填地址，多地址弹选择；权限拒绝时引导手动输入
+- 「本机信息」弹层：本机地址渲染为二维码（复用 zxing）供对端扫描，含服务状态文案
+
+### 修复
+
+- 接收侧分块进度条计数错误：多块推送时未按 `itemStart` 偏移换算，第 2 块起进度回跳
+- 局域网同步服务此前从未启动（`SyncService.install()` 无人调用），UDP 发现与 HTTP 接收端口
+  （23235 / 23234）在旧版本实际不可用
+
+### 移除
+
+- 「远端房间同步」整个功能（用户决策：永久移除，后续不再考虑）：删除「我的」页入口、
+  `SignalRService`（私有 WebSocket JSON RPC 房间）与 `RemoteSyncRoomController`，
+  同步服务 / 代理端口两个仅服务于它的存储键一并清理；局域网同步与 WebDAV 不受影响
+
+### 构建
+
+- 新增依赖 `com.journeyapps:zxing-android-embedded`（相机扫码，复用 zxing core 解码）
+- 新增 `CAMERA` 权限（`required=false`，无相机设备仍可安装）
+
 ## [0.2.3.261024] - 2026-10-24（versionCode 18）
 
 ### 修复

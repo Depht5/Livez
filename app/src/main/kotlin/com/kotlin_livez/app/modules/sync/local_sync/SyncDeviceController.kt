@@ -11,6 +11,7 @@ import com.kotlin_livez.app.services.BulkDataImportService
 import com.kotlin_livez.app.services.SyncClient
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -30,6 +31,12 @@ class SyncDeviceController(
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val request = SyncClientRequest()
     private val dbService get() = ServiceContainer.dbService
+
+    /** 取消协程（对齐 Dart onClose；页面出栈时由 Screen 的 DisposableEffect 调用，
+     *  推送进行中离开页面会一并取消该次推送）。 */
+    fun dispose() {
+        scope.coroutineContext[Job]?.cancel()
+    }
 
     /** 分块发送（对应 Dart _syncJsonChunks）。 */
     private suspend fun <T> syncJsonChunks(
@@ -206,6 +213,7 @@ class SyncDeviceController(
     /** 同步哔哩哔哩账号（对应 Dart syncBiliAccount）。 */
     fun syncBiliAccount(
         onToast: (String) -> Unit = { Log.d("Toast: $it") },
+        onProgress: ((String, Int, Int, String) -> Unit)? = null,
     ) {
         val account = ServiceContainer.biliBiliAccount
         if (!account.logined.value) {
@@ -214,7 +222,7 @@ class SyncDeviceController(
         }
         scope.launch {
             try {
-                onToast("同步哔哩哔哩账号")
+                onProgress?.invoke("同步哔哩哔哩账号", 0, 0, "")
                 request.syncBiliAccount(client, account.cookie)
                 onToast("已同步哔哩哔哩账号")
             } catch (e: Exception) {
@@ -227,6 +235,7 @@ class SyncDeviceController(
     /** 同步抖音账号（对应 Dart syncDouyinAccount）。 */
     fun syncDouyinAccount(
         onToast: (String) -> Unit = { Log.d("Toast: $it") },
+        onProgress: ((String, Int, Int, String) -> Unit)? = null,
     ) {
         val account = ServiceContainer.douyinAccount
         if (!account.hasCookie.value) {
@@ -235,9 +244,36 @@ class SyncDeviceController(
         }
         scope.launch {
             try {
-                onToast("同步抖音账号")
+                onProgress?.invoke("同步抖音账号", 0, 0, "")
                 request.syncDouyinAccount(client, account.cookie)
                 onToast("已同步抖音账号")
+            } catch (e: Exception) {
+                onToast("同步失败：${e.message}")
+                Log.logPrint(e)
+            }
+        }
+    }
+
+    /** 同步斗鱼账号（对应 Dart syncDouyuAccount）：连同续期凭据（LTP0 / dy_did）一起推送。 */
+    fun syncDouyuAccount(
+        onToast: (String) -> Unit = { Log.d("Toast: $it") },
+        onProgress: ((String, Int, Int, String) -> Unit)? = null,
+    ) {
+        val account = ServiceContainer.douyuAccount
+        if (!account.hasCookie.value) {
+            onToast("未配置斗鱼 Cookie")
+            return
+        }
+        scope.launch {
+            try {
+                onProgress?.invoke("同步斗鱼账号", 0, 0, "")
+                request.syncDouyuAccount(
+                    client,
+                    account.cookie,
+                    ltp0 = account.ltp0,
+                    dyDid = account.dyDid,
+                )
+                onToast("已同步斗鱼账号")
             } catch (e: Exception) {
                 onToast("同步失败：${e.message}")
                 Log.logPrint(e)

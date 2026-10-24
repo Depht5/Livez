@@ -14,6 +14,12 @@
     <!-- 应用内更新：下载完成后调起系统安装器（task 10-21-settings-about-update-check）。
          仅 APK 安装需要，不涉及其它用途；授权由系统「未知来源」流程二次确认 -->
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+    <!-- 局域网同步扫码（task 10-24-lan-sync-ui）：扫对端「本机信息」二维码取地址；
+         required=false —— 无相机设备仍可安装（手动输入地址兜底） -->
+    <uses-permission android:name="android.permission.CAMERA" />
+    <uses-feature
+        android:name="android.hardware.camera"
+        android:required="false" />
 
     <application
         android:name=".LiveApp"
@@ -42,6 +48,12 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!-- 局域网同步扫码页（task 10-24-lan-sync-ui）：zxing-android-embedded 的 CaptureActivity
+             默认锁横屏，子类化并显式声明竖屏，与 App 其余页面方向一致 -->
+        <activity
+            android:name=".ui.PortraitCaptureActivity"
+            android:screenOrientation="portrait" />
 
         <!-- 后台播放保活前台服务（对应 Dart 版同名服务；启停由 BackgroundPlayback
              按播放状态与 allowBackgroundPlayback 设置驱动，见 LiveRoomController） -->

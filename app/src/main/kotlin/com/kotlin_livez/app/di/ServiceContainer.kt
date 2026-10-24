@@ -11,6 +11,7 @@ import com.kotlin_livez.app.services.DouyuAccountService
 import com.kotlin_livez.app.modules.live_room.LiveRoomController
 import com.kotlin_livez.app.modules.search.AppSearchController
 import com.kotlin_livez.app.services.LocalStorageService
+import com.kotlin_livez.app.services.SyncService
 import com.kotlin_livez.app.services.UpdateService
 
 /**
@@ -77,7 +78,9 @@ object ServiceContainer {
         douyinAccount.init()
         douyuAccount.init()
         followService.install()
-        // 后续在此注册同步服务等
+        // 局域网同步服务（对应 Dart SyncService 为 GetxService、启动即拉起）：
+        // UDP 发现（23235）+ HTTP 接收（23234）常驻进程生命周期
+        SyncService.install()
     }
 
     fun context(): Context = app

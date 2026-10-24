@@ -56,6 +56,7 @@ import com.kotlin_livez.app.di.ServiceContainer
 import com.kotlin_livez.app.modules.category.CategoryController
 import com.kotlin_livez.app.modules.follow_user.FollowUserController
 import com.kotlin_livez.app.modules.home.HomeController
+import com.kotlin_livez.app.services.SyncService
 import com.kotlin_livez.app.ui.Router
 import com.kotlin_livez.app.ui.useWideLayout
 import com.kotlin_livez.app.ui.screens.AccountScreen
@@ -67,10 +68,12 @@ import com.kotlin_livez.app.ui.screens.FollowScreen
 import com.kotlin_livez.app.ui.screens.HomeScreen
 import com.kotlin_livez.app.ui.screens.HistoryScreen
 import com.kotlin_livez.app.ui.screens.LiveRoomScreen
+import com.kotlin_livez.app.ui.screens.LocalSyncScreen
 import com.kotlin_livez.app.ui.screens.MineScreen
 import com.kotlin_livez.app.ui.screens.QRLoginScreen
 import com.kotlin_livez.app.ui.screens.SearchScreen
 import com.kotlin_livez.app.ui.screens.SettingsScreen
+import com.kotlin_livez.app.ui.screens.SyncDeviceScreen
 import com.kotlin_livez.app.ui.theme.CustomIcons
 import com.kotlin_livez.app.ui.screens.WebLoginScreen
 
@@ -231,6 +234,28 @@ private fun SharedTransitionScope.NavHostContent(
         // generate + 3s 轮询在控制器内，登录成功后控制器回调出栈
         composable("douyuqrlogin") {
             DouyuQRLoginScreen(onBack = { navController.popBackStack() })
+        }
+
+        // 局域网同步（task 10-24-lan-sync-ui）：地址输入 / 扫一扫 / 已发现设备；
+        // 控制器在 Screen 内 remember 创建（UDP 广播发现由常驻 SyncService 承担）
+        composable("localsync") {
+            LocalSyncScreen(onBack = { navController.popBackStack() })
+        }
+
+        // 同步设备页（task 10-24-lan-sync-ui）：address 走 path 参数（Uri.encode 编码，
+        // NavController 解析后自动解码）；进页重取 GET /info（无状态、进程重建安全）
+        composable(
+            route = "syncdevice/{address}/{port}",
+            arguments = listOf(
+                navArgument("address") { type = NavType.StringType },
+                navArgument("port") { type = NavType.IntType },
+            ),
+        ) { entry ->
+            SyncDeviceScreen(
+                address = entry.arguments?.getString("address").orEmpty(),
+                port = entry.arguments?.getInt("port") ?: SyncService.httpPort,
+                onBack = { navController.popBackStack() },
+            )
         }
 
         // 关注用户（Batch 6）：控制器在 Screen 内 remember 创建、出栈销毁；
