@@ -36,7 +36,7 @@ android {
         // targetSdk 35（Android 15）：强制 edge-to-edge（本 app 已全局 e2e，无行为回归预期）；
         // 系统栏 setter（statusBarColor/navigationBarColor）在 35 弃用，已迁移 enableEdgeToEdge()。
         targetSdk = 35
-        versionCode = 21
+        versionCode = 22
         versionName = "0.2.4.261025"
     }
 

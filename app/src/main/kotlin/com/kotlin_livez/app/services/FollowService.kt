@@ -117,7 +117,11 @@ class FollowService(
     private val syncLock = Any()
 
     fun install() {
-        _eventSub = EventBus.listen<String>(Constant.kUpdateFollow) {
+        // ⚠ 必须 listen<Any>：kUpdateFollow 的发射方类型不统一（直播间关注发 String roomId，
+        // 同步/备份/导入发 Int 0，对齐 Dart 的动态类型语义）——listen<String> 的强转会让
+        // Integer 发射直接 ClassCastException 闪退（真机实证 2026-10-25：接收端同步配置包后崩）。
+        // 本监听不消费数据，只做防抖刷新。
+        _eventSub = EventBus.listen<Any>(Constant.kUpdateFollow) {
             _eventDebounceJob?.cancel()
             _eventDebounceJob = scope.launch {
                 delay(150)

@@ -7,6 +7,9 @@
 
 ### 修复（依据真机抓取日志诊断，Xiaomi M332BF / Android 17 ↔ TB371FC）
 
+- **接收端同步完成即闪退**（`ClassCastException: Integer cannot be cast to String`）：
+  `FollowService` 的 `kUpdateFollow` 监听器声明为 `listen<String>`，而同步/备份/导入路径按
+  Dart 语义发射 `Int 0`——强转崩在主线程。监听器本就不消费数据，改 `listen<Any>`
 - **局域网同步推送全部失败**（`SocketTimeoutException: Read timed out`）：接收端读请求体用的
   `session.inputStream.readBytes()` 读到 body 末尾后会继续等 keep-alive 连接的下一包，
   直至 5s socket 超时——每次 POST 同步必超时。改用 `parseBody`（按 content-length 精确读取，
