@@ -3,7 +3,7 @@
 本文件记录 `kotlin_re/`（Livez Android 原生版）每个发布版本的改动，倒序排列。
 版本号规则、发布日期口径与发布流程见 [`.trellis/spec/kotlin_re/release-and-versioning.md`](../.trellis/spec/kotlin_re/release-and-versioning.md)。
 
-## [0.2.4.261025] - 2026-10-25（versionCode 21）
+## [0.2.4.261025] - 2026-10-25（versionCode 22）
 
 ### 修复（依据真机抓取日志诊断，Xiaomi M332BF / Android 17 ↔ TB371FC）
 
