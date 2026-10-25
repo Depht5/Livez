@@ -90,7 +90,8 @@ fun SyncDeviceScreen(
         }
     }
     DisposableEffect(controller) {
-        onDispose { controller?.dispose() }
+        // 出栈即断开连接（task 10-25-lan-sync-polish 用户决策）：通知对端移除连接提示卡
+        onDispose { controller?.disconnect() }
     }
 
     // 推送状态：进度框内容；null = 无进行中的推送

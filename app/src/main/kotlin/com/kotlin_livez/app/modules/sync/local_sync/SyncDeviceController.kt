@@ -38,6 +38,18 @@ class SyncDeviceController(
         scope.coroutineContext[Job]?.cancel()
     }
 
+    /**
+     * 断开连接（用户决策 task 10-25-lan-sync-polish：退出设备页回到局域网连接页时调用）：
+     * fire-and-forget 发 `GET /bye` 让对端立即移除连接提示卡；失败忽略（对端 30s TTL 兜底）。
+     * 独立线程执行——[dispose] 已取消本控制器协程域。
+     */
+    fun disconnect() {
+        dispose()
+        kotlin.concurrent.thread(isDaemon = true, name = "sync-bye") {
+            runCatching { kotlinx.coroutines.runBlocking { request.bye(client) } }
+        }
+    }
+
     /** 分块发送（对应 Dart _syncJsonChunks）。 */
     private suspend fun <T> syncJsonChunks(
         items: List<T>,

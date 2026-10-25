@@ -110,6 +110,21 @@ fun AppNavHost(navController: NavHostController, modifier: Modifier = Modifier) 
         }
     }
 
+    // 局域网同步服务随 `localsync` 路由启停（task 10-25-lan-sync-polish 用户决策：退出同步页即关服务）。
+    // 挂返回栈而非组合：进设备页（syncdevice）会销毁 LocalSyncScreen 组合但 localsync 仍在栈内——
+    // 那时关服务会让对端推送失败；只有整个同步流程离栈才停（判据与 search 会话一致）。
+    // 启动入口在 LocalSyncScreen（remember 内先启动再建控制器，避免首包 hello 早于服务就绪）。
+    LaunchedEffect(navController) {
+        var syncInStack = false
+        navController.currentBackStack.collect { entries ->
+            val present = entries.any { it.destination.route == "localsync" }
+            if (syncInStack && !present) {
+                SyncService.stop()
+            }
+            syncInStack = present
+        }
+    }
+
     // 一镜到底共享元素（task 09-12-shared-element-transition）：SharedTransitionLayout
     // 包裹 NavHost，卡片封面 ↔ 直播间视频容器经 LocalSharedTransitionScope 配对；
     // 各路由经 LocalNavAnimatedVisibilityScope 下发 AnimatedContentScope（见各 composable）。

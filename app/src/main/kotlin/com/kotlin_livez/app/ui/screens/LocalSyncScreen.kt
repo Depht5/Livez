@@ -37,6 +37,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -53,6 +54,8 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.journeyapps.barcodescanner.ScanContract
 import com.journeyapps.barcodescanner.ScanOptions
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import com.kotlin_livez.app.modules.sync.local_sync.LocalSyncController
 import com.kotlin_livez.app.services.SyncService
 import com.kotlin_livez.app.ui.PortraitCaptureActivity
@@ -77,7 +80,13 @@ import com.kotlin_livez.app.ui.theme.CustomIcons
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun LocalSyncScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
-    val controller = remember { LocalSyncController() }
+    // 服务会话启动（task 10-25-lan-sync-polish）：先启动再建控制器，保证控制器 init 的首包
+    // hello/info 不会早于 UDP 就绪（install 幂等；退出由 AppNavHost 栈监视统一 stop）
+    val appContext = LocalContext.current
+    val controller = remember {
+        SyncService.install(appContext)
+        LocalSyncController()
+    }
     DisposableEffect(controller) {
         onDispose { controller.dispose() }
     }
@@ -90,6 +99,27 @@ fun LocalSyncScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
     var connectError by remember { mutableStateOf<String?>(null) }
     var showInfo by remember { mutableStateOf(false) }
     var pickerAddresses by remember { mutableStateOf<List<String>?>(null) }
+
+    // 对端连接时自动关闭二维码弹层（用户决策 task 10-25-lan-sync-polish）：监听已连接地址集合的
+    // 新增；仅新增时关闭（TTL 过期移除不触发）
+    var lastPeerAddresses by remember { mutableStateOf(setOf<String>()) }
+    LaunchedEffect(connectedPeers) {
+        val addresses = connectedPeers.map { it.address }.toSet()
+        if (showInfo && (addresses - lastPeerAddresses).isNotEmpty()) {
+            showInfo = false
+        }
+        lastPeerAddresses = addresses
+    }
+
+    // 周期广播（3s，页面存活期间）：Wi-Fi 广播有丢包，单发发现「有概率」失败；
+    // 同时发 hello（触发 Dart 对端回 info）与自身 info（直接进对端列表，双向填充）
+    LaunchedEffect(Unit) {
+        while (isActive) {
+            SyncService.sendHello()
+            SyncService.sendInfo()
+            delay(3_000)
+        }
+    }
 
     // 相机权限：拒绝时 toast 引导（zxing 库不会自行申请，须调用方先拿到授权）
     val context = LocalContext.current

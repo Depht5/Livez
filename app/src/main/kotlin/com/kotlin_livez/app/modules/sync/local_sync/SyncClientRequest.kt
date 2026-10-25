@@ -133,6 +133,19 @@ class SyncClientRequest {
         }.toString(),
     )
 
+    /** GET /bye：退出设备页时显式断开（fire-and-forget，失败忽略；对端移除连接提示卡）。 */
+    suspend fun bye(client: SyncClient): Boolean = withContext(Dispatchers.IO) {
+        runCatching {
+            val url = "${baseUrl(client)}/bye"
+            com.kotlin_livez.app.app.Log.d("HTTP 断开 → $url")
+            val request = Request.Builder().url(url).get().build()
+            httpClient.newCall(request).execute().use { resp ->
+                com.kotlin_livez.app.app.Log.d("HTTP 断开 ← HTTP ${resp.code}")
+            }
+        }
+        true
+    }
+
     private suspend fun postJson(
         client: SyncClient,
         path: String,
