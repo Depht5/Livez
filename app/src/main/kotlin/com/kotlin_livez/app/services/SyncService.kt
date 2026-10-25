@@ -513,6 +513,8 @@ class SyncHttpServer(port: Int) : NanoHTTPD(port) {
                 }
                 successResponse()
             }
+            method == Method.GET && uri.startsWith("/sync/") ->
+                handleSyncExport(uri.removePrefix("/sync/"))
             method == Method.POST && uri.startsWith("/sync/") ->
                 handleSync(uri.removePrefix("/sync/"), session, parms)
             else -> toJsonResponse(buildJsonObject {
@@ -627,6 +629,17 @@ class SyncHttpServer(port: Int) : NanoHTTPD(port) {
                         put("message", summary.message)
                     })
                 }
+                "settings" -> {
+                    // 仅设置通道（task 10-25-lan-sync-batch-ui）：payload 为只含 settings 段的
+                    // 配置包格式，导入复用 importProfileJson 的分段容错（缺失段自动跳过）
+                    emitEvent(SyncUiEvent.Show(SyncProgress(stage = "接收设置")))
+                    val summary = runBlocking(Dispatchers.IO) {
+                        ProfileBackupService.importProfileJson(body, overwrite = overlay == 1)
+                    }
+                    Log.d("已同步设置：${summary.message}")
+                    emitDone("已同步设置")
+                    successResponse()
+                }
                 "account/bilibili" -> {
                     val cookie = parseAccountCookie(body)
                     ServiceContainer.biliBiliAccount.setCookie(cookie)
@@ -669,6 +682,76 @@ class SyncHttpServer(port: Int) : NanoHTTPD(port) {
             })
         }
     }
+
+    /** 拉取提示去抖时间戳（NanoHTTPD 线程读写，宽松竞态可接受——最多多弹/少弹一次 toast）。 */
+    private var lastPullToastAt = 0L
+
+    /** 整批拉取（如「全部数据」）会连发多个 GET，5s 内只弹一次「对端正在拉取数据」。 */
+    private fun notifyPullRequested() {
+        val now = System.currentTimeMillis()
+        if (now - lastPullToastAt < 5_000) return
+        lastPullToastAt = now
+        emitEvent(SyncUiEvent.Toast("对端正在拉取数据"))
+    }
+
+    /**
+     * GET /sync 导出（task 10-25-lan-sync-batch-ui）：返回与推送 body 同构的 payload，
+     * 供对端「同步配置」拉取。Livez 私有扩展——Dart 对端无 GET 分支（拉取方会收到
+     * 404/错误 JSON，客户端据此报「对端不支持拉取」）。账号端点响应含 Cookie，不落日志。
+     */
+    private fun handleSyncExport(path: String): Response {
+        notifyPullRequested()
+        val db = ServiceContainer.dbService
+        val localStorage = ServiceContainer.localStorage
+        val appSettings = ServiceContainer.appSettings
+        return try {
+            val payload: String = when (path) {
+                "follow" -> runBlocking(Dispatchers.IO) {
+                    JsonArray(db.getFollowList().map { it.toJsonObject() }).toString()
+                }
+                "tag" -> runBlocking(Dispatchers.IO) {
+                    JsonArray(db.getFollowTagList().map { it.toJsonObject() }).toString()
+                }
+                "history" -> runBlocking(Dispatchers.IO) {
+                    JsonArray(db.getHistores().map { it.toJsonObject() }).toString()
+                }
+                "blocked_word" -> runBlocking(Dispatchers.IO) {
+                    JsonArray(localStorage.getAllShield().values.map { JsonPrimitive(it) }).toString()
+                }
+                "profile" -> runBlocking(Dispatchers.IO) {
+                    ProfileBackupService.exportProfileJson(db, localStorage, appSettings)
+                }
+                "settings" -> ProfileBackupService.exportSettingsJson(localStorage)
+                "account/bilibili" -> buildJsonObject {
+                    put("cookie", ServiceContainer.biliBiliAccount.cookie)
+                }.toString()
+                "account/douyin" -> buildJsonObject {
+                    put("cookie", ServiceContainer.douyinAccount.cookie)
+                }.toString()
+                "account/douyu" -> {
+                    val account = ServiceContainer.douyuAccount
+                    buildJsonObject {
+                        put("cookie", account.cookie)
+                        if (account.ltp0.isNotEmpty()) put("ltp0", account.ltp0)
+                        if (account.dyDid.isNotEmpty()) put("dyDid", account.dyDid)
+                    }.toString()
+                }
+                else -> return unknownEndpoint(path)
+            }
+            newFixedLengthResponse(Response.Status.OK, "application/json; charset=utf-8", payload)
+        } catch (e: Exception) {
+            Log.logPrint(e)
+            toJsonResponse(buildJsonObject {
+                put("status", false)
+                put("message", e.toString())
+            })
+        }
+    }
+
+    private fun unknownEndpoint(path: String): Response = toJsonResponse(buildJsonObject {
+        put("status", false)
+        put("message", "unknown endpoint: $path")
+    })
 
     /** 收到推送块：弹进度框并给出分段阶段进度（对应 Dart _stageProgress）。 */
     private fun emitShow(stage: String, chunk: SyncChunk) {

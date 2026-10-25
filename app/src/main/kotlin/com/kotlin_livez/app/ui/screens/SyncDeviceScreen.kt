@@ -2,19 +2,26 @@ package com.kotlin_livez.app.ui.screens
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -30,7 +37,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -39,12 +45,12 @@ import androidx.compose.ui.window.DialogProperties
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.kotlin_livez.app.models.SyncClientInfoModel
 import com.kotlin_livez.app.modules.sync.local_sync.SyncClientRequest
+import com.kotlin_livez.app.modules.sync.local_sync.SyncDataType
 import com.kotlin_livez.app.modules.sync.local_sync.SyncDeviceController
 import com.kotlin_livez.app.services.SyncClient
 import com.kotlin_livez.app.services.SyncProgress
 import com.kotlin_livez.app.services.SyncService
 import com.kotlin_livez.app.ui.Router
-import com.kotlin_livez.app.ui.components.SettingClickRow
 import com.kotlin_livez.app.ui.components.SettingGroupCard
 import com.kotlin_livez.app.ui.components.SyncDeviceRow
 import com.kotlin_livez.app.ui.components.SyncProgressDialogUi
@@ -53,14 +59,14 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
 /**
- * 同步设备页 —— 对应 Dart `sync_device_page.dart`（task 10-24-lan-sync-ui）。
+ * 同步设备页 —— 对应 Dart `sync_device_page.dart`，task 10-25-lan-sync-batch-ui 起重构为
+ * **选择式双向同步**：设备信息卡 + 「发送配置 / 同步配置」双按钮 + 圆点多选项。
+ * 先在下方勾选数据类别，再点按钮决定方向（发送到对端 / 拉取到本机，拉取为 Livez 私有
+ * GET 扩展，Dart 对端不支持）。「全部数据」= 配置包 + 斗鱼续期凭据，选中后其余选项变灰。
  *
- * 由 [LocalSyncScreen] 连接成功后进入：设备信息卡 + 七类数据推送入口
- * （配置包 / 关注 / 历史 / 屏蔽词 / B站 / 抖音 / 斗鱼；快手已随平台移除，无快手足）。
- *
- * 与 Dart 的差异：路由只传 address/port，进页重取 `GET /info`（无状态、进程重建安全），
- * 代价是多一次 info 请求。数据类推送前弹「覆盖/不覆盖」确认（对齐 Dart showOverlayDialog，
- * 返回键关闭视同「不覆盖」）；推送中模态进度框不可点外/返回关闭。
+ * 与 Dart 的差异：路由只传 address/port，进页重取 `GET /info`（无状态、进程重建安全）；
+ * 传输前弹「覆盖/不覆盖」确认一次应用于整批（返回键关闭视同「不覆盖」）；
+ * 传输中模态进度框不可点外/返回关闭。
  */
 @Composable
 fun SyncDeviceScreen(
@@ -105,23 +111,40 @@ fun SyncDeviceScreen(
         }
     }
 
-    // 推送状态：进度框内容；null = 无进行中的推送
+    // 多选项勾选状态；「全部数据」选中时独占（其余项置灰不可选）
+    var selected by remember { mutableStateOf(setOf<SyncDataType>()) }
+
+    // 传输状态：进度框内容；null = 无进行中的传输
     var pushProgress by remember { mutableStateOf<SyncProgress?>(null) }
-    // 数据类推送的「覆盖/不覆盖」待确认动作
+    // 「覆盖/不覆盖」待确认动作与其方向（弹窗文案随方向调整）
     var overlayAction by remember { mutableStateOf<((Boolean) -> Unit)?>(null) }
+    var overlayIsPush by remember { mutableStateOf(true) }
 
     val onToast: (String) -> Unit = { message ->
         Router.toast(message)
-        // 所有推送路径（成功/失败）最终都以一次 toast 收尾——以之收起进度框
+        // 所有传输路径（成功/失败）最终都以一次 toast 收尾——以之收起进度框
         pushProgress = null
     }
     val onProgress: (String, Int, Int, String) -> Unit = { stage, current, total, message ->
         pushProgress = SyncProgress(stage, current, total, message)
     }
 
-    /** 数据类推送：先确认覆盖方式再执行。 */
-    fun confirmThen(action: (Boolean) -> Unit) {
-        overlayAction = action
+    /** 启动传输：空选择提示；否则弹覆盖确认（一次选择应用于整批）。 */
+    fun startTransfer(isPush: Boolean) {
+        if (selected.isEmpty()) {
+            Router.toast("请先选择要同步的数据")
+            return
+        }
+        overlayIsPush = isPush
+        overlayAction = action@{ overlay ->
+            val currentController = controller ?: return@action
+            pushProgress = SyncProgress(stage = if (isPush) "发送配置" else "同步配置")
+            if (isPush) {
+                currentController.pushSelection(selected, overlay, onToast, onProgress)
+            } else {
+                currentController.pullSelection(selected, overlay, onToast, onProgress)
+            }
+        }
     }
 
     Column(
@@ -207,70 +230,57 @@ fun SyncDeviceScreen(
 
                     Spacer(modifier = Modifier.padding(12.dp))
 
-                    // 七类数据推送入口（对齐 Dart 页面行序；账号类无覆盖确认）
+                    // 方向按钮：左发送（本机 → 对端）/ 右拉取（对端 → 本机）
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    ) {
+                        Button(
+                            onClick = { startTransfer(isPush = true) },
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(46.dp),
+                            shape = RoundedCornerShape(12.dp),
+                        ) { Text(text = "发送配置") }
+                        Button(
+                            onClick = { startTransfer(isPush = false) },
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(46.dp),
+                            shape = RoundedCornerShape(12.dp),
+                        ) { Text(text = "同步配置") }
+                    }
+
+                    Spacer(modifier = Modifier.padding(12.dp))
+
+                    // 同步数据多选项（圆点标识；「全部数据」选中时其余项变灰不可选）
                     SettingGroupCard {
-                        SettingClickRow(
-                            title = "同步完整配置包",
-                            subtitle = "设置、关注、历史和屏蔽数据一起同步",
-                            onClick = {
-                                confirmThen { overlay ->
-                                    pushProgress = SyncProgress(stage = "同步配置包")
-                                    currentController.syncProfile(overlay, onToast, onProgress)
-                                }
-                            },
-                        )
-                        SettingClickRow(
-                            title = "同步关注列表",
-                            subtitle = "",
-                            onClick = {
-                                confirmThen { overlay ->
-                                    pushProgress = SyncProgress(stage = "准备同步关注")
-                                    currentController.syncFollowAndTag(overlay, onToast, onProgress)
-                                }
-                            },
-                        )
-                        SettingClickRow(
-                            title = "同步观看记录",
-                            subtitle = "",
-                            onClick = {
-                                confirmThen { overlay ->
-                                    pushProgress = SyncProgress(stage = "准备同步历史")
-                                    currentController.syncHistory(overlay, onToast, onProgress)
-                                }
-                            },
-                        )
-                        SettingClickRow(
-                            title = "同步弹幕屏蔽词",
-                            subtitle = "",
-                            onClick = {
-                                confirmThen { overlay ->
-                                    pushProgress = SyncProgress(stage = "准备同步屏蔽词")
-                                    currentController.syncBlockedWord(overlay, onToast, onProgress)
-                                }
-                            },
-                        )
-                        SettingClickRow(
-                            title = "同步哔哩哔哩账号",
-                            subtitle = "",
-                            onClick = { currentController.syncBiliAccount(onToast, onProgress) },
-                        )
-                        SettingClickRow(
-                            title = "同步抖音账号",
-                            subtitle = "给 TV 等设备同步网页登录 Cookie",
-                            onClick = { currentController.syncDouyinAccount(onToast, onProgress) },
-                        )
-                        SettingClickRow(
-                            title = "同步斗鱼账号",
-                            subtitle = "给 TV 等设备同步网页登录 Cookie 与自动续期凭据",
-                            onClick = { currentController.syncDouyuAccount(onToast, onProgress) },
-                        )
+                        SyncDataType.entries.forEach { type ->
+                            val allSelected = SyncDataType.ALL in selected
+                            val enabled = type == SyncDataType.ALL || !allSelected
+                            SyncOptionRow(
+                                title = type.label,
+                                checked = type in selected,
+                                enabled = enabled,
+                                onToggle = {
+                                    selected = if (type == SyncDataType.ALL) {
+                                        // 全部数据独占：选中即替换，取消即清空
+                                        if (type in selected) emptySet() else setOf(type)
+                                    } else if (type in selected) {
+                                        selected - type
+                                    } else {
+                                        selected + type
+                                    }
+                                },
+                            )
+                        }
                     }
                 }
             }
         }
     }
 
-    // 覆盖确认（对齐 Dart showOverlayDialog；返回键/点外关闭视同「不覆盖」）
+    // 覆盖确认（一次选择应用于整批；返回键/点外关闭视同「不覆盖」；文案随方向调整）
     overlayAction?.let { action ->
         AlertDialog(
             onDismissRequest = {
@@ -278,7 +288,15 @@ fun SyncDeviceScreen(
                 action(false)
             },
             title = { Text(text = "数据覆盖") },
-            text = { Text(text = "是否覆盖对方设备上的同类数据？选择“不覆盖”会合并同步。") },
+            text = {
+                Text(
+                    text = if (overlayIsPush) {
+                        "是否覆盖对方设备上的同类数据？选择“不覆盖”会合并同步。"
+                    } else {
+                        "是否覆盖本机上的同类数据？选择“不覆盖”会合并同步。"
+                    },
+                )
+            },
             confirmButton = {
                 TextButton(
                     onClick = {
@@ -298,14 +316,57 @@ fun SyncDeviceScreen(
         )
     }
 
-    // 发送侧进度框（对齐 Dart SyncProgressDialog：不可点外/返回关闭）
+    // 传输进度框（对齐 Dart SyncProgressDialog：不可点外/返回关闭）
     pushProgress?.let { progress ->
         Dialog(
             onDismissRequest = { },
             properties = DialogProperties(dismissOnClickOutside = false),
         ) {
-            BackHandler { /* 推送进行中：吞掉返回键 */ }
+            BackHandler { /* 传输进行中：吞掉返回键 */ }
             SyncProgressDialogUi(progress)
         }
+    }
+}
+
+/**
+ * 同步数据多选行：左侧圆点标识（选中 = 主题色实心圆、未选 = 空心描边圆）+ 标题。
+ * [enabled] = false 时整行置灰不可点（「全部数据」选中时的其余选项）。
+ */
+@Composable
+private fun SyncOptionRow(
+    title: String,
+    checked: Boolean,
+    enabled: Boolean,
+    onToggle: () -> Unit,
+) {
+    val contentColor = if (enabled) {
+        MaterialTheme.colorScheme.onSurface
+    } else {
+        MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
+    }
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(enabled = enabled, onClick = onToggle)
+            .padding(horizontal = 16.dp, vertical = 13.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(
+            modifier = Modifier
+                .size(18.dp)
+                .then(
+                    if (checked) {
+                        Modifier.background(contentColor, CircleShape)
+                    } else {
+                        Modifier.border(1.5.dp, contentColor, CircleShape)
+                    },
+                ),
+        )
+        Spacer(modifier = Modifier.width(12.dp))
+        Text(
+            text = title,
+            fontSize = 15.sp,
+            color = contentColor,
+        )
     }
 }

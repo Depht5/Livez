@@ -107,6 +107,16 @@ class SyncClientRequest {
         queryParameters = mapOf("overlay" to if (overlay) "1" else "0"),
     )
 
+    /** POST /sync/settings（task 10-25-lan-sync-batch-ui，Livez 私有）：仅设置 payload。 */
+    suspend fun syncSettings(
+        client: SyncClient,
+        body: String,
+        overlay: Boolean = false,
+    ): Boolean = postJson(
+        client, "settings", body,
+        queryParameters = mapOf("overlay" to if (overlay) "1" else "0"),
+    )
+
     /** POST /sync/account/bilibili（对应 Dart syncBiliAccount）。 */
     suspend fun syncBiliAccount(client: SyncClient, cookie: String): Boolean =
         postJson(client, "account/bilibili", buildJsonObject { put("cookie", cookie) }.toString())
@@ -144,6 +154,36 @@ class SyncClientRequest {
             }
         }
         true
+    }
+
+    /**
+     * GET /sync/{path} 拉取（task 10-25-lan-sync-batch-ui）：返回与推送 body 同构的原始
+     * payload。Livez 私有扩展——Dart 对端无 GET 分支（404）、旧版 Livez 返回 status=false，
+     * 两种情况统一报「对端不支持拉取数据」。账号端点响应含 Cookie，日志不打印 body。
+     */
+    suspend fun pullData(client: SyncClient, path: String): String = withContext(Dispatchers.IO) {
+        val url = "${baseUrl(client)}/sync/$path"
+        com.kotlin_livez.app.app.Log.d("HTTP 拉取 → $url")
+        val request = Request.Builder().url(url).get().build()
+        httpClient.newCall(request).execute().use { resp ->
+            val body = resp.body?.string() ?: ""
+            if (!resp.isSuccessful) {
+                com.kotlin_livez.app.app.Log.e("HTTP 拉取失败 ← $url HTTP ${resp.code}")
+                throw IllegalStateException(
+                    if (resp.code == 404 || resp.code == 405) "对端不支持拉取数据" else "拉取失败（${resp.code}）",
+                )
+            }
+            // 旧版 Livez 导出端点未实现时返回 HTTP 200 + {status:false}
+            val parsed = runCatching { json.parseToJsonElement(body).jsonObject }.getOrNull()
+            val statusFalse = parsed?.get("status")
+                ?.let { (it as? kotlinx.serialization.json.JsonPrimitive)?.content == "false" } == true
+            if (statusFalse) {
+                com.kotlin_livez.app.app.Log.e("HTTP 拉取被拒 ← $url body=$body")
+                throw IllegalStateException("对端不支持拉取数据")
+            }
+            com.kotlin_livez.app.app.Log.d("HTTP 拉取成功 ← $url bytes=${body.length}")
+            body
+        }
     }
 
     private suspend fun postJson(

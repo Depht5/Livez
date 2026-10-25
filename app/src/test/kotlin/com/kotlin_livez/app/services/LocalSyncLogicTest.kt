@@ -1,6 +1,8 @@
 package com.kotlin_livez.app.services
 
 import com.kotlin_livez.app.modules.sync.local_sync.LocalSyncController
+import com.kotlin_livez.app.modules.sync.local_sync.SyncDataType
+import com.kotlin_livez.app.modules.sync.local_sync.SyncDeviceController
 import kotlinx.serialization.json.Json
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
@@ -169,5 +171,48 @@ class LocalSyncLogicTest {
         SyncService.recordConnectedPeer(id = "", name = "", address = "10.0.0.3", type = "")
         val peer = SyncService.connectedPeers.value.single()
         assertEquals("10.0.0.3", peer.name)
+    }
+
+    /* ---------- 批量选项展开（task 10-25-lan-sync-batch-ui） ---------- */
+
+    @Test
+    fun `全部数据展开为七个类别且不含自身`() {
+        val plan = SyncDeviceController.planCategories(setOf(SyncDataType.ALL))
+        assertEquals(
+            listOf(
+                SyncDataType.SETTINGS,
+                SyncDataType.FOLLOW,
+                SyncDataType.HISTORY,
+                SyncDataType.DANMU,
+                SyncDataType.BILIBILI,
+                SyncDataType.DOUYU,
+                SyncDataType.DOUYIN,
+            ),
+            plan,
+        )
+    }
+
+    @Test
+    fun `全部数据与其余选项混选时以全部数据为准`() {
+        val plan = SyncDeviceController.planCategories(
+            setOf(SyncDataType.ALL, SyncDataType.FOLLOW, SyncDataType.DOUYIN),
+        )
+        assertEquals(SyncDeviceController.planCategories(setOf(SyncDataType.ALL)), plan)
+    }
+
+    @Test
+    fun `部分选择按枚举序过滤`() {
+        val plan = SyncDeviceController.planCategories(
+            setOf(SyncDataType.DOUYIN, SyncDataType.SETTINGS, SyncDataType.HISTORY),
+        )
+        assertEquals(
+            listOf(SyncDataType.SETTINGS, SyncDataType.HISTORY, SyncDataType.DOUYIN),
+            plan,
+        )
+    }
+
+    @Test
+    fun `空选择展开为空序列`() {
+        assertEquals(emptyList<SyncDataType>(), SyncDeviceController.planCategories(emptySet()))
     }
 }

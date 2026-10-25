@@ -101,6 +101,21 @@ object ProfileBackupService {
         return json.encodeToString(kotlinx.serialization.json.JsonObject.serializer(), exportProfileMap(dbService, localStorage, appSettings))
     }
 
+    /**
+     * 导出「仅设置」payload（task 10-25-lan-sync-batch-ui）：配置包格式但只含 settings 段，
+     * 供局域网 `POST`/`GET /sync/settings` 通道单独同步设置而不动对端关注/历史。
+     * 导入端复用 [importProfileJson]（缺失分段自动跳过），排除键与设备本机规则两端一致。
+     */
+    fun exportSettingsJson(localStorage: LocalStorageService): String {
+        val payload = buildJsonObject {
+            put("schema", schema)
+            put("schemaVersion", schemaVersion)
+            put("settings", exportSettings(localStorage))
+        }
+        val json = Json { prettyPrint = true; prettyPrintIndent = "  " }
+        return json.encodeToString(kotlinx.serialization.json.JsonObject.serializer(), payload)
+    }
+
     /** isSupportedProfileMap（对应 Dart isSupportedProfileMap）。 */
     fun isSupportedProfileMap(payload: JsonElement?): Boolean {
         val obj = payload as? JsonObject ?: return false

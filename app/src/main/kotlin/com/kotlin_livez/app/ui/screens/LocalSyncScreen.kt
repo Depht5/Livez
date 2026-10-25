@@ -4,6 +4,11 @@ import android.Manifest
 import android.content.pm.PackageManager
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -28,7 +33,6 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
@@ -44,6 +48,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
@@ -267,25 +272,40 @@ fun LocalSyncScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
             Spacer(modifier = Modifier.height(12.dp))
 
             // 连接提示卡（task 10-25-lan-sync-polish）：对端连接到本机时显示，
-            // 样式与发送端设备卡一致（SyncDeviceRow 共用）；无连接时整块不占位
-            if (connectedPeers.isNotEmpty()) {
-                Text(
-                    text = "已连接设备",
-                    fontSize = 14.sp,
-                    fontWeight = FontWeight.Medium,
-                    color = MaterialTheme.colorScheme.onSurface,
-                    modifier = Modifier.padding(start = 28.dp, end = 16.dp, top = 2.dp, bottom = 4.dp),
-                )
-                SettingGroupCard {
-                    connectedPeers.forEach { peer ->
-                        SyncDeviceRow(
-                            name = peer.name,
-                            type = peer.type,
-                            address = peer.address,
-                        )
+            // 样式与发送端设备卡一致（SyncDeviceRow 共用）。进出走展开/收起过渡
+            // （task 10-25-lan-sync-batch-ui）：建立 = 自上向下展开淡入（下方已发现设备栏
+            // 平滑下移）、断开 = 向上收起淡出（平滑上移）。
+            // ⚠ 必须全限定调用：ColumnScope 内的同名扩展是禁用级（spec ui-compose 条目 15）
+            androidx.compose.animation.AnimatedVisibility(
+                visible = connectedPeers.isNotEmpty(),
+                enter = expandVertically(
+                    animationSpec = tween(300),
+                    expandFrom = Alignment.Top,
+                ) + fadeIn(tween(300)),
+                exit = shrinkVertically(
+                    animationSpec = tween(300),
+                    shrinkTowards = Alignment.Top,
+                ) + fadeOut(tween(300)),
+            ) {
+                Column {
+                    Text(
+                        text = "已连接设备",
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.Medium,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        modifier = Modifier.padding(start = 28.dp, end = 16.dp, top = 2.dp, bottom = 4.dp),
+                    )
+                    SettingGroupCard {
+                        connectedPeers.forEach { peer ->
+                            SyncDeviceRow(
+                                name = peer.name,
+                                type = peer.type,
+                                address = peer.address,
+                            )
+                        }
                     }
+                    Spacer(modifier = Modifier.height(12.dp))
                 }
-                Spacer(modifier = Modifier.height(12.dp))
             }
 
             // 已发现设备标题行 + 刷新
@@ -302,14 +322,19 @@ fun LocalSyncScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
                     color = MaterialTheme.colorScheme.onSurface,
                     modifier = Modifier.weight(1f),
                 )
-                IconButton(onClick = { SyncService.refreshClients() }) {
-                    Icon(
-                        imageVector = CustomIcons.Refresh,
-                        contentDescription = "刷新",
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.size(20.dp),
-                    )
-                }
+                // 胶囊文字「刷新」（task 10-25-lan-sync-batch-ui）：样式复刻关注页右上角
+                // 「刷新」（primary 底 surface 字、13sp、内边距 10/6），圆角改 CircleShape 胶囊
+                Text(
+                    text = "刷新",
+                    fontSize = 13.sp,
+                    color = MaterialTheme.colorScheme.surface,
+                    modifier = Modifier
+                        // 先 clip 再 background/clickable（同 FollowTopBar）：防水波纹溢出为直角矩形
+                        .clip(CircleShape)
+                        .background(MaterialTheme.colorScheme.primary, CircleShape)
+                        .clickable { SyncService.refreshClients() }
+                        .padding(horizontal = 10.dp, vertical = 6.dp),
+                )
             }
 
             // 已发现设备列表（UDP 广播回包；空列表显示引导文案）
