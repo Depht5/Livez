@@ -2,7 +2,6 @@ package com.kotlin_livez.app.ui.screens
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -17,7 +16,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
@@ -25,6 +23,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -331,8 +330,10 @@ fun SyncDeviceScreen(
 }
 
 /**
- * 同步数据多选行：左侧圆点标识（选中 = 主题色实心圆、未选 = 空心描边圆）+ 标题。
- * [enabled] = false 时整行置灰不可点（「全部数据」选中时的其余选项）。
+ * 同步数据多选行：左侧 M3 [RadioButton] 圆圈（与设置页选项弹窗同款，onClick=null、
+ * 点击由整行处理）+ 标题；不做整行药丸高亮（用户决策 task 10-25-lan-sync-batch-ui
+ * 第一轮反馈：仅取设置弹窗的圆圈样式）。[enabled] = false 时整行置灰不可点
+ * （「全部数据」选中时的其余选项）。
  */
 @Composable
 private fun SyncOptionRow(
@@ -353,16 +354,10 @@ private fun SyncOptionRow(
             .padding(horizontal = 16.dp, vertical = 13.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Box(
-            modifier = Modifier
-                .size(18.dp)
-                .then(
-                    if (checked) {
-                        Modifier.background(contentColor, CircleShape)
-                    } else {
-                        Modifier.border(1.5.dp, contentColor, CircleShape)
-                    },
-                ),
+        RadioButton(
+            selected = checked,
+            onClick = null,
+            enabled = enabled,
         )
         Spacer(modifier = Modifier.width(12.dp))
         Text(
