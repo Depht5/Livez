@@ -64,7 +64,8 @@ import kotlinx.coroutines.withContext
  * GET 扩展，Dart 对端不支持）。「全部数据」= 配置包 + 斗鱼续期凭据，选中后其余选项变灰。
  *
  * 与 Dart 的差异：路由只传 address/port，进页重取 `GET /info`（无状态、进程重建安全）；
- * 传输前弹「覆盖/不覆盖」确认一次应用于整批（返回键关闭视同「不覆盖」）；
+ * 传输前弹「覆盖/不覆盖」确认一次应用于整批（点外/返回关闭 = 取消本次传输，
+ * task 10-25-overlay-dialog-cancel 有意偏离 Dart 的返回关闭=不覆盖语义）；
  * 传输中模态进度框不可点外/返回关闭。
  */
 @Composable
@@ -281,12 +282,13 @@ fun SyncDeviceScreen(
         }
     }
 
-    // 覆盖确认（一次选择应用于整批；返回键/点外关闭视同「不覆盖」；文案随方向调整）
+    // 覆盖确认（一次选择应用于整批）。点空白/返回 = 取消本次传输（用户决策
+    // task 10-25-overlay-dialog-cancel：原实现点外视同「不覆盖」继续同步，改为直接关闭不传输；
+    // 有意偏离 Dart showOverlayDialog 的返回关闭=不覆盖语义）——只有明确点「覆盖/不覆盖」才执行
     overlayAction?.let { action ->
         AlertDialog(
             onDismissRequest = {
                 overlayAction = null
-                action(false)
             },
             title = { Text(text = "数据覆盖") },
             text = {
