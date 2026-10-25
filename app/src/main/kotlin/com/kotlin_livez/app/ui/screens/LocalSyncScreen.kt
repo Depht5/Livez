@@ -42,6 +42,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -62,6 +63,7 @@ import com.journeyapps.barcodescanner.ScanOptions
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import com.kotlin_livez.app.modules.sync.local_sync.LocalSyncController
+import com.kotlin_livez.app.services.ConnectedPeer
 import com.kotlin_livez.app.services.SyncService
 import com.kotlin_livez.app.ui.PortraitCaptureActivity
 import com.kotlin_livez.app.ui.Router
@@ -99,6 +101,15 @@ fun LocalSyncScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
     val scanClients by controller.scanClients.collectAsStateWithLifecycle()
     // 连接提示卡数据（接收端视角）：对端 GET /info 时由 SyncService 登记
     val connectedPeers by SyncService.connectedPeers.collectAsStateWithLifecycle()
+
+    // 退场内容冻结（第一轮反馈：对端断开时列表先随状态瞬间清空、空壳再收缩，观感是
+    // 闪烁卡顿而非淡出）：AnimatedVisibility 退场期间内容仍随状态重组，须以「最后一帧
+    // 非空列表」渲染，动画结束才 dispose；重进场恒用新列表
+    var lastPeers by remember { mutableStateOf<List<ConnectedPeer>>(emptyList()) }
+    val displayPeers = connectedPeers.ifEmpty { lastPeers }
+    SideEffect {
+        if (connectedPeers.isNotEmpty()) lastPeers = connectedPeers
+    }
 
     var connecting by remember { mutableStateOf(false) }
     var connectError by remember { mutableStateOf<String?>(null) }
@@ -274,7 +285,8 @@ fun LocalSyncScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
             // 连接提示卡（task 10-25-lan-sync-polish）：对端连接到本机时显示，
             // 样式与发送端设备卡一致（SyncDeviceRow 共用）。进出走展开/收起过渡
             // （task 10-25-lan-sync-batch-ui）：建立 = 自上向下展开淡入（下方已发现设备栏
-            // 平滑下移）、断开 = 向上收起淡出（平滑上移）。
+            // 平滑下移）、断开 = 向上收起淡出（平滑上移）。内容用冻结的 [displayPeers]
+            // （见其声明处说明）。
             // ⚠ 必须全限定调用：ColumnScope 内的同名扩展是禁用级（spec ui-compose 条目 15）
             androidx.compose.animation.AnimatedVisibility(
                 visible = connectedPeers.isNotEmpty(),
@@ -282,10 +294,12 @@ fun LocalSyncScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
                     animationSpec = tween(300),
                     expandFrom = Alignment.Top,
                 ) + fadeIn(tween(300)),
+                // 淡出快于收缩（180 < 300ms）：收缩的裁剪边缘还没来得及显形、内容已先
+                // 隐没，观感才是「淡出」而非「被裁走」（第一轮反馈优化）
                 exit = shrinkVertically(
                     animationSpec = tween(300),
                     shrinkTowards = Alignment.Top,
-                ) + fadeOut(tween(300)),
+                ) + fadeOut(tween(180)),
             ) {
                 Column {
                     Text(
@@ -296,7 +310,7 @@ fun LocalSyncScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
                         modifier = Modifier.padding(start = 28.dp, end = 16.dp, top = 2.dp, bottom = 4.dp),
                     )
                     SettingGroupCard {
-                        connectedPeers.forEach { peer ->
+                        displayPeers.forEach { peer ->
                             SyncDeviceRow(
                                 name = peer.name,
                                 type = peer.type,
@@ -324,7 +338,7 @@ fun LocalSyncScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
                 )
                 // 胶囊文字「刷新」（task 10-25-lan-sync-batch-ui）：样式复刻关注页右上角
                 // 「刷新」（primary 底 surface 字、13sp），圆角改 CircleShape 胶囊；
-                // 纵向内边距 4dp（用户反馈：比关注页的 6dp 收窄 2dp，观感过高）
+                        // 纵向内边距 3dp（用户反馈两轮：6→4→3dp，观感过高）
                 Text(
                     text = "刷新",
                     fontSize = 13.sp,
@@ -334,7 +348,7 @@ fun LocalSyncScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
                         .clip(CircleShape)
                         .background(MaterialTheme.colorScheme.primary, CircleShape)
                         .clickable { SyncService.refreshClients() }
-                        .padding(horizontal = 10.dp, vertical = 4.dp),
+                        .padding(horizontal = 10.dp, vertical = 3.dp),
                 )
             }
 
