@@ -230,9 +230,11 @@ fun SyncDeviceScreen(
 
                     Spacer(modifier = Modifier.padding(12.dp))
 
-                    // 方向按钮：左发送（本机 → 对端）/ 右拉取（对端 → 本机）
+                    // 方向按钮：左发送（本机 → 对端）/ 右拉取（对端 → 本机）。
+                    // 水平边距 12dp 对齐 SettingGroupCard 的卡片外边距（用户反馈：
+                    // 按钮通栏过宽，左右边缘应与上下卡片的阴影对齐）
                     Row(
-                        modifier = Modifier.fillMaxWidth(),
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp),
                         horizontalArrangement = Arrangement.spacedBy(12.dp),
                     ) {
                         Button(

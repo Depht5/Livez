@@ -323,7 +323,8 @@ fun LocalSyncScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
                     modifier = Modifier.weight(1f),
                 )
                 // 胶囊文字「刷新」（task 10-25-lan-sync-batch-ui）：样式复刻关注页右上角
-                // 「刷新」（primary 底 surface 字、13sp、内边距 10/6），圆角改 CircleShape 胶囊
+                // 「刷新」（primary 底 surface 字、13sp），圆角改 CircleShape 胶囊；
+                // 纵向内边距 4dp（用户反馈：比关注页的 6dp 收窄 2dp，观感过高）
                 Text(
                     text = "刷新",
                     fontSize = 13.sp,
@@ -333,7 +334,7 @@ fun LocalSyncScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
                         .clip(CircleShape)
                         .background(MaterialTheme.colorScheme.primary, CircleShape)
                         .clickable { SyncService.refreshClients() }
-                        .padding(horizontal = 10.dp, vertical = 6.dp),
+                        .padding(horizontal = 10.dp, vertical = 4.dp),
                 )
             }
 
