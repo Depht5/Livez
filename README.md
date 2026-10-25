@@ -1,3 +1,5 @@
+> ### ⚠ 本项目大量使用AI进行辅助编程。许多功能还在补充和完善阶段，更新频率不定。
+
 # Livez
 
 Livez 是一款基于 Kotlin 与 Jetpack Compose 开发的 Android 原生多平台直播聚合客户端。基于 [June6699/dart_simple_live](https://github.com/June6699/dart_simple_live) 重写，目前支持哔哩哔哩、斗鱼、虎牙和抖音四大直播平台。
