@@ -79,8 +79,8 @@ object ServiceContainer {
         douyuAccount.init()
         followService.install()
         // 局域网同步服务（对应 Dart SyncService 为 GetxService、启动即拉起）：
-        // UDP 发现（23235）+ HTTP 接收（23234）常驻进程生命周期
-        SyncService.install()
+        // UDP 发现（23235）+ HTTP 接收（23234）常驻进程生命周期；context 供多播锁使用
+        SyncService.install(app.applicationContext)
     }
 
     fun context(): Context = app

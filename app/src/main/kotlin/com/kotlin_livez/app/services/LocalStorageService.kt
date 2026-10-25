@@ -2,6 +2,7 @@ package com.kotlin_livez.app.services
 
 import android.content.Context
 import androidx.datastore.core.DataStore
+import androidx.datastore.preferences.core.MutablePreferences
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
@@ -282,26 +283,54 @@ class LocalStorageService(private val appContext: Context) {
         return prefs.asMap().entries.associate { (key, value) -> key.name to value.toString() }
     }
 
-    /** 批量写入 settings（对应 Dart settingsBox.putAll）。 */
+    /** 类型化读取全部 settings（保留 Int/Long/Boolean/Float/String 原生类型；导出配置包用）。 */
+    fun getAllSettingsTyped(): Map<String, Any> {
+        val prefs = runBlocking { appContext.settingsStore.data.first() }
+        return prefs.asMap().entries.associate { (key, value) -> key.name to value }
+    }
+
+    /**
+     * 批量写入 settings（对应 Dart settingsBox.putAll）。
+     * ⚠ 必须按 value 实际类型路由到对应类型键（同 [setValue]），并先清掉同名其它类型键——
+     * [getValue] 按默认值类型路由读取，写错类型键 = 值永远读不到（task 10-25-lan-sync-polish
+     * 修复：此前一律写字符串键，配置包同步的设置全部静默失效）。
+     */
     fun putAllSettings(values: Map<String, Any>) {
         runBlocking {
             appContext.settingsStore.edit { prefs ->
                 for ((key, value) in values) {
-                    prefs[stringPreferencesKey(key)] = value.toString()
+                    removeSettingKeys(prefs, key)
+                    when (value) {
+                        is Int -> prefs[intPreferencesKey(key)] = value
+                        is Long -> prefs[longPreferencesKey(key)] = value
+                        is Boolean -> prefs[booleanPreferencesKey(key)] = value
+                        is Float -> prefs[floatPreferencesKey(key)] = value
+                        is String -> prefs[stringPreferencesKey(key)] = value
+                        else -> Unit
+                    }
                 }
             }
         }
     }
 
-    /** 按 key 删除 settings（对应 Dart settingsBox.deleteAll）。 */
+    /** 按 key 删除 settings（对应 Dart settingsBox.deleteAll）——删全部 5 类类型键。 */
     fun deleteAllSettings(keys: List<String>) {
         runBlocking {
             appContext.settingsStore.edit { prefs ->
                 for (key in keys) {
-                    prefs.remove(stringPreferencesKey(key))
+                    removeSettingKeys(prefs, key)
                 }
             }
         }
+    }
+
+    /** 清掉同名 key 的全部类型键（只会有一种存在，全删以防残留遮蔽）。 */
+    private fun removeSettingKeys(prefs: MutablePreferences, key: String) {
+        prefs.remove(intPreferencesKey(key))
+        prefs.remove(longPreferencesKey(key))
+        prefs.remove(booleanPreferencesKey(key))
+        prefs.remove(floatPreferencesKey(key))
+        prefs.remove(stringPreferencesKey(key))
     }
 
     /** 写入单个屏蔽预设（对应 Dart shieldPresetBox.put）。 */

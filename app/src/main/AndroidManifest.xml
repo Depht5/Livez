@@ -20,6 +20,9 @@
     <uses-feature
         android:name="android.hardware.camera"
         android:required="false" />
+    <!-- 局域网同步 UDP 发现（task 10-25-lan-sync-polish）：接收 Wi-Fi 广播帧必须持
+         MulticastLock，普通权限、无需运行时申请 -->
+    <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
 
     <application
         android:name=".LiveApp"

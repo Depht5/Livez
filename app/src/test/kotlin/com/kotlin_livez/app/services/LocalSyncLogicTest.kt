@@ -119,4 +119,55 @@ class LocalSyncLogicTest {
         assertNull(body.ltp0)
         assertNull(body.dyDid)
     }
+
+    /* ---------- 设置类型链（task 10-25-lan-sync-polish F3） ---------- */
+
+    @Test
+    fun `设置值转换保留原生类型`() {
+        assertEquals(true, ProfileBackupService.jsonSettingValue(kotlinx.serialization.json.JsonPrimitive(true)))
+        assertEquals(27, ProfileBackupService.jsonSettingValue(kotlinx.serialization.json.JsonPrimitive(27)))
+        assertEquals(
+            5000000000L,
+            ProfileBackupService.jsonSettingValue(kotlinx.serialization.json.JsonPrimitive(5000000000L)),
+        )
+        assertEquals(1.5f, ProfileBackupService.jsonSettingValue(kotlinx.serialization.json.JsonPrimitive(1.5f)))
+        // 字符串保持字符串（JSON 引号语义），即便长得像数字
+        assertEquals(
+            "abc",
+            ProfileBackupService.jsonSettingValue(kotlinx.serialization.json.JsonPrimitive("abc")),
+        )
+    }
+
+    @Test
+    fun `设置值导出与导入 round-trip 类型不变`() {
+        val samples = listOf(true, 42, 3.5f, "文本", "12345")
+        for (value in samples) {
+            val exported = ProfileBackupService.settingValueToJson(value)
+            assertEquals(value, ProfileBackupService.jsonSettingValue(exported))
+        }
+    }
+
+    /* ---------- 已连接设备登记（task 10-25-lan-sync-polish F2） ---------- */
+
+    @Test
+    fun `已连接设备按地址去重并刷新到队首`() {
+        SyncService.connectedPeers.value = emptyList()
+        SyncService.recordConnectedPeer(id = "1", name = "A", address = "10.0.0.1", type = "android")
+        SyncService.recordConnectedPeer(id = "2", name = "B", address = "10.0.0.2", type = "android")
+        // A 再次连接（刷新）：仍只有 2 条，A 回到队首
+        SyncService.recordConnectedPeer(id = "1", name = "A2", address = "10.0.0.1", type = "android")
+        val peers = SyncService.connectedPeers.value
+        assertEquals(2, peers.size)
+        assertEquals("10.0.0.1", peers[0].address)
+        assertEquals("A2", peers[0].name)
+        assertEquals("10.0.0.2", peers[1].address)
+    }
+
+    @Test
+    fun `无身份的对端以地址作为名称`() {
+        SyncService.connectedPeers.value = emptyList()
+        SyncService.recordConnectedPeer(id = "", name = "", address = "10.0.0.3", type = "")
+        val peer = SyncService.connectedPeers.value.single()
+        assertEquals("10.0.0.3", peer.name)
+    }
 }

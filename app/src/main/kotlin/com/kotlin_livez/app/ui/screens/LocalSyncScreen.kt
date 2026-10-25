@@ -60,6 +60,7 @@ import com.kotlin_livez.app.ui.Router
 import com.kotlin_livez.app.ui.components.QrCodeImage
 import com.kotlin_livez.app.ui.components.SettingClickRow
 import com.kotlin_livez.app.ui.components.SettingGroupCard
+import com.kotlin_livez.app.ui.components.SyncDeviceRow
 import com.kotlin_livez.app.ui.theme.CustomIcons
 
 /**
@@ -82,6 +83,8 @@ fun LocalSyncScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
     }
     val addressText by controller.addressText.collectAsStateWithLifecycle()
     val scanClients by controller.scanClients.collectAsStateWithLifecycle()
+    // 连接提示卡数据（接收端视角）：对端 GET /info 时由 SyncService 登记
+    val connectedPeers by SyncService.connectedPeers.collectAsStateWithLifecycle()
 
     var connecting by remember { mutableStateOf(false) }
     var connectError by remember { mutableStateOf<String?>(null) }
@@ -232,6 +235,28 @@ fun LocalSyncScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
             }
 
             Spacer(modifier = Modifier.height(12.dp))
+
+            // 连接提示卡（task 10-25-lan-sync-polish）：对端连接到本机时显示，
+            // 样式与发送端设备卡一致（SyncDeviceRow 共用）；无连接时整块不占位
+            if (connectedPeers.isNotEmpty()) {
+                Text(
+                    text = "已连接设备",
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.Medium,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier.padding(start = 28.dp, end = 16.dp, top = 2.dp, bottom = 4.dp),
+                )
+                SettingGroupCard {
+                    connectedPeers.forEach { peer ->
+                        SyncDeviceRow(
+                            name = peer.name,
+                            type = peer.type,
+                            address = peer.address,
+                        )
+                    }
+                }
+                Spacer(modifier = Modifier.height(12.dp))
+            }
 
             // 已发现设备标题行 + 刷新
             Row(
@@ -416,7 +441,7 @@ private fun LocalSyncInfoSheet(onDismiss: () -> Unit) {
             if (httpRunning && addresses.isNotEmpty()) {
                 Spacer(modifier = Modifier.height(12.dp))
                 Text(
-                    text = "请使用其他Simple Live客户端扫描上方二维码\n建立连接后可选择需要同步的数据",
+                    text = "请使用其他客户端扫描上方二维码\n建立连接后可选择需要同步的数据",
                     fontSize = 13.sp,
                     textAlign = TextAlign.Center,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,

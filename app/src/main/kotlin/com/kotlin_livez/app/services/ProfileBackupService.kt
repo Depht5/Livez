@@ -269,14 +269,27 @@ object ProfileBackupService {
 
     private fun exportSettings(localStorage: LocalStorageService): JsonObject {
         return buildJsonObject {
-            for ((key, value) in localStorage.getAllSettings()) {
+            // 类型化导出（task 10-25）：保留 Int/Boolean/Float 原始类型，接收端按类型落库；
+            // 此前 getAllSettings() 全部 toString 会导致对端导入后读不到值
+            for ((key, value) in localStorage.getAllSettingsTyped()) {
                 if (key in excludedSettings) continue
                 // 本机专属配置不导出（避免泄漏本机斗鱼设备号）
                 if (key in deviceLocalSettings) continue
-                put(key, value)
+                put(key, settingValueToJson(value))
             }
         }
     }
+
+    /** 类型化设置值 → JSON 元素（与 [jsonSettingValue] 互逆；供导出用）。 */
+    internal fun settingValueToJson(value: Any): kotlinx.serialization.json.JsonElement =
+        when (value) {
+            is Boolean -> kotlinx.serialization.json.JsonPrimitive(value)
+            is Int -> kotlinx.serialization.json.JsonPrimitive(value)
+            is Long -> kotlinx.serialization.json.JsonPrimitive(value)
+            is Float -> kotlinx.serialization.json.JsonPrimitive(value)
+            is String -> kotlinx.serialization.json.JsonPrimitive(value)
+            else -> kotlinx.serialization.json.JsonPrimitive(value.toString())
+        }
 
     private fun exportAccounts(localStorage: LocalStorageService): JsonObject {
         return buildJsonObject {
@@ -358,7 +371,7 @@ object ProfileBackupService {
             if (key in excludedSettings) continue
             // 过滤外部传入的本机专属配置，避免覆盖本机设备号
             if (key in deviceLocalSettings) continue
-            values[key] = safeJsonValue(value)
+            values[key] = jsonSettingValue(value)
         }
         summary.settings = values.size
         // 覆盖导入走了清理路径：把本机缓存值一并写回（未缓存则保持“无值”，由账号服务重新生成）
@@ -582,15 +595,26 @@ object ProfileBackupService {
             .sorted()
     }
 
-    /** 安全 JSON 值（对应 Dart _safeJsonValue）。 */
-    private fun safeJsonValue(value: JsonElement?): String {
-        return when (value) {
-            null -> ""
-            is JsonPrimitive -> value.content
-            is JsonArray -> value.toString()
-            is JsonObject -> value.toString()
-            else -> ""
+    /**
+     * 设置值类型化转换（task 10-25，对应 Dart _safeJsonValue 的动态类型语义）：
+     * JSON 字符串 → String；true/false → Boolean；整数 → Int/Long；小数 → Float。
+     * ⚠ DataStore 的键按类型路由（见 LocalStorageService.putAllSettings），转换错类型 = 值读不到。
+     * 兼容性：旧版导出的全字符串备份里“数字样式字符串”会被按数字导入（与读取端路由对齐），仅影响旧文件。
+     */
+    internal fun jsonSettingValue(value: JsonElement?): Any {
+        if (value is JsonPrimitive) {
+            return when {
+                value.isString -> value.content
+                value.content == "true" -> true
+                value.content == "false" -> false
+                else -> value.content.toIntOrNull()
+                    ?: value.content.toLongOrNull()
+                    ?: value.content.toFloatOrNull()
+                    ?: value.content
+            }
         }
+        // null / 数组 / 对象：设置项不会出现，保底空串（同旧实现）
+        return ""
     }
 
     private fun safeJsonElement(value: JsonElement): JsonElement = value

@@ -198,10 +198,11 @@ class RemoteSyncWebDAVController : BaseController() {
         files[userSettingsJsonName] = jsonDataBytes(
             buildJsonObject {
                 put("data", buildJsonObject {
-                    for ((key, value) in localStorage.getAllSettings()) {
+                    // 类型化导出（同 ProfileBackupService.exportSettings，保留原生类型）
+                    for ((key, value) in localStorage.getAllSettingsTyped()) {
                         // 本机专属配置（斗鱼设备号）不随备份上传，避免多设备共用同一 did
                         if (key in ProfileBackupService.deviceLocalSettings) continue
-                        put(key, value)
+                        put(key, ProfileBackupService.settingValueToJson(value))
                     }
                 })
             },

@@ -1,5 +1,7 @@
 package com.kotlin_livez.app.services
 
+import android.content.Context
+import android.net.wifi.WifiManager
 import android.os.Build
 import com.kotlin_livez.app.app.Log
 import com.kotlin_livez.app.di.ServiceContainer
@@ -39,6 +41,26 @@ object SyncService {
     const val httpPort = 23234
 
     val scanClients = MutableStateFlow<List<SyncClient>>(emptyList())
+
+    /**
+     * 已连接到本机的对端设备（按最近活跃排序、按地址去重、最多 [MAX_CONNECTED_PEERS] 个）。
+     * 由 `/info` 请求登记（连接入口），供接收端「局域网同步」页显示连接提示卡。
+     */
+    val connectedPeers = MutableStateFlow<List<ConnectedPeer>>(emptyList())
+
+    /** 登记来访设备：同名地址刷新至队首（Dart 发送方无身份参数 → 仅显示地址）。 */
+    fun recordConnectedPeer(id: String, name: String, address: String, type: String) {
+        val peer = ConnectedPeer(
+            id = id,
+            name = name.ifBlank { address },
+            address = address,
+            type = type,
+            lastSeenAt = System.currentTimeMillis(),
+        )
+        connectedPeers.value =
+            (listOf(peer) + connectedPeers.value.filter { it.address != address })
+                .take(MAX_CONNECTED_PEERS)
+    }
     val ipAddress = MutableStateFlow("")
     val httpRunning = MutableStateFlow(false)
     val httpErrorMsg = MutableStateFlow("")
@@ -52,6 +74,13 @@ object SyncService {
     private var httpServer: SyncHttpServer? = null
 
     /**
+     * 多播锁：Android Wi-Fi 芯片默认丢弃发往本机的广播/组播帧以省电，不持锁则
+     * UDP 发现广播一律收不到（真机实证 2026-10-25：双方互收不到、本机回环可见、TCP 正常）。
+     * 进程生命周期内常驻（setReferenceCounted(false)，无需配对 release）。
+     */
+    private var multicastLock: WifiManager.MulticastLock? = null
+
+    /**
      * 接收侧 UI 事件流（对应 Dart SyncProgressDialog 的 show/update/dismiss + SmartDialog.showToast）。
      * NanoHTTPD 服务线程以 [emitEvent] 发射；全局宿主 `ui/components/SyncProgressHost.kt` 收集渲染，
      * 使任意页面被推送时都可见。
@@ -63,11 +92,28 @@ object SyncService {
         _syncUiEvents.tryEmit(event)
     }
 
-    /** 服务启动（对应 Dart onInit）。 */
-    fun install() {
+    private const val MAX_CONNECTED_PEERS = 5
+
+    /** 服务启动（对应 Dart onInit）。[context] 用于获取 WifiManager 持多播锁。 */
+    fun install(context: Context) {
         deviceId = UUID.randomUUID().toString().split("-").first()
+        acquireMulticastLock(context)
         listenUDP()
         initServer()
+    }
+
+    /** 持有多播锁（幂等；拿不到 Wi-Fi 服务时静默跳过，发现功能退化为手动输入地址）。 */
+    private fun acquireMulticastLock(context: Context) {
+        if (multicastLock?.isHeld == true) return
+        runCatching {
+            val wifi = context.applicationContext
+                .getSystemService(Context.WIFI_SERVICE) as? WifiManager ?: return
+            multicastLock = wifi.createMulticastLock("livez_sync").apply {
+                setReferenceCounted(false)
+                acquire()
+            }
+            Log.d("MulticastLock 已持有（UDP 广播接收就绪）")
+        }.onFailure { Log.logPrint(it) }
     }
 
     val lanErrorMsg: String
@@ -168,14 +214,19 @@ object SyncService {
     }
 
     /** 统一的 UDP 广播出口：组包在调用线程、发送在独立守护线程（见 sendHello 的主线程限制说明），
-     *  成功后回传日志文案由 [successLog] 提供。 */
+     *  成功后回传日志文案由 [successLog] 提供。目标为「各接口子网定向广播 + 255.255.255.255 兜底」
+     *  （部分 AP 不在客户端间转发受限广播，子网定向更可靠）。 */
     private fun sendBroadcast(payloadJson: String, successLog: () -> String) {
         val socket = udpSocket ?: return
         if (!udpRunning.value) return
         val payload = payloadJson.toByteArray(Charsets.UTF_8)
         thread(isDaemon = true, name = "sync-udp-send") {
             try {
-                socket.send(DatagramPacket(payload, payload.size, broadcastAddress(), udpPort))
+                for (target in broadcastTargets()) {
+                    runCatching {
+                        socket.send(DatagramPacket(payload, payload.size, target, udpPort))
+                    }
+                }
                 Log.d(successLog())
             } catch (e: Exception) {
                 Log.logPrint(e)
@@ -183,7 +234,23 @@ object SyncService {
         }
     }
 
-    private fun broadcastAddress(): InetAddress = InetAddress.getByName("255.255.255.255")
+    /** 广播目标集合：各已启用 IPv4 接口的子网定向广播地址 + 受限广播兜底，去重。 */
+    private fun broadcastTargets(): List<InetAddress> {
+        val targets = mutableListOf<InetAddress>()
+        runCatching {
+            val interfaces = NetworkInterface.getNetworkInterfaces()
+            while (interfaces.hasMoreElements()) {
+                val intf = interfaces.nextElement()
+                if (intf.isLoopback || !intf.isUp) continue
+                for (interfaceAddress in intf.interfaceAddresses) {
+                    val broadcast = interfaceAddress.broadcast ?: continue
+                    runCatching { targets.add(broadcast) }
+                }
+            }
+        }
+        targets.add(InetAddress.getByName("255.255.255.255"))
+        return targets.distinct()
+    }
 
     /** 刷新客户端列表（对应 Dart refreshClients）。 */
     fun refreshClients() {
@@ -282,6 +349,15 @@ class SyncClient(
     val type: String,
 )
 
+/** 已连接到本机的对端设备（连接提示卡数据；[SyncService.connectedPeers]）。 */
+data class ConnectedPeer(
+    val id: String,
+    val name: String,
+    val address: String,
+    val type: String,
+    val lastSeenAt: Long,
+)
+
 /** 接收侧同步 UI 事件（对应 Dart SyncProgressDialog 系列 + SmartDialog.showToast 的时机语义）。 */
 sealed interface SyncUiEvent {
     /** 收到推送块，弹出进度框。 */
@@ -341,14 +417,27 @@ class SyncHttpServer(port: Int) : NanoHTTPD(port) {
                 put("type", "android")
                 put("platform", "android")
             })
-            method == Method.GET && uri == "/info" -> toJsonResponse(buildJsonObject {
-                put("id", service.deviceId)
-                put("type", "android")
-                put("name", service.getDeviceName())
-                put("version", com.kotlin_livez.app.BuildConfig.VERSION_NAME)
-                put("address", service.ipAddress.value)
-                put("port", service.httpPort)
-            })
+            method == Method.GET && uri == "/info" -> {
+                // 连接提示（task 10-25-lan-sync-polish）：登记来访设备。
+                // 发送端在 query 附带自身身份（fromId/fromName/fromType，Kotlin 端私有扩展）；
+                // Dart 发送方无这些参数 → 退化为仅按地址显示。
+                runCatching {
+                    service.recordConnectedPeer(
+                        id = parms["fromId"].orEmpty(),
+                        name = parms["fromName"].orEmpty(),
+                        address = session.remoteIpAddress ?: parms["http-client-ip"].orEmpty(),
+                        type = parms["fromType"].orEmpty(),
+                    )
+                }
+                toJsonResponse(buildJsonObject {
+                    put("id", service.deviceId)
+                    put("type", "android")
+                    put("name", service.getDeviceName())
+                    put("version", com.kotlin_livez.app.BuildConfig.VERSION_NAME)
+                    put("address", service.ipAddress.value)
+                    put("port", service.httpPort)
+                })
+            }
             method == Method.POST && uri.startsWith("/sync/") ->
                 handleSync(uri.removePrefix("/sync/"), session, parms)
             else -> toJsonResponse(buildJsonObject {

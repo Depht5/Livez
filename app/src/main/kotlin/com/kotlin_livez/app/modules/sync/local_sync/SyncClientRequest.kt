@@ -32,9 +32,14 @@ class SyncClientRequest {
 
     private fun baseUrl(client: SyncClient) = "http://${client.address}:${client.port}"
 
-    /** GET /info（对应 Dart getClientInfo）。 */
+    /** GET /info（对应 Dart getClientInfo）。
+     *  query 附带自身身份（fromId/fromName/fromType，task 10-25 连接提示卡）：
+     *  Kotlin 接收端据此显示来访设备名/类型；Dart 接收端忽略未知参数，互通不受影响。 */
     suspend fun getClientInfo(client: SyncClient): SyncClientInfoModel = withContext(Dispatchers.IO) {
-        val url = "${baseUrl(client)}/info"
+        val url = "${baseUrl(client)}/info" +
+            "?fromId=${com.kotlin_livez.app.services.SyncService.deviceId}" +
+            "&fromName=${java.net.URLEncoder.encode(com.kotlin_livez.app.services.SyncService.getDeviceName(), "UTF-8")}" +
+            "&fromType=android"
         com.kotlin_livez.app.app.Log.d("HTTP 连接 → $url")
         val request = Request.Builder().url(url).get().build()
         httpClient.newCall(request).execute().use { resp ->

@@ -83,7 +83,7 @@ class LocalSyncController(
                 onError(
                     "局域网同步只支持两台设备在同一 Wi-Fi/局域网内互相访问。" +
                         "如果两台设备不在同一局域网，需要先配置 VPN、端口转发或内网穿透；" +
-                        "否则请改用远程房间同步或 WebDAV。\n\n错误详情：${e.message}",
+                        "否则请改用 WebDAV。\n\n错误详情：${e.message}",
                 )
             }
         }

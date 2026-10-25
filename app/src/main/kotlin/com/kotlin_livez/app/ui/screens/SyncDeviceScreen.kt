@@ -12,8 +12,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
-import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
@@ -47,6 +45,7 @@ import com.kotlin_livez.app.services.SyncProgress
 import com.kotlin_livez.app.ui.Router
 import com.kotlin_livez.app.ui.components.SettingClickRow
 import com.kotlin_livez.app.ui.components.SettingGroupCard
+import com.kotlin_livez.app.ui.components.SyncDeviceRow
 import com.kotlin_livez.app.ui.components.SyncProgressDialogUi
 import com.kotlin_livez.app.ui.theme.CustomIcons
 import kotlinx.coroutines.Dispatchers
@@ -185,44 +184,13 @@ fun SyncDeviceScreen(
                         .verticalScroll(rememberScrollState())
                         .padding(vertical = 12.dp),
                 ) {
-                    // 设备信息卡（Dart 按 type 映射品牌图标；此处以首字母圆形头像近似——
-                    // CustomIcons 无品牌图标资产，属有意简化）
+                    // 设备信息卡（与接收端连接提示卡共用 SyncDeviceRow 样式）
                     SettingGroupCard {
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(horizontal = 16.dp, vertical = 12.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Box(
-                                modifier = Modifier
-                                    .size(40.dp)
-                                    .background(
-                                        MaterialTheme.colorScheme.surfaceContainerHigh,
-                                        CircleShape,
-                                    ),
-                                contentAlignment = Alignment.Center,
-                            ) {
-                                Text(
-                                    text = currentInfo.type.take(1).uppercase().ifEmpty { "?" },
-                                    style = MaterialTheme.typography.titleMedium,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
-                            }
-                            Spacer(modifier = Modifier.width(12.dp))
-                            Column {
-                                Text(
-                                    text = currentInfo.name,
-                                    style = MaterialTheme.typography.titleMedium,
-                                    color = MaterialTheme.colorScheme.onSurface,
-                                )
-                                Text(
-                                    text = "${currentInfo.type.uppercase()}   ${currentInfo.address}",
-                                    fontSize = 13.sp,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
-                            }
-                        }
+                        SyncDeviceRow(
+                            name = currentInfo.name,
+                            type = currentInfo.type,
+                            address = currentInfo.address,
+                        )
                     }
 
                     Spacer(modifier = Modifier.padding(12.dp))

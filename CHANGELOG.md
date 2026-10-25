@@ -3,9 +3,9 @@
 本文件记录 `kotlin_re/`（Livez Android 原生版）每个发布版本的改动，倒序排列。
 版本号规则、发布日期口径与发布流程见 [`.trellis/spec/kotlin_re/release-and-versioning.md`](../.trellis/spec/kotlin_re/release-and-versioning.md)。
 
-## [0.2.4.261025] - 2026-10-25（versionCode 22）
+## [0.2.4.261025] - 2026-10-25（versionCode 23）
 
-### 修复（依据真机抓取日志诊断，Xiaomi M332BF / Android 17 ↔ TB371FC）
+### 修复（真机日志诊断：Xiaomi M332BF / Android 17 ↔ TB371FC，含两轮优化）
 
 - **接收端同步完成即闪退**（`ClassCastException: Integer cannot be cast to String`）：
   `FollowService` 的 `kUpdateFollow` 监听器声明为 `listen<String>`，而同步/备份/导入路径按
@@ -14,10 +14,22 @@
   `session.inputStream.readBytes()` 读到 body 末尾后会继续等 keep-alive 连接的下一包，
   直至 5s socket 超时——每次 POST 同步必超时。改用 `parseBody`（按 content-length 精确读取，
   非表单 body 存于 `files["postData"]`）
-- **设备发现失效**：UDP 广播（hello / 自身信息）在主线程执行 `socket.send`，被 BlockGuard 以
-  `NetworkOnMainThreadException` 拦截，广播从未发出（Dart 无此限制，移植时未踩到）——发送挪至
-  独立守护线程
+- **UDP 广播未发出**：`sendHello`/`sendInfo` 在主线程执行 `socket.send`，被 BlockGuard 以
+  `NetworkOnMainThreadException` 拦截（Dart 无此限制）——发送挪至独立守护线程
+- **「已发现设备」列表恒空**：Android Wi-Fi 芯片默认丢弃广播帧，现持有 MulticastLock
+  （新增 `CHANGE_WIFI_MULTICAST_STATE` 权限），广播地址改为子网定向优先 + 255.255.255.255 兜底
+- **设置配置同步后未生效**：配置包链路三层全部字符串化——导出 `toString()`、导入一律转 String、
+  写入只写字符串键，而读取按类型路由到 int/bool 等类型键，导致导入值永远读不到（覆盖模式还清不掉
+  旧类型键）。现整链类型化：导出保留原生类型、导入按 JSON 语义转换、写入/删除覆盖全部类型键；
+  同步/备份/WebDAV 三条路径一并修复，导入后设置即时生效
 - 启动日志 `Serving at` 打印的是 StateFlow 对象而非地址值（取 `.value` 修正）
+- 页面文案：底部提示与连接失败弹窗移除已下线的「远程房间同步」引用
+
+### 新增
+
+- **接收端连接提示卡**：对端连接到本机时，「局域网同步」页在连接按钮与已发现设备之间显示
+  已连接设备卡（与发送端设备卡同一样式）；发送端连接时上报自身身份（Dart 对端连接则显示地址）
+- 信息弹层二维码下方提示文案去掉「Simple Live」字样
 
 ## [0.2.4.261024] - 2026-10-24（versionCode 20）
 
