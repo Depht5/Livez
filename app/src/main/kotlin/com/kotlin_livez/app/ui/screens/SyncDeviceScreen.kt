@@ -42,6 +42,7 @@ import com.kotlin_livez.app.modules.sync.local_sync.SyncClientRequest
 import com.kotlin_livez.app.modules.sync.local_sync.SyncDeviceController
 import com.kotlin_livez.app.services.SyncClient
 import com.kotlin_livez.app.services.SyncProgress
+import com.kotlin_livez.app.services.SyncService
 import com.kotlin_livez.app.ui.Router
 import com.kotlin_livez.app.ui.components.SettingClickRow
 import com.kotlin_livez.app.ui.components.SettingGroupCard
@@ -92,6 +93,16 @@ fun SyncDeviceScreen(
     DisposableEffect(controller) {
         // 出栈即断开连接（task 10-25-lan-sync-polish 用户决策）：通知对端移除连接提示卡
         onDispose { controller?.disconnect() }
+    }
+
+    // 对端离线（其退出连接页/关闭应用的 UDP bye 帧）：正在连接的设备离线 → 提示并自动返回
+    LaunchedEffect(address) {
+        SyncService.peerBye.collect { byeAddress ->
+            if (byeAddress == address) {
+                Router.toast("连接已中断")
+                onBack()
+            }
+        }
     }
 
     // 推送状态：进度框内容；null = 无进行中的推送

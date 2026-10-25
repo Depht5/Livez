@@ -60,37 +60,15 @@ object SyncService {
             lastSeenAt = System.currentTimeMillis(),
         )
         connectedPeers.value =
-            (listOf(peer) + existing.filter { it.address != address && !isPeerExpired(it) })
+            (listOf(peer) + existing.filter { it.address != address })
                 .take(MAX_CONNECTED_PEERS)
         return isNew
     }
 
-    /** 刷新既有对端活跃时间（推送类 `/sync` 请求途经；不存在则忽略，不触发「已连接」）。 */
-    fun touchConnectedPeer(address: String) {
-        if (address.isEmpty()) return
-        val existing = connectedPeers.value
-        val index = existing.indexOfFirst { it.address == address }
-        if (index < 0) return
-        connectedPeers.value = existing.toMutableList().apply {
-            set(index, existing[index].copy(lastSeenAt = System.currentTimeMillis()))
-        }
-    }
-
-    /** 移除对端（连接端退出设备页的显式断开 `/bye`；静默，无 toast）。 */
+    /** 移除对端（`/bye` 请求或 UDP bye 帧；静默，无 toast）。 */
     fun removeConnectedPeer(address: String) {
         if (address.isEmpty()) return
         connectedPeers.value = connectedPeers.value.filter { it.address != address }
-    }
-
-    /** 对端活跃超时即移除（协议无断开信号，以请求静默期近似「已断开」）。 */
-    private fun isPeerExpired(peer: ConnectedPeer): Boolean =
-        System.currentTimeMillis() - peer.lastSeenAt > PEER_TTL_MS
-
-    /** 周期清理过期对端（服务运行期间由 [sweeperThread] 驱动）。 */
-    private fun pruneConnectedPeers() {
-        val existing = connectedPeers.value
-        val alive = existing.filter { !isPeerExpired(it) }
-        if (alive.size != existing.size) connectedPeers.value = alive
     }
     val ipAddress = MutableStateFlow("")
     val httpRunning = MutableStateFlow(false)
@@ -123,15 +101,17 @@ object SyncService {
         _syncUiEvents.tryEmit(event)
     }
 
-    private const val MAX_CONNECTED_PEERS = 5
+    /**
+     * 对端离线通知（UDP bye 帧的源地址流）：本端页面据此更新——
+     * 局域网连接页从「已发现设备」移除该地址；设备页若正连着该地址则弹「连接已中断」并自动返回。
+     */
+    private val _peerBye = MutableSharedFlow<String>(extraBufferCapacity = 16)
+    val peerBye: SharedFlow<String> = _peerBye
 
-    /** 对端请求静默超过该时长视为已断开（连接提示卡消失；再次请求会重新出现并重弹 toast）。 */
-    private const val PEER_TTL_MS = 30_000L
+    private const val MAX_CONNECTED_PEERS = 5
 
     @Volatile
     private var started = false
-
-    private var sweeperThread: Thread? = null
 
     /**
      * 启动同步服务（会话化，task 10-25-lan-sync-polish 用户决策：服务随「局域网同步」流程启停，
@@ -145,16 +125,6 @@ object SyncService {
         acquireMulticastLock(context)
         listenUDP()
         initServer()
-        sweeperThread = thread(name = "sync-peer-sweeper", isDaemon = true) {
-            try {
-                while (started) {
-                    Thread.sleep(5_000)
-                    if (!started) break
-                    pruneConnectedPeers()
-                }
-            } catch (_: InterruptedException) {
-            }
-        }
     }
 
     /** 持有多播锁（幂等；拿不到 Wi-Fi 服务时静默跳过，发现功能退化为手动输入地址）。 */
@@ -221,8 +191,16 @@ object SyncService {
             val data = Json.parseToJsonElement(str).jsonObject
             // 自己的广播不处理
             if (data["id"]?.strOrEmpty() == deviceId) return
+            val type = data["type"]?.strOrEmpty()
+            // 对端离线（其服务停止时的 UDP bye 帧）：从发现列表移除并通知页面
+            if (type == "bye") {
+                scanClients.value = scanClients.value.filter { it.address != fromAddress }
+                _peerBye.tryEmit(fromAddress)
+                Log.i("UDP 对端离线：$fromAddress")
+                return
+            }
             // hello 广播：HTTP 服务已启动则回复自身信息
-            if (data["type"]?.strOrEmpty() == "hello") {
+            if (type == "hello") {
                 if (httpRunning.value) {
                     sendInfo()
                 }
@@ -307,10 +285,9 @@ object SyncService {
         return targets.distinct()
     }
 
-    /** 刷新客户端列表（对应 Dart refreshClients）：清空后**同时广播 hello 与自身 info**。
-     *  只发 hello 的话，已停留在页面的对端只能回 info（进不了它的列表）——双向都要主动报身份。 */
+    /** 刷新客户端列表：**不清空列表**、立即重播 hello + 自身 info（列表随对端回包增量更新）。
+     *  Dart 会先清空，但清空后要等对端回包（最长约一个广播周期）才回填，观感是「按了没反应」。 */
     fun refreshClients() {
-        scanClients.value = emptyList()
         sendHello()
         sendInfo()
     }
@@ -369,17 +346,36 @@ object SyncService {
 
     /** 停止服务（幂等）：关 socket/HTTP、释放多播锁、**清空发现与已连接列表**（退出同步页时调用）。 */
     fun stop() {
-        if (!started) {
-            // 未启动也可能残留上一次的半开状态，仍执行资源回收
-        }
         started = false
-        sweeperThread?.interrupt()
-        sweeperThread = null
-        try {
-            udpSocket?.close()
-        } catch (_: Exception) {
-        }
+        // 先向已连接对端发 UDP bye（对端据此弹「连接已中断」并移除连接卡），发完再关 socket。
+        // 发送放独立线程：本函数在主线程被调（路由栈监视/组合销毁），主线程发 UDP 会撞 BlockGuard；
+        // socket 移交该线程关闭，避免「先关 socket 导致 bye 发不出去」的竞态。
+        val socket = udpSocket
+        val peers = connectedPeers.value.toList()
         udpSocket = null
+        if (socket != null && !socket.isClosed) {
+            thread(isDaemon = true, name = "sync-udp-bye") {
+                runCatching {
+                    val bye = buildJsonObject {
+                        put("id", deviceId)
+                        put("type", "bye")
+                    }.toString().toByteArray(Charsets.UTF_8)
+                    for (peer in peers) {
+                        runCatching {
+                            socket.send(
+                                DatagramPacket(bye, bye.size, InetAddress.getByName(peer.address), udpPort),
+                            )
+                        }
+                    }
+                    for (target in broadcastTargets()) {
+                        runCatching {
+                            socket.send(DatagramPacket(bye, bye.size, target, udpPort))
+                        }
+                    }
+                }
+                runCatching { socket.close() }
+            }
+        }
         udpRunning.value = false
         try {
             httpServer?.stop()
@@ -531,8 +527,6 @@ class SyncHttpServer(port: Int) : NanoHTTPD(port) {
         session: IHTTPSession,
         parms: Map<String, String>,
     ): Response {
-        // 推送期间持续刷新对端活跃（连接提示卡不因 30s TTL 过期消失）
-        runCatching { SyncService.touchConnectedPeer(session.remoteIpAddress ?: "") }
         // ⚠ 读取 body 必须走 parseBody（按 content-length 精确读取）：
         // session.inputStream 是 keep-alive 的原始 socket 流，readBytes() 读到 body 末尾后
         // 会继续等下一包直到 5s socket 超时（真机实测 2026-10-25：所有 POST 同步必超时）。

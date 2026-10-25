@@ -125,6 +125,12 @@ fun AppNavHost(navController: NavHostController, modifier: Modifier = Modifier) 
         }
     }
 
+    // 组合销毁兜底（task 10-25-lan-sync-polish 第三轮）：用户直接关闭应用（Activity finish）时
+    // 上面栈监视的协程随组合取消、不会走到 stop——这里补停服务，同时向已连接对端发 UDP bye
+    DisposableEffect(Unit) {
+        onDispose { SyncService.stop() }
+    }
+
     // 一镜到底共享元素（task 09-12-shared-element-transition）：SharedTransitionLayout
     // 包裹 NavHost，卡片封面 ↔ 直播间视频容器经 LocalSharedTransitionScope 配对；
     // 各路由经 LocalNavAnimatedVisibilityScope 下发 AnimatedContentScope（见各 composable）。
