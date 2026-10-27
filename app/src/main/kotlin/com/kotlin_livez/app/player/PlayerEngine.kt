@@ -2,6 +2,7 @@ package com.kotlin_livez.app.player
 
 import android.content.Context
 import android.graphics.Bitmap
+import com.kotlin_livez.app.modules.live_room.PlaybackRetryPolicy
 import dev.jdtech.mpv.MPVLib
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -106,6 +107,30 @@ class PlayerEngine private constructor() {
     private val _errorEvents = MutableSharedFlow<String>(extraBufferCapacity = 16)
     val errorEvents: SharedFlow<String> = _errorEvents
 
+    /**
+     * 当前 loadfile 是否仍在等待出画：`open()` 置 true，`stop()` / 释放会话置 false。
+     * 与 [mediaLoaded] 一起用于区分"开流失败"和"出画后断流/正常结束"
+     * （task 10-27-bili-playback-open-failure-recovery）。
+     */
+    @Volatile
+    private var expectMedia: Boolean = false
+
+    /**
+     * 本次 loadfile 是否已经 file-loaded（START_FILE 清 false，FILE_LOADED 置 true）。
+     * 控制器靠它判断"从未出画"——这种 END_FILE 只可能是开流失败（HTTP 400/404 等）。
+     */
+    @Volatile
+    var mediaLoaded: Boolean = false
+        private set
+
+    /**
+     * 最近一次 END_FILE 是否被判定为开流失败。
+     * 控制器在 [mediaError] 里据此优先"换下一条线路"而不是重签同一条线路。
+     */
+    @Volatile
+    var lastOpenFailed: Boolean = false
+        private set
+
     private val _playingEvents = MutableSharedFlow<Boolean>(extraBufferCapacity = 16)
     val playingEvents: SharedFlow<Boolean> = _playingEvents
 
@@ -192,11 +217,24 @@ class PlayerEngine private constructor() {
             when (eventId) {
                 MPVLib.MPV_EVENT_SHUTDOWN ->
                     com.kotlin_livez.app.app.Log.w("[mpv-event] shutdown")
-                MPVLib.MPV_EVENT_END_FILE ->
-                    // completed 判定改走 eof-reached 属性（见 eventProperty "eof-reached"
-                    // 根因说明）：此事件不区分 EOF/替换/停止/错误，不能直接当播放结束。
-                    com.kotlin_livez.app.app.Log.i("[mpv-event] end-file")
+                MPVLib.MPV_EVENT_END_FILE -> {
+                    // 开流失败判定（task 10-27）：END_FILE 不区分 EOF/替换/停止/错误，
+                    // 但"还没出过画就结束"只可能是开流失败（CDN 返回 HTTP 400/404 等）。
+                    // 这种情况下 mpv 既不给 eof-reached（不会走 mediaEnd），失败文案也
+                    // 可能只是 WARN 日志（不命中错误特征词）——控制器会完全收不到事件，
+                    // 表现为黑屏不播、必须手动刷新。这里补一条结构化错误事件。
+                    if (PlaybackRetryPolicy.shouldReportOpenFailure(expectMedia, mediaLoaded)) {
+                        expectMedia = false
+                        lastOpenFailed = true
+                        com.kotlin_livez.app.app.Log.w("[mpv-event] end-file（开流失败）")
+                        _errorEvents.tryEmit("打开失败")
+                    } else {
+                        com.kotlin_livez.app.app.Log.i("[mpv-event] end-file")
+                    }
+                }
                 MPVLib.MPV_EVENT_START_FILE -> {
+                    // 新文件开始打开：出画标记复位（开流失败判定依赖它，见 expectMedia 注释）
+                    mediaLoaded = false
                     // playing 同步（task player-ui-polish：刷新/重开流后按钮与播放状态一致）：
                     // 旧实现只复位 completed，playing 依赖 mpv pause 属性事件——刷新时 stop()
                     // 触发 END_FILE 已把 playing 置 false，新流 start-file 后若无 pause 属性
@@ -210,8 +248,11 @@ class PlayerEngine private constructor() {
                     _completedEvents.tryEmit(false)
                     com.kotlin_livez.app.app.Log.i("[mpv-event] start-file")
                 }
-                MPVLib.MPV_EVENT_FILE_LOADED ->
+                MPVLib.MPV_EVENT_FILE_LOADED -> {
+                    // 出画成功：后续 END_FILE（断流/替换/EOF）不再算开流失败
+                    mediaLoaded = true
                     com.kotlin_livez.app.app.Log.i("[mpv-event] file-loaded")
+                }
                 MPVLib.MPV_EVENT_VIDEO_RECONFIG ->
                     com.kotlin_livez.app.app.Log.i("[mpv-event] video-reconfig")
             }
@@ -473,6 +514,10 @@ class PlayerEngine private constructor() {
         // 新流起点：进度与前探量归零，避免旧流的读数被看门狗当成新流基准
         positionMs = 0L
         bufferMs = 0L
+        // 开流失败判定的起点（见 expectMedia/mediaLoaded 注释）
+        expectMedia = true
+        mediaLoaded = false
+        lastOpenFailed = false
         com.kotlin_livez.app.app.Log.i("提交 loadfile：surfaceAttached=$surfaceAttached")
         if (httpHeaders.isNotEmpty()) {
             val joined = httpHeaders.entries.joinToString(",") { "${it.key}: ${it.value}" }
@@ -499,6 +544,8 @@ class PlayerEngine private constructor() {
 
     fun stop() {
         if (!ensureReady("stop")) return
+        // 用户/页面主动停止：不再把随后的 END_FILE 当开流失败（见 expectMedia 注释）
+        expectMedia = false
         // 停止即归零：停止后 mpv 不再上报 time-pos，遗留读数会被看门狗误判
         positionMs = 0L
         bufferMs = 0L
@@ -595,6 +642,9 @@ class PlayerEngine private constructor() {
         // 进度/缓存时间随会话复位（与下方 state 整体复位保持同一语义）。
         positionMs = 0L
         bufferMs = 0L
+        expectMedia = false
+        mediaLoaded = false
+        lastOpenFailed = false
         _state.value = PlayerState()
         com.kotlin_livez.app.app.Log.i("播放器会话已释放：session=$sessionId")
     }

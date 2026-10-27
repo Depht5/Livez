@@ -203,6 +203,16 @@ class LiveRoomController(
     private var mediaErrorRetryCount = 0
 
     /**
+     * 本房本次观看里"开流失败过"的 CDN host（task 10-27 P2）。
+     * `reloadPlayUrls` 会把这些 host 排到线路列表末尾，避免重签后仍然首选坏线路；
+     * 仅按实测失败记录，**不硬编码**具体 CDN 域名。换房（[create]）时清空。
+     */
+    private val failedLineHosts = mutableSetOf<String>()
+
+    /** 本房本次观看里因"开流失败"切过几次线路（防止在 N 条坏线路间横跳）。 */
+    private var openFailureSwitches = 0
+
+    /**
      * 恢复风暴滑动窗口：每次「媒体错误重试后重新打开成功」记一个时间戳。
      * 对应 Dart 新版 live_room_controller 的 _playbackRecoveryTimes。
      */
@@ -294,6 +304,9 @@ class LiveRoomController(
         _rxSite.value = site
         _rxRoomId.value = roomId
         _roomDisposed = false
+        // 换房：开流失败线路的会话记忆与切换计数一并复位
+        failedLineHosts.clear()
+        openFailureSwitches = 0
         _loadGeneration += 1
         currentRoom.setRoom(site.liveSite, roomId)
         loadData()
@@ -493,11 +506,16 @@ class LiveRoomController(
             if (!silent) Log.d("Toast: 无法读取播放地址")
             return false
         }
-        _playUrls.value = playUrl.urls
+        // P2：把本会话实测"开流失败过"的 CDN 排到末尾（稳定排序，其余保持原顺序）
+        val previousUrl = _playUrls.value.getOrNull(currentLineIndex)
+        val ordered = PlaybackRetryPolicy.reorderByFailedHosts(playUrl.urls, failedLineHosts)
+        _playUrls.value = ordered
         playHeaders = playUrl.headers ?: emptyMap()
         currentLineIndex = when {
             resetLine || currentLineIndex < 0 -> 0
-            currentLineIndex >= _playUrls.value.size -> _playUrls.value.size - 1
+            // 非 resetLine（重签 / 看门狗）时尽量停在同一 URL：排序可能改变了它的下标
+            previousUrl != null && ordered.indexOf(previousUrl) >= 0 -> ordered.indexOf(previousUrl)
+            currentLineIndex >= ordered.size -> ordered.size - 1
             else -> currentLineIndex
         }
         _currentLineInfo.value = "线路${currentLineIndex + 1}"
@@ -703,6 +721,8 @@ class LiveRoomController(
      * 正常打开不计数，因此计数语义始终是「连续失败」。
      */
     private fun onPlaybackRecovered() {
+        // 重新出画：本轮的"开流失败切线路"计数归零（下次失败仍可从线路 1 重新试）
+        openFailureSwitches = 0
         if (mediaErrorRetryCount > 0) {
             val now = System.currentTimeMillis()
             prunePlaybackRecoveryTimes(now)
@@ -847,7 +867,11 @@ class LiveRoomController(
         val mediaGeneration = _playbackMediaGeneration
         if (!isPlaybackEventCurrent(loadGeneration, mediaGeneration)) return
         BackgroundPlayback.stop()
+        // 开流失败（从未出画，见 PlayerEngine.lastOpenFailed）→ 优先换下一条线路：
+        // 本次取流响应里的其它 CDN 通常可用，比重签同一条线路（对单条 CDN 坏掉无效）快得多。
+        val openFailure = player.lastOpenFailed
         scope.launch {
+            if (openFailure && switchToNextLineIfAvailable()) return@launch
             if (mediaErrorRetryCount < 2) {
                 Log.d("播放失败，尝试第${mediaErrorRetryCount + 1}次刷新")
                 if (mediaErrorRetryCount == 1) {
@@ -870,6 +894,32 @@ class LiveRoomController(
                 errorText = errorText,
             )
         }
+    }
+
+    /**
+     * 开流失败时切到下一条线路（task 10-27）。
+     *
+     * 不重新取流 —— 直接用本次 `getRoomPlayInfo` 响应里的下一条 URL，代价只有一次 loadfile。
+     * 同时把失败线路的 host 记进 [failedLineHosts]，供后续重签时降权（P2）。
+     *
+     * @return true 表示已切换，调用方应停止本轮重试；false 表示没有可换的线路，交回原链路。
+     */
+    private fun switchToNextLineIfAvailable(): Boolean {
+        val urls = _playUrls.value
+        val action = PlaybackRetryPolicy.openFailureAction(
+            lineCount = urls.size,
+            currentIndex = currentLineIndex,
+            switchesSoFar = openFailureSwitches,
+            recoveryStorm = playbackRecoveryStormDetected,
+        )
+        if (action != PlaybackRetryPolicy.OpenFailureAction.SwitchLine) return false
+        val failedHost = PlaybackRetryPolicy.hostOf(urls.getOrNull(currentLineIndex))
+        if (failedHost.isNotEmpty()) failedLineHosts.add(failedHost)
+        openFailureSwitches += 1
+        val next = currentLineIndex + 1
+        Log.d("开流失败，切换到线路${next + 1}/${urls.size}（host=$failedHost）")
+        changePlayLine(next)
+        return true
     }
 
     /* ---------- 播放停滞看门狗（对应 Dart _startPlaybackWatchdog 的精简移植） ---------- */
@@ -927,6 +977,13 @@ class LiveRoomController(
         _lastWatchdogRefreshAtMs = now
         // 触发后重置推进基准，配合冷却时间避免连续触发。
         _lastWatchdogProgressAtMs = now
+        // 从未出画（开流失败后 mpv 既无 EOF 也无错误特征词）→ 换下一条线路；
+        // 出画后卡顿/断流才走"重签同线路"（task 10-27）。
+        if (!player.mediaLoaded && switchToNextLineIfAvailable()) {
+            _lastWatchdogPosition = null
+            _lastWatchdogProgressAtMs = 0L
+            return
+        }
         refreshPlayerFromWatchdog()
     }
 
