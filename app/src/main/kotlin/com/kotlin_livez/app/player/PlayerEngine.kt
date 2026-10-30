@@ -137,6 +137,16 @@ class PlayerEngine private constructor() {
     private val _completedEvents = MutableSharedFlow<Boolean>(extraBufferCapacity = 16)
     val completedEvents: SharedFlow<Boolean> = _completedEvents
 
+    /**
+     * 本次 loadfile 真正出画（FILE_LOADED）时发射一次。
+     *
+     * 供控制器做"连续失败"记账：重试计数只能在**真的恢复了**之后归零，不能在 open() 返回后
+     * 就归零 —— 否则开流失败的重试链会永远停在"第1次刷新"且无法收敛
+     * （task 10-30-douyu-playback-header-leak）。
+     */
+    private val _loadedEvents = MutableSharedFlow<Unit>(extraBufferCapacity = 16)
+    val loadedEvents: SharedFlow<Unit> = _loadedEvents
+
     private val _widthEvents = MutableSharedFlow<Int>(extraBufferCapacity = 16)
     val widthEvents: SharedFlow<Int> = _widthEvents
 
@@ -252,6 +262,8 @@ class PlayerEngine private constructor() {
                     // 出画成功：后续 END_FILE（断流/替换/EOF）不再算开流失败
                     mediaLoaded = true
                     com.kotlin_livez.app.app.Log.i("[mpv-event] file-loaded")
+                    // 通知控制器"这次重试真的恢复了"（重试计数只能在此归零）
+                    _loadedEvents.tryEmit(Unit)
                 }
                 MPVLib.MPV_EVENT_VIDEO_RECONFIG ->
                     com.kotlin_livez.app.app.Log.i("[mpv-event] video-reconfig")
@@ -519,9 +531,14 @@ class PlayerEngine private constructor() {
         mediaLoaded = false
         lastOpenFailed = false
         com.kotlin_livez.app.app.Log.i("提交 loadfile：surfaceAttached=$surfaceAttached")
-        if (httpHeaders.isNotEmpty()) {
-            val joined = httpHeaders.entries.joinToString(",") { "${it.key}: ${it.value}" }
-            runCatching { MPVLib.setPropertyString("http-header-fields", joined) }
+        // `http-header-fields` 是 mpv 的**逗号分隔字符串列表**，且是跨 loadfile 持久的会话级状态：
+        // 1) 必须无条件写入（本次无自定义头时写空串清空）。只在非空时设置，会让上一个站点的头
+        //    一直留在 mpv 里 —— 真机日志实证：斗鱼开播 3 次「空头」全部成功，29 次「继承到 B 站/
+        //    虎牙头」全部 `HTTP error 400`，刷新也救不回来（task 10-30-douyu-playback-header-leak）。
+        // 2) 值内的逗号必须转义：虎牙 UA 形如 `HYSDK(Windows, 30000002)_APP(…)`，不转义会被
+        //    拆成两条头，其中一条没有冒号 → 斗鱼 CDN 同样 400。
+        runCatching {
+            MPVLib.setPropertyString("http-header-fields", PlaybackHttpHeaders.encode(httpHeaders))
         }
         // 对齐 media_kit open(play: true)：mpv 的 pause 属性跨 loadfile 持久保留，
         // 暂停中刷新/切线/重试会让新流以暂停态启动，且 START_FILE 乐观置位使按钮

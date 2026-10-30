@@ -1,5 +1,6 @@
 package com.kotlin_livez.app.modules.live_room
 
+import com.kotlin_livez.app.modules.live_room.PlaybackRetryPolicy.ExhaustedAction
 import com.kotlin_livez.app.modules.live_room.PlaybackRetryPolicy.OpenFailureAction
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -121,5 +122,80 @@ class PlaybackRetryPolicyTest {
         assertEquals("", PlaybackRetryPolicy.hostOf(null))
         assertEquals("", PlaybackRetryPolicy.hostOf(""))
         assertEquals("", PlaybackRetryPolicy.hostOf("not a url"))
+    }
+
+    /* ------------------------- exhaustedAction ------------------------- */
+
+    @Test
+    fun exhausted_switchesToNextLineWhenNotLast() {
+        // 还有下一条线路：先换线（不重签）
+        assertEquals(
+            ExhaustedAction.SwitchLine,
+            PlaybackRetryPolicy.exhaustedAction(
+                lineCount = 3, currentIndex = 0, canReSign = true, recoveryStorm = false, reSignCycles = 0,
+            ),
+        )
+    }
+
+    @Test
+    fun exhausted_reSignsOnLastLineForHuyaOrDouyu() {
+        // 末线路 + 虎牙/斗鱼 + 未熔断 + 还没用满重签轮数 → 重签再试
+        assertEquals(
+            ExhaustedAction.ReSign,
+            PlaybackRetryPolicy.exhaustedAction(
+                lineCount = 1, currentIndex = 0, canReSign = true, recoveryStorm = false, reSignCycles = 0,
+            ),
+        )
+        assertEquals(
+            ExhaustedAction.ReSign,
+            PlaybackRetryPolicy.exhaustedAction(
+                lineCount = 2, currentIndex = 1, canReSign = true, recoveryStorm = false,
+                reSignCycles = PlaybackRetryPolicy.MAX_RE_SIGN_CYCLES - 1,
+            ),
+        )
+    }
+
+    @Test
+    fun exhausted_givesUpAfterReSignCyclesExhausted() {
+        // 永久坏流（如斗鱼 CDN 稳定 400）不会产生"真恢复"，风暴永远不触发 ——
+        // 必须靠重签轮数上限收敛到「播放失败」，否则会无限重签
+        assertEquals(
+            ExhaustedAction.GiveUp,
+            PlaybackRetryPolicy.exhaustedAction(
+                lineCount = 1, currentIndex = 0, canReSign = true, recoveryStorm = false,
+                reSignCycles = PlaybackRetryPolicy.MAX_RE_SIGN_CYCLES,
+            ),
+        )
+    }
+
+    @Test
+    fun exhausted_givesUpOnRecoveryStorm() {
+        assertEquals(
+            ExhaustedAction.GiveUp,
+            PlaybackRetryPolicy.exhaustedAction(
+                lineCount = 1, currentIndex = 0, canReSign = true, recoveryStorm = true, reSignCycles = 0,
+            ),
+        )
+    }
+
+    @Test
+    fun exhausted_givesUpWhenSiteCannotReSign() {
+        // 非虎牙/斗鱼（如 B 站）：末线路耗尽直接放弃
+        assertEquals(
+            ExhaustedAction.GiveUp,
+            PlaybackRetryPolicy.exhaustedAction(
+                lineCount = 1, currentIndex = 0, canReSign = false, recoveryStorm = false, reSignCycles = 0,
+            ),
+        )
+    }
+
+    @Test
+    fun exhausted_givesUpWithoutUrls() {
+        assertEquals(
+            ExhaustedAction.GiveUp,
+            PlaybackRetryPolicy.exhaustedAction(
+                lineCount = 0, currentIndex = -1, canReSign = true, recoveryStorm = false, reSignCycles = 0,
+            ),
+        )
     }
 }

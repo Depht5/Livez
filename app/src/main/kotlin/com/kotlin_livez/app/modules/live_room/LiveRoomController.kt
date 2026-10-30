@@ -213,6 +213,15 @@ class LiveRoomController(
     private var openFailureSwitches = 0
 
     /**
+     * 本段连续失败里已经走过几轮「末线路重签」（真正出画 / 换房时归零）。
+     *
+     * Dart 靠恢复风暴收敛重签循环，但风暴只统计"真恢复"——永久坏流（如 CDN 稳定 400）
+     * 永远不产生恢复，会无限重签。所以这里给重签循环一个显式上限
+     * （见 [PlaybackRetryPolicy.exhaustedAction]），task 10-30-douyu-playback-header-leak。
+     */
+    private var reSignCycles = 0
+
+    /**
      * 恢复风暴滑动窗口：每次「媒体错误重试后重新打开成功」记一个时间戳。
      * 对应 Dart 新版 live_room_controller 的 _playbackRecoveryTimes。
      */
@@ -646,10 +655,10 @@ class LiveRoomController(
                 return
             }
             player.open(url, headers)
-            // 打开成功（对应 Dart initPlaylist 打开完成）：此前发生过重试时记一次恢复，
-            // 并把 mediaErrorRetryCount 归零 —— 语义是「连续失败」而非「会话累计」，
-            // 否则长时间观看时第 3 次周期性掐流会被误判为「重试耗尽」。
-            onPlaybackRecovered()
+            // 注意：这里**不能**把重试计数归零。open() 只是提交了 loadfile，流可能马上
+            // HTTP 400 失败；归零会让"连续失败"永远停在 1、日志永远打印"第1次刷新"，
+            // 且「播放失败」兜底永远走不到。归零改由 player.loadedEvents（真正 FILE_LOADED）
+            // 驱动，见 subscribePlayerEvents（task 10-30-douyu-playback-header-leak）。
             _followed.value = _followed.value
         } finally {
             if (openingDeferred === deferred) {
@@ -686,6 +695,15 @@ class LiveRoomController(
         mediaEventSubJobs.add(completedJob)
         mediaEventSubJobs.add(errorJob)
         mediaEventSubJobs.add(playingJob)
+        // 真正出画（FILE_LOADED）才把"连续失败"计数与重签轮数归零。
+        // 这是「第N次刷新」计数可信、且永久坏流能收敛到「播放失败」的前提。
+        val loadedJob = scope.launch {
+            player.loadedEvents.collect {
+                if (_roomDisposed) return@collect
+                onPlaybackRecovered()
+            }
+        }
+        mediaEventSubJobs.add(loadedJob)
         // 播放停滞看门狗随订阅启动（dispose 时取消）。
         startPlaybackWatchdog()
     }
@@ -701,6 +719,7 @@ class LiveRoomController(
     /** 新会话（进房/刷新/切房）重新计连续失败次数与恢复风暴窗口。 */
     private fun resetPlaybackRecoveryBookkeeping() {
         mediaErrorRetryCount = 0
+        reSignCycles = 0
         _playbackRecoveryTimes.clear()
     }
 
@@ -721,8 +740,9 @@ class LiveRoomController(
      * 正常打开不计数，因此计数语义始终是「连续失败」。
      */
     private fun onPlaybackRecovered() {
-        // 重新出画：本轮的"开流失败切线路"计数归零（下次失败仍可从线路 1 重新试）
+        // 重新出画：本轮的"开流失败切线路"与"末线路重签"计数归零（下次失败仍可从线路 1 重新试）
         openFailureSwitches = 0
+        reSignCycles = 0
         if (mediaErrorRetryCount > 0) {
             val now = System.currentTimeMillis()
             prunePlaybackRecoveryTimes(now)
@@ -808,27 +828,34 @@ class LiveRoomController(
             tryAutoSwitchToNextLiveRoom(reason = reason)
             return
         }
-        if (urls.size - 1 == currentLineIndex) {
-            val siteId = site?.id
+        val siteId = site?.id
+        val action = PlaybackRetryPolicy.exhaustedAction(
+            lineCount = urls.size,
+            currentIndex = currentLineIndex,
             // 斗鱼常只返回 1 条线路：纳入末线路重签重连循环，避免周期性掐流被误判「已下播」。
-            if ((siteId == Constant.kHuya || siteId == Constant.kDouyu) &&
-                !playbackRecoveryStormDetected
-            ) {
-                currentLineIndex = 0
-                mediaErrorRetryCount = 0
-                try {
-                    setPlayer(refreshUrls = true)
-                    return
-                } catch (e: Throwable) {
-                    Log.e("重置线路重连失败: $e", e)
-                    if (!isPlaybackEventCurrent(loadGeneration, mediaGeneration)) return
-                }
-            }
-            markPlaybackGivenUp(isError = isError, errorText = errorText)
-            tryAutoSwitchToNextLiveRoom(reason = reason)
+            canReSign = siteId == Constant.kHuya || siteId == Constant.kDouyu,
+            recoveryStorm = playbackRecoveryStormDetected,
+            reSignCycles = reSignCycles,
+        )
+        if (action == PlaybackRetryPolicy.ExhaustedAction.SwitchLine) {
+            changePlayLine(currentLineIndex + 1)
             return
         }
-        changePlayLine(currentLineIndex + 1)
+        if (action == PlaybackRetryPolicy.ExhaustedAction.ReSign) {
+            reSignCycles += 1
+            Log.d("末线路重试耗尽，重新签名再试一轮：$siteId/$roomId（第${reSignCycles}轮）")
+            currentLineIndex = 0
+            mediaErrorRetryCount = 0
+            try {
+                setPlayer(refreshUrls = true)
+                return
+            } catch (e: Throwable) {
+                Log.e("重置线路重连失败: $e", e)
+                if (!isPlaybackEventCurrent(loadGeneration, mediaGeneration)) return
+            }
+        }
+        markPlaybackGivenUp(isError = isError, errorText = errorText)
+        tryAutoSwitchToNextLiveRoom(reason = reason)
     }
 
     /** 播放结束（对应 Dart mediaEnd）。 */
@@ -838,7 +865,7 @@ class LiveRoomController(
         if (!isPlaybackEventCurrent(loadGeneration, mediaGeneration)) return
         BackgroundPlayback.stop()
         scope.launch {
-            if (mediaErrorRetryCount < 2) {
+            if (mediaErrorRetryCount < 2 && !playbackRecoveryStormDetected) {
                 Log.d("播放结束，尝试第${mediaErrorRetryCount + 1}次刷新")
                 if (mediaErrorRetryCount == 1) {
                     delay(1000)
@@ -872,7 +899,7 @@ class LiveRoomController(
         val openFailure = player.lastOpenFailed
         scope.launch {
             if (openFailure && switchToNextLineIfAvailable()) return@launch
-            if (mediaErrorRetryCount < 2) {
+            if (mediaErrorRetryCount < 2 && !playbackRecoveryStormDetected) {
                 Log.d("播放失败，尝试第${mediaErrorRetryCount + 1}次刷新")
                 if (mediaErrorRetryCount == 1) {
                     delay(1000)

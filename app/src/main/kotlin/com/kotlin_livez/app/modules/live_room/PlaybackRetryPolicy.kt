@@ -76,4 +76,54 @@ internal object PlaybackRetryPolicy {
         if (urls.isEmpty() || failedHosts.isEmpty()) return urls
         return urls.sortedBy { url -> if (failedHosts.contains(hostOf(url))) 1 else 0 }
     }
+
+    /**
+     * 重试耗尽后的动作。
+     *
+     * 语义对齐 Dart `_playbackRetriesExhausted`：还有剩余线路 → 换下一条；已是末线路、站点是
+     * 虎牙/斗鱼、且未触发恢复风暴 → 重置线路与计数、重新签名再试一轮；否则判放弃。
+     *
+     * **为什么还要 `reSignCycles`（Kotlin 侧新增的兜底）**：Dart 的"重签再试一轮"靠恢复风暴
+     * （5 分钟内 6 次"真恢复"）收敛，而 Kotlin 现在只在**真正出画**时记一次恢复 —— 全天候坏
+     * 流（例如斗鱼 CDN 稳定 400）永远不产生"恢复"，风暴永远不会触发，重签会无限循环。
+     * 因此给重签循环加一个显式上限：同一条坏流最多再签 [MAX_RE_SIGN_CYCLES] 轮，之后走
+     * 「播放失败」兜底（task 10-30-douyu-playback-header-leak）。
+     */
+    internal enum class ExhaustedAction {
+        /** 切到下一条线路 */
+        SwitchLine,
+
+        /** 末线路：重置线路与重试计数，重新签名再试一轮 */
+        ReSign,
+
+        /** 放弃播放（提示「播放失败」/ 判下播），交给自动换台 */
+        GiveUp,
+    }
+
+    /**
+     * 重试耗尽后的动作判定。
+     *
+     * @param lineCount 本次取流返回的线路数
+     * @param currentIndex 当前线路下标（0 起）
+     * @param canReSign 该站点是否支持"末线路重签续播"（虎牙/斗鱼）
+     * @param recoveryStorm 是否已触发恢复风暴熔断
+     * @param reSignCycles 本段连续失败里已经重签过几轮（真正出画/换房时归零）
+     */
+    fun exhaustedAction(
+        lineCount: Int,
+        currentIndex: Int,
+        canReSign: Boolean,
+        recoveryStorm: Boolean,
+        reSignCycles: Int,
+    ): ExhaustedAction {
+        if (lineCount <= 0) return ExhaustedAction.GiveUp
+        if (currentIndex < lineCount - 1) return ExhaustedAction.SwitchLine
+        if (canReSign && !recoveryStorm && reSignCycles < MAX_RE_SIGN_CYCLES) {
+            return ExhaustedAction.ReSign
+        }
+        return ExhaustedAction.GiveUp
+    }
+
+    /** 同一段连续失败里，末线路最多重签几轮（每轮之后仍会走 2 次常规重试）。 */
+    internal const val MAX_RE_SIGN_CYCLES = 2
 }

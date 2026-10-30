@@ -36,8 +36,9 @@ android {
         // targetSdk 35（Android 15）：强制 edge-to-edge（本 app 已全局 e2e，无行为回归预期）；
         // 系统栏 setter（statusBarColor/navigationBarColor）在 35 弃用，已迁移 enableEdgeToEdge()。
         targetSdk = 35
-        versionCode = 28
-        versionName = "0.2.5.261027"
+        // 修复包（任务 10-30-douyu-playback-header-leak）：斗鱼切房后必 400。
+        versionCode = 30
+        versionName = "0.2.5.261030"
     }
 
     compileOptions {
