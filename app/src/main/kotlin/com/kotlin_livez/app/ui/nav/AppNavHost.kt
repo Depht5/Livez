@@ -70,6 +70,7 @@ import com.kotlin_livez.app.ui.screens.HistoryScreen
 import com.kotlin_livez.app.ui.screens.LiveRoomScreen
 import com.kotlin_livez.app.ui.screens.LocalSyncScreen
 import com.kotlin_livez.app.ui.screens.MineScreen
+import com.kotlin_livez.app.ui.screens.ParseScreen
 import com.kotlin_livez.app.ui.screens.QRLoginScreen
 import com.kotlin_livez.app.ui.screens.SearchScreen
 import com.kotlin_livez.app.ui.screens.SettingsScreen
@@ -220,6 +221,9 @@ private fun SharedTransitionScope.NavHostContent(
 
         // 观看历史（Batch 4）：控制器在 Screen 内 remember 创建、出栈销毁
         composable("history") { HistoryScreen() }
+
+        // 链接解析：单输入框 + 跳转/直链两个动作，无路由参数
+        composable("parse") { ParseScreen() }
 
         // 搜索（Batch 5）：会话由 `ServiceContainer` 持有，仅在 `search` 位于返回栈时保留；
         // 出栈后由上层 `LaunchedEffect` 清空（B 方案，task 10-19-search-exit-reset-bottom-bar-inset）

@@ -1,127 +1,73 @@
 package com.kotlin_livez.app.modules.mine.parse
 
-import com.kotlin_livez.app.app.Constant
 import com.kotlin_livez.app.app.Log
 import com.kotlin_livez.app.app.Site
 import com.kotlin_livez.app.app.Sites
+import com.kotlin_livez.core.common.LiveLinkResolver
+import com.kotlin_livez.core.common.LiveUrlOutcome
+import com.kotlin_livez.core.common.LiveUrlRejectReason
+import com.kotlin_livez.core.common.OkHttpLiveLinkFetcher
 import com.kotlin_livez.core.model.LivePlayQuality
 import com.kotlin_livez.core.model.LivePlayUrl
 import com.kotlin_livez.core.model.LiveRoomDetail
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import okhttp3.OkHttpClient
-import okhttp3.Request
-import java.net.URI
-import java.util.concurrent.TimeUnit
 
 /**
- * 直播链接解析/直链获取控制器 —— 对应 Dart `ParseController`
- * （lib/modules/mine/parse/parse_controller.dart）。
- * 弹出选择清晰度/线路的对话框与剪贴板复制由 UI 层处理，此处提供数据方法。
+ * 链接解析控制器 —— 对应 Dart `ParseController`
+ * （`lib/modules/mine/parse/parse_controller.dart`）。
+ *
+ * 分工：
+ * - 解析本身（纯函数 + 短链恢复）在 core：[com.kotlin_livez.core.common.LiveUrlParser] /
+ *   [com.kotlin_livez.core.common.LiveLinkResolver]；
+ * - 本类只做站点查表、失败文案映射，以及「获取直链」所需的站点调用；
+ * - 弹窗、剪贴板、键盘等 UI 行为留在解析页。
+ *
+ * 与 Dart 的差异（有意为之）：Dart 的 `parse` 返回 `[roomId, site]`，空列表表示失败，
+ * 四种完全不同的失败原因都提示「无法解析此链接」；这里用 [ParseResult.Failure] 携带
+ * [LiveUrlRejectReason]，页面可对「平台已下架」「短链失败」给出可行动提示。
  */
-class ParseController {
+class ParseController(
+    private val resolver: LiveLinkResolver = defaultResolver,
+) {
 
-    companion object {
-        private const val MAX_REDIRECTS = 5
-        private val ROOM_URL_REGEX = Regex("https?://[^\\s<>，。！？、；：]+", RegexOption.IGNORE_CASE)
-        private val TRAILING_PUNCT_REGEX = Regex("[，。！？、；：,.;:!?]+$")
-        private val TRAILING_BRACKETS_REGEX = Regex("""[)\]}>'"）】》”’]+$""")
-
-        /** 从文本中提取 http(s) 链接（对应 Dart extractHttpUrl）。 */
-        fun extractHttpUrl(text: String): String {
-            return ROOM_URL_REGEX.find(text)?.value.orEmpty()
-                .replaceFirst(TRAILING_PUNCT_REGEX, "")
-                .replaceFirst(TRAILING_BRACKETS_REGEX, "")
-        }
+    /** 解析结果。 */
+    sealed interface ParseResult {
+        data class Success(val site: Site, val roomId: String) : ParseResult
+        data class Failure(
+            val reason: LiveUrlRejectReason,
+            val message: String,
+        ) : ParseResult
     }
 
-    /** 重定向跟随客户端（对应 Dart redirectClient；不跟随重定向，手动解析 Location）。 */
-    private val redirectClient: OkHttpClient = OkHttpClient.Builder()
-        .followRedirects(false)
-        .followSslRedirects(false)
-        .connectTimeout(8, TimeUnit.SECONDS)
-        .readTimeout(8, TimeUnit.SECONDS)
-        .writeTimeout(8, TimeUnit.SECONDS)
-        .build()
-
-    /** 解析结果（对应 Dart parse 返回的 [id, site] 列表）。 */
-    data class ParseResult(val roomId: String, val site: Site)
-
-    /** 解析链接为直播间（对应 Dart parse）。null 表示无法解析。 */
-    suspend fun parse(url: String): ParseResult? {
-        var target = url
-        val extracted = extractHttpUrl(target)
-        if (extracted.isNotEmpty()) target = extracted
-
-        if (target.contains("bilibili.com")) {
-            val id = Regex("bilibili\\.com/([\\d\\w]+)").find(target)?.groupValues?.get(1).orEmpty()
-            return ParseResult(id, Sites.allSites[Constant.kBiliBili] ?: return null)
+    /**
+     * 解析一段输入（可以是纯链接，也可以是含链接的分享文案）。
+     *
+     * 永不抛异常：网络/解析异常统一折算为 [LiveUrlRejectReason.SHORT_LINK_FAILED]。
+     */
+    suspend fun parse(input: String): ParseResult {
+        val outcome = try {
+            resolver.resolve(input)
+        } catch (e: Exception) {
+            Log.logPrint(e)
+            return failure(LiveUrlRejectReason.SHORT_LINK_FAILED)
         }
-        if (target.contains("b23.tv")) {
-            val u = Regex("https?://b23\\.tv/[0-9a-zA-Z]+").find(target)?.value.orEmpty()
-            val location = getLocation(u)
-            return parse(location)
-        }
-        if (target.contains("douyu.com")) {
-            var id = if (target.contains("topic")) {
-                Regex("[?&]rid=(\\d+)").find(target)?.groupValues?.get(1).orEmpty()
-            } else {
-                Regex("douyu\\.com/([\\d\\w]+)").find(target)?.groupValues?.get(1).orEmpty()
-            }
-            return ParseResult(id, Sites.allSites[Constant.kDouyu] ?: return null)
-        }
-        if (target.contains("huya.com")) {
-            val id = Regex("huya\\.com/([\\d\\w]+)").find(target)?.groupValues?.get(1).orEmpty()
-            return ParseResult(id, Sites.allSites[Constant.kHuya] ?: return null)
-        }
-        if (target.contains("live.douyin.com")) {
-            val id = Regex("live\\.douyin\\.com/([\\d\\w]+)").find(target)?.groupValues?.get(1).orEmpty()
-            return ParseResult(id, Sites.allSites[Constant.kDouyin] ?: return null)
-        }
-        if (target.contains("webcast.amemv.com")) {
-            val id = Regex("reflow/(\\d+)").find(target)?.groupValues?.get(1).orEmpty()
-            return ParseResult(id, Sites.allSites[Constant.kDouyin] ?: return null)
-        }
-        if (target.contains("v.douyin.com")) {
-            val u = Regex("https?://v\\.douyin\\.com/[\\w-]+/?", RegexOption.IGNORE_CASE)
-                .find(target)?.value.orEmpty()
-            val location = getLocation(u)
-            return parse(location)
-        }
-        return null
-    }
-
-    /** 跟随重定向获取最终地址（对应 Dart getLocation）。 */
-    suspend fun getLocation(url: String): String {
-        val parsed = runCatching { URI(url) }.getOrNull()
-            ?: return ""
-        if (!parsed.isAbsolute) return ""
-        var current = parsed
-        return withContext(Dispatchers.IO) {
-            try {
-                for (redirectCount in 0 until MAX_REDIRECTS) {
-                    val response = redirectClient.newCall(
-                        Request.Builder().url(current.toURL()).build(),
-                    ).execute()
-                    response.use { resp ->
-                        val statusCode = resp.code
-                        if (statusCode < 300 || statusCode >= 400) {
-                            return@withContext current.toString()
-                        }
-                        val location = resp.header("location")
-                        if (location.isNullOrBlank()) return@withContext ""
-                        current = current.resolve(location.trim())
-                    }
+        return when (outcome) {
+            is LiveUrlOutcome.Room -> {
+                val site = Sites.allSites[outcome.siteId]
+                if (site == null) {
+                    failure(LiveUrlRejectReason.UNKNOWN_HOST)
+                } else {
+                    ParseResult.Success(site, outcome.roomId)
                 }
-                current.toString()
-            } catch (e: Exception) {
-                Log.logPrint(e)
-                current.toString()
             }
+            is LiveUrlOutcome.Rejected -> failure(outcome.reason)
+            // 解析器不会在收尾阶段返回短链（深度上限内必然收敛到 Room/Rejected），兜底按失败处理
+            is LiveUrlOutcome.ShortLink -> failure(LiveUrlRejectReason.SHORT_LINK_FAILED)
         }
     }
 
-    /** 获取房间详情与清晰度列表（供 UI 层弹清晰度选择）。 */
+    /** 获取房间详情与清晰度列表（供 UI 弹清晰度选择）。 */
     suspend fun loadDetailAndQualities(
         roomId: String,
         site: Site,
@@ -136,7 +82,7 @@ class ParseController {
         }
     }
 
-    /** 获取指定清晰度的播放直链（供 UI 层弹线路选择）。 */
+    /** 获取指定清晰度的播放直链（供 UI 弹线路选择）。 */
     suspend fun loadPlayUrls(
         roomId: String,
         site: Site,
@@ -148,6 +94,36 @@ class ParseController {
         } catch (e: Exception) {
             Log.logPrint(e)
             null
+        }
+    }
+
+    private fun failure(reason: LiveUrlRejectReason): ParseResult.Failure =
+        ParseResult.Failure(reason, messageOf(reason))
+
+    companion object {
+        /**
+         * 默认解析器（进程内复用同一个 OkHttp 客户端；解析页多次进出不必重建连接池）。
+         * 短链客户端单独持有，不与带 Cookie 的全局 [com.kotlin_livez.core.common.HttpClient] 混用。
+         */
+        private val defaultResolver: LiveLinkResolver by lazy {
+            LiveLinkResolver(OkHttpLiveLinkFetcher())
+        }
+
+        /**
+         * 失败原因 → 用户文案。
+         *
+         * 「暂不支持该平台」是产品要求（快手已整体移除）：识别到快手域名时给出明确答复，
+         * 而不是让用户以为链接写错了。
+         */
+        fun messageOf(reason: LiveUrlRejectReason): String = when (reason) {
+            LiveUrlRejectReason.EMPTY -> "链接不能为空"
+            LiveUrlRejectReason.PLATFORM_UNSUPPORTED -> "暂不支持该平台"
+            LiveUrlRejectReason.SHORT_LINK_FAILED -> "短链解析失败，请检查网络后重试"
+            LiveUrlRejectReason.NOT_HTTP,
+            LiveUrlRejectReason.UNKNOWN_HOST,
+            LiveUrlRejectReason.MISSING_ROOM_ID,
+            LiveUrlRejectReason.INVALID_ROOM_ID,
+            -> "无法解析此链接"
         }
     }
 }
