@@ -2,6 +2,47 @@
 
 本文件记录本项目每个发布版本的改动，倒序排列。
 
+## [0.2.6.261111] - 2026-11-11（versionCode 35）
+
+### 修复
+
+- **抖音直播间弹幕一条都不显示**：webcast 签名脚本用 `Uint32Array`/`Uint8Array` 共用同一个
+  `ArrayBuffer` 做字与字节视图互转，浏览器（V8/QuickJS）按小端解释，而 Rhino 1.7.15 的
+  TypedArray 默认按**大端**读写，算出的 `signature` 服务端不认，WebSocket 握手被拒
+  （`HTTP 200` + `handshake-status: 415` / `DEVICE_BLOCKED`）。现在为 Rhino 打开
+  `FEATURE_LITTLE_ENDIAN`（走自建 `ContextFactory`，不动全局工厂），并加入以浏览器基准
+  签名为锚的回归测试（任务 11-11-douyin-danmaku-signature-endianness）
+- **抖音播放正常却显示「加载失败」浮层**：弹幕建连异常（`wss://` 地址交给 OkHttp 的
+  `HttpUrl` 会抛 `IllegalArgumentException`）冒到 `loadData` 的 `catch`，把整间房标成加载
+  失败并连带取消在线人数/SC 刷新任务。现在弹幕失败只在聊天区提示「弹幕连接失败」，
+  与播放和房间状态解耦（任务 11-11-douyin-danmaku-signature-endianness）
+- **抖音点刷新/重试后必进「播放失败」且再也救不回来**：`loadfile` 替换正在播的文件时，
+  mpv 先给**旧文件**发 `END_FILE`、再给新文件发 `START_FILE`，而 `open()` 已把"已出画"
+  标记清零，旧文件的结束就被误判成新流开流失败 → 换线/重签 → 每次重开又打断上一个文件
+  → 级联到放弃。现在只有本次新文件已 `START_FILE` 的 `END_FILE` 才算开流失败
+  （任务 11-11-douyin-danmaku-signature-endianness）
+- **抖音弹幕 IM 预取返回空响应**：`getAbogusUrlWithMsToken` 取已编码的 `rawQuery` 后又过
+  `java.net.URI.replaceQuery`（再次转义 `%`），`host`/`im_path`/`browser_version` 变成
+  `%253A`、`%252F`、`%2520` 双重编码。改用 `HttpUrl` 的编解码 API，与 Dart
+  `Uri.queryParameters` 语义对齐（任务 11-11-douyin-danmaku-signature-endianness）
+
+## [0.2.6] - 2026-11-11（versionCode 31）
+
+### 新增
+
+- **链接解析页**：把直播链接（或含链接的分享文案）粘贴进唯一输入框，用「链接跳转」直接进
+  直播间、用「获取直链」依次选清晰度与线路后复制播放地址。支持哔哩哔哩（含 `b23.tv` 短链）、
+  虎牙、斗鱼（含 `topic?rid=`）、抖音（含 `v.douyin.com` 短链、`/live/`、`/follow/live/`、
+  `webcast.amemv.com` reflow）；识别到快手链接时明确提示「暂不支持该平台」
+  （任务 11-11-parse-page）
+
+### 优化
+
+- 房间号按完整路径段解析：`abc.def` 这类含点的房间号不再被截断；顺带支持 B 站
+  `live.bilibili.com/blanc/<id>` 分享形态
+- 短链恢复独立成无 Cookie 客户端（与登录态无关），5 跳上限 + 跳转环检测 +
+  嵌套 3 层上限；旧实现在短链自我跳转时会无限递归
+
 ## [0.2.5.261030] - 2026-10-30（versionCode 30）
 
 ### 修复

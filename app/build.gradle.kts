@@ -36,9 +36,11 @@ android {
         // targetSdk 35（Android 15）：强制 edge-to-edge（本 app 已全局 e2e，无行为回归预期）；
         // 系统栏 setter（statusBarColor/navigationBarColor）在 35 弃用，已迁移 enableEdgeToEdge()。
         targetSdk = 35
-        // 功能包：链接解析页（单输入框 + 链接跳转/获取直链）。
-        versionCode = 31
-        versionName = "0.2.6"
+        // 修复包（0.2.6 基线的修复版）：抖音弹幕连不上（Rhino TypedArray 大端导致签名无效）、
+        // 抖音刷新后级联「播放失败」、弹幕异常误标整间房「加载失败」、IM 预取参数双重编码。
+        // versionCode 35：34 曾用于本地验证包 0.2.6.261111.3（未推送、未打 tag），需大于它才能覆盖安装。
+        versionCode = 35
+        versionName = "0.2.6.261111"
     }
 
     compileOptions {
