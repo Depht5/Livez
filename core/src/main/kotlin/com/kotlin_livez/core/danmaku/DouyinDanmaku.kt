@@ -274,10 +274,10 @@ class DouyinDanmaku : LiveDanmaku() {
             internalExt = context?.internalExt,
             dynamicHeartbeat = context?.heartbeatDuration,
         ).toMutableMap()
-        query["signature"] = DouyinSign.getSignatureForParams(signatureParameters())
-        val builder = base.toHttpUrl().newBuilder().query(null)
-        query.forEach { (k, v) -> builder.addQueryParameter(k, v) }
-        return builder.build().toString()
+        val signature = DouyinSign.getSignatureForParams(signatureParameters())
+        // OkHttp 的 HttpUrl 只接受 http/https，`wss://` 直接 IllegalArgumentException
+        // （真机 2026-11-11：弹幕一条都连不上）。scheme 转换与参数编码都在 DouyinSocketUrl 里做。
+        return DouyinSocketUrl.build(base, query, signature)
     }
 
     /** 候选服务器地址列表（动态地址优先，随后静态兼容地址及其镜像）。 */

@@ -402,9 +402,22 @@ class LiveRoomController(
                 addSysMsg("正在连接弹幕服务器")
                 if (!isCurrentLoad(restarted)) return@launch
                 initDanmaku(danmaku, restarted)
-                danmaku.start(loadedDetail.danmakuData)
                 if (!isCurrentLoad(restarted) || liveDanmaku !== danmaku) return@launch
+                // 先接管本轮的候选实例，再启动弹幕：弹幕失败不能连带取消房间的
+                // 在线人数/SC 刷新等任务（见下方 finally 的 keepCandidate 判据）。
                 keepCandidate = true
+                // 弹幕连接失败绝不能把整间房标成「加载失败」（2026-11-11 真机：
+                // 播放已经 file-loaded、画面正常，浮层却显示加载失败且弹幕全无）。
+                // Dart 侧 `_openWebSocket` 是 fire-and-forget，异常不会回到 loadData；
+                // Kotlin 的 `start()` 是 suspend 且在建连参数阶段就会同步抛
+                // （如 `wss://` 交给 HttpUrl 解析 → IllegalArgumentException），
+                // 冒到外层 catch 就会误伤整间房。这里就地兜住，只降级弹幕能力。
+                runCatching { danmaku.start(loadedDetail.danmakuData) }
+                    .onFailure { error ->
+                        Log.e("弹幕启动失败（不影响播放）：${targetSite.id}/$roomId error=$error")
+                        addSysMsg("弹幕连接失败：${error.message ?: "未知错误"}")
+                    }
+                if (!isCurrentLoad(restarted)) return@launch
                 startLiveDurationTimer(restarted)
             } catch (e: Exception) {
                 Log.logPrint(e)

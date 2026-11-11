@@ -3,6 +3,7 @@ package com.kotlin_livez.core.common
 import kotlinx.coroutines.runBlocking
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNotEquals
 import kotlin.test.assertTrue
 
@@ -54,6 +55,49 @@ class DouyinSignTest {
         val signed = DouyinSign.getAbogusUrlWithMsToken(uri, DouyinSign.defaultUserAgent)
         assertTrue(signed.contains("a_bogus="), "签名结果应包含 a_bogus，实际: $signed")
         assertTrue(signed.contains("msToken="), "签名结果应包含 msToken，实际: $signed")
+    }
+
+    /**
+     * 关键回归：Rhino 必须能执行 webms_sdk.js 产出 webcast signature。
+     *
+     * 抖音弹幕的 IM 预取与 WebSocket 连接都依赖此签名；脚本一旦在 Rhino 里抛
+     * `ReferenceError`（2026-11-11 真机日志：`w_0x42f5 is not defined`），弹幕就完全不显示。
+     */
+    @Test
+    fun getSignature_webmsSdkProducesSignature() = runBlocking {
+        val signature = DouyinSign.getSignature("7706514266362546954", "1234567890")
+        assertTrue(signature.isNotBlank(), "签名不应为空")
+        assertTrue(signature.length > 5, "签名长度异常: $signature")
+    }
+
+    /**
+     * 回归（2026-11-11 抖音弹幕 IM 预取「空响应」）：查询参数只能编码一次。
+     *
+     * 旧实现取 `rawQuery`（已编码）后交给 `java.net.URI.replaceQuery`（再编码一次），
+     * 真机请求日志里 `host=https%253A%252F%252F…`、`im_path=%252Fwebcast…`、
+     * `browser_version=5.0%2520%2528Windows…` —— 服务端据此返回空体，弹幕上下文永远拿不到。
+     */
+    @Test
+    fun abogusUrl_doesNotDoubleEncodeQuery() = runBlocking {
+        val base = "https://live.douyin.com/webcast/im/fetch/"
+        val builder = okhttp3.HttpUrl.Companion.run { base.toHttpUrl() }.newBuilder()
+        mapOf(
+            "host" to "https://live.douyin.com",
+            "im_path" to "/webcast/im/fetch/",
+            "browser_version" to "5.0 (Windows NT 10.0; WOW64)",
+        ).forEach { (k, v) -> builder.addQueryParameter(k, v) }
+        val unsigned = builder.build().toString()
+
+        val signed = DouyinSign.getAbogusUrlWithMsToken(unsigned, DouyinSign.defaultUserAgent)
+
+        assertTrue(signed.contains("host=https%3A%2F%2Flive.douyin.com"), "参数应只编码一次：$signed")
+        assertTrue(signed.contains("im_path=%2Fwebcast%2Fim%2Ffetch%2F"), "im_path 被改写：$signed")
+        assertTrue(signed.contains("browser_version=5.0%20%28Windows%20NT%2010.0%3B%20WOW64%29"),
+            "browser_version 被改写：$signed")
+        assertFalse(signed.contains("%253A"), "出现双重编码：$signed")
+        assertFalse(signed.contains("%2520"), "出现双重编码：$signed")
+        assertTrue(signed.contains("msToken="), "应追加 msToken：$signed")
+        assertTrue(signed.contains("a_bogus="), "应追加 a_bogus：$signed")
     }
 
     private fun md5(input: String): String {

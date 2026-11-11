@@ -1,6 +1,7 @@
 package com.kotlin_livez.core.scripts
 
 import com.kotlin_livez.core.common.CoreLog
+import com.kotlin_livez.core.common.RhinoJsCompat
 import org.mozilla.javascript.Context
 
 /**
@@ -39,7 +40,8 @@ object DouyuSign {
      * @param did 设备号（`null`/空白时回退默认值）
      */
     fun getSign(html: String, rid: String, did: String? = null): String {
-        val context = Context.enter()
+        // 统一走 RhinoJsCompat 的上下文（小端 TypedArray）；与抖音签名共用一套 Rhino 配置
+        val context = RhinoJsCompat.enterContext()
         return try {
             // 解释模式：Android 不支持 Rhino 的字节码生成，统一使用
             context.optimizationLevel = -1

@@ -29,14 +29,23 @@ internal object PlaybackRetryPolicy {
     /**
      * `END_FILE` 是否应判定为"开流失败"。
      *
-     * 只有"本次 loadfile 还没出过画就结束"才算：用户 stop、loadfile 替换旧文件、
+     * 只有"本次 loadfile 已经开跑、但还没出过画就结束"才算：用户 stop、loadfile 替换旧文件、
      * 正常 EOF 都不会命中，因此不会误判成失败（见 task 09-12-refresh-crash 的教训）。
      *
+     * [loadStarted] 是 2026-11-11 抖音「刷新后永久加载失败」的修复：mpv 在 loadfile 替换文件时
+     * **先**给旧文件发 END_FILE、**后**给新文件发 START_FILE。只看 `expectMedia && !mediaLoaded`
+     * 时，`open()` 已把 mediaLoaded 清 false，旧文件的 END_FILE 就被当成新流开流失败 →
+     * 换线/重签 → 每次重开又打断上一个文件 → 级联到「播放失败」。
+     *
      * @param expectMedia [PlayerEngine.open] 后置 true，[PlayerEngine.stop] / 释放会话后置 false
+     * @param loadStarted 本次 loadfile 是否已收到 START_FILE（旧文件的 END_FILE 到达时仍为 false）
      * @param mediaLoaded 本次 loadfile 是否已经 file-loaded
      */
-    fun shouldReportOpenFailure(expectMedia: Boolean, mediaLoaded: Boolean): Boolean =
-        expectMedia && !mediaLoaded
+    fun shouldReportOpenFailure(
+        expectMedia: Boolean,
+        loadStarted: Boolean,
+        mediaLoaded: Boolean,
+    ): Boolean = expectMedia && loadStarted && !mediaLoaded
 
     /**
      * 开流失败后是否换线。

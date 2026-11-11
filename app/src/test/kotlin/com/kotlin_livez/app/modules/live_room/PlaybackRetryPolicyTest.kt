@@ -19,25 +19,61 @@ class PlaybackRetryPolicyTest {
 
     @Test
     fun openFailure_onlyWhenExpectedAndNeverLoaded() {
-        // 正例：open() 后还没出画就 END_FILE（HTTP 400/404 开流失败）
-        assertTrue(PlaybackRetryPolicy.shouldReportOpenFailure(expectMedia = true, mediaLoaded = false))
+        // 正例：open() 后已开跑（START_FILE）但还没出画就 END_FILE（HTTP 400/404 开流失败）
+        assertTrue(
+            PlaybackRetryPolicy.shouldReportOpenFailure(
+                expectMedia = true, loadStarted = true, mediaLoaded = false,
+            ),
+        )
     }
 
     @Test
     fun openFailure_ignoredWhenUserStopped() {
         // 反例：退出直播间 / 手动 stop（stop() 会把 expectMedia 置 false）
-        assertFalse(PlaybackRetryPolicy.shouldReportOpenFailure(expectMedia = false, mediaLoaded = false))
+        assertFalse(
+            PlaybackRetryPolicy.shouldReportOpenFailure(
+                expectMedia = false, loadStarted = true, mediaLoaded = false,
+            ),
+        )
     }
 
     @Test
     fun openFailure_ignoredWhenFileAlreadyLoaded() {
         // 反例：出过画之后的 END_FILE（正常 EOF / 断流 / loadfile 替换旧文件）
-        assertFalse(PlaybackRetryPolicy.shouldReportOpenFailure(expectMedia = true, mediaLoaded = true))
+        assertFalse(
+            PlaybackRetryPolicy.shouldReportOpenFailure(
+                expectMedia = true, loadStarted = true, mediaLoaded = true,
+            ),
+        )
     }
 
     @Test
     fun openFailure_ignoredAfterStopEvenIfLoaded() {
-        assertFalse(PlaybackRetryPolicy.shouldReportOpenFailure(expectMedia = false, mediaLoaded = true))
+        assertFalse(
+            PlaybackRetryPolicy.shouldReportOpenFailure(
+                expectMedia = false, loadStarted = true, mediaLoaded = true,
+            ),
+        )
+    }
+
+    /**
+     * 回归（2026-11-11 抖音刷新后永久「加载失败」）：`open()` 提交新 loadfile 后、新文件的
+     * START_FILE 到达之前，mpv 会先给**旧文件**发 END_FILE。此时 mediaLoaded 已被 open() 清
+     * false，必须靠 loadStarted=false 拦住，否则会被当成新流开流失败而级联换线。
+     */
+    @Test
+    fun openFailure_ignoredForPreviousFileEndBeforeNewStartFile() {
+        assertFalse(
+            PlaybackRetryPolicy.shouldReportOpenFailure(
+                expectMedia = true, loadStarted = false, mediaLoaded = false,
+            ),
+        )
+        // 旧文件出过画、新文件还没开跑：同样不能算失败
+        assertFalse(
+            PlaybackRetryPolicy.shouldReportOpenFailure(
+                expectMedia = true, loadStarted = false, mediaLoaded = true,
+            ),
+        )
     }
 
     /* --------------------------- openFailureAction ---------------------------- */
